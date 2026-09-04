@@ -1,16 +1,8 @@
 /**
  * LEDGER — immutable double-entry kernel (spec §19-21).
  * Every financial mutation posts a BALANCED journal in the SAME transaction
- * as the domain change. Posted journals are never edited; corrections post
- * new (reversal) journals.
- *
- * Chart of accounts (per institution):
- *   CASH              (asset)      — money the mess holds
- *   RESIDENT_FUNDS    (liability)  — money held on behalf of residents
- *   MESS_EXPENSE      (expense)    — grocery/market/operating spend
- *   MEAL_CHARGE_INCOME(income)     — resident meal charge recovery (bills)
- *   GUEST_INCOME      (income)     — guest meal charges
- *   REFUND_PAYABLE    (liability)  — refunds issued/owed out
+ * as the domain change. Posted journals are never edited or deleted;
+ * corrections post new reversal/correction journals.
  */
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
@@ -139,25 +131,245 @@ export async function getAccountBalances(institutionId: string, client: any = db
   });
 }
 
-/**
- * Reconciliation core (spec §219): approved payments/expenses/refunds must have
- * exactly one posted journal each. Returns mismatch lists (empty = reconciled).
- */
-export async function reconcileInstitution(institutionId: string): Promise<{
+export type ReconciliationResult = {
   paymentsWithoutJournal: number;
+  paymentJournalLinkMismatches: number;
+  voidedPaymentsWithoutReversalJournal: number;
+  paymentReversalLinkMismatches: number;
   expensesWithoutJournal: number;
+  expenseJournalLinkMismatches: number;
+  voidedExpensesWithoutReversalJournal: number;
+  expenseReversalLinkMismatches: number;
+  cashRefundsWithoutJournal: number;
+  refundJournalLinkMismatches: number;
+  refundLegacyReferenceWarnings: number;
+  carryForwardsWithJournal: number;
+  billsWithoutJournal: number;
+  billsWithDuplicateJournals: number;
   unbalancedJournals: number;
-}> {
-  const [payments, expenses, journals] = await Promise.all([
-    db.payment.count({ where: { institutionId, status: "APPROVED", approvedJournalId: null } }),
-    db.expense.count({ where: { institutionId, status: "APPROVED", journalId: null } }),
-    db.ledgerJournal.findMany({
+  journalsWithoutEntries: number;
+  orphanPaymentExpenseBillJournals: number;
+  problems: string[];
+  warnings: string[];
+  balanced: boolean;
+};
+
+type JournalRow = {
+  id: string;
+  institutionId: string;
+  refType: string | null;
+  refId: string | null;
+  status: string;
+  entries: { debitMinor: number; creditMinor: number }[];
+};
+
+function linkedJournalMatches(
+  journal: JournalRow | undefined,
+  institutionId: string,
+  refType: string,
+  refId: string
+): boolean {
+  return Boolean(
+    journal &&
+      journal.institutionId === institutionId &&
+      journal.status === "POSTED" &&
+      journal.refType === refType &&
+      journal.refId === refId
+  );
+}
+
+/**
+ * Reconcile domain records against immutable journals. `client` may be a Prisma
+ * transaction client, allowing billing readiness to use this exact same kernel
+ * instead of maintaining a second, slightly different reconciliation query.
+ *
+ * Historical refund journals created before Phase 10 may point at paymentId
+ * instead of refundId. Those remain a non-blocking provenance warning when the
+ * exact journal row still exists, is POSTED, belongs to the institution, and is
+ * typed REFUND. New refunds are always linked by refundId.
+ */
+export async function reconcileInstitution(
+  institutionId: string,
+  client: any = db
+): Promise<ReconciliationResult> {
+  const [payments, expenses, refunds, bills, journalsRaw] = await Promise.all([
+    client.payment.findMany({
+      where: {
+        institutionId,
+        status: { in: ["APPROVED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+      },
+      select: { id: true, status: true, approvedJournalId: true, voidJournalId: true },
+    }),
+    client.expense.findMany({
+      where: { institutionId, status: { in: ["APPROVED", "VOIDED"] } },
+      select: { id: true, status: true, journalId: true, reversalJournalId: true },
+    }),
+    client.refund.findMany({
+      where: { institutionId, status: "COMPLETED" },
+      select: { id: true, mode: true, paymentId: true, journalId: true },
+    }),
+    client.bill.findMany({
+      where: { institutionId, subtotalMinor: { gt: 0 } },
+      select: { id: true },
+    }),
+    client.ledgerJournal.findMany({
       where: { institutionId, status: "POSTED" },
       include: { entries: { select: { debitMinor: true, creditMinor: true } } },
     }),
   ]);
-  const unbalanced = journals.filter(
-    (j) => j.entries.reduce((s, e) => s + e.debitMinor, 0) !== j.entries.reduce((s, e) => s + e.creditMinor, 0)
-  ).length;
-  return { paymentsWithoutJournal: payments, expensesWithoutJournal: expenses, unbalancedJournals: unbalanced };
+
+  const journals = journalsRaw as JournalRow[];
+  const journalById = new Map<string, JournalRow>(journals.map((journal) => [journal.id, journal] as const));
+
+  let paymentsWithoutJournal = 0;
+  let paymentJournalLinkMismatches = 0;
+  let voidedPaymentsWithoutReversalJournal = 0;
+  let paymentReversalLinkMismatches = 0;
+  for (const payment of payments as any[]) {
+    if (!payment.approvedJournalId) paymentsWithoutJournal += 1;
+    else if (!linkedJournalMatches(journalById.get(payment.approvedJournalId), institutionId, "PAYMENT", payment.id)) {
+      paymentJournalLinkMismatches += 1;
+    }
+    if (payment.status === "VOIDED") {
+      if (!payment.voidJournalId) voidedPaymentsWithoutReversalJournal += 1;
+      else if (!linkedJournalMatches(journalById.get(payment.voidJournalId), institutionId, "PAYMENT", payment.id)) {
+        paymentReversalLinkMismatches += 1;
+      }
+    }
+  }
+
+  let expensesWithoutJournal = 0;
+  let expenseJournalLinkMismatches = 0;
+  let voidedExpensesWithoutReversalJournal = 0;
+  let expenseReversalLinkMismatches = 0;
+  for (const expense of expenses as any[]) {
+    if (!expense.journalId) expensesWithoutJournal += 1;
+    else if (!linkedJournalMatches(journalById.get(expense.journalId), institutionId, "EXPENSE", expense.id)) {
+      expenseJournalLinkMismatches += 1;
+    }
+    if (expense.status === "VOIDED") {
+      if (!expense.reversalJournalId) voidedExpensesWithoutReversalJournal += 1;
+      else if (!linkedJournalMatches(journalById.get(expense.reversalJournalId), institutionId, "EXPENSE", expense.id)) {
+        expenseReversalLinkMismatches += 1;
+      }
+    }
+  }
+
+  let cashRefundsWithoutJournal = 0;
+  let refundJournalLinkMismatches = 0;
+  let refundLegacyReferenceWarnings = 0;
+  let carryForwardsWithJournal = 0;
+  for (const refund of refunds as any[]) {
+    if (refund.mode === "CARRY_FORWARD") {
+      if (refund.journalId) carryForwardsWithJournal += 1;
+      continue;
+    }
+    if (refund.mode !== "ISSUE_REFUND") continue;
+    if (!refund.journalId) {
+      cashRefundsWithoutJournal += 1;
+      continue;
+    }
+    const journal = journalById.get(refund.journalId);
+    if (!journal || journal.institutionId !== institutionId || journal.status !== "POSTED" || journal.refType !== "REFUND") {
+      refundJournalLinkMismatches += 1;
+      continue;
+    }
+    if (journal.refId !== refund.id) {
+      // Pre-Phase-10 rows used paymentId (or null) as REFUND refId. Only those
+      // exact legacy shapes are warnings; an unrelated reference is corruption.
+      if (journal.refId == null || (refund.paymentId != null && journal.refId === refund.paymentId)) {
+        refundLegacyReferenceWarnings += 1;
+      } else {
+        refundJournalLinkMismatches += 1;
+      }
+    }
+  }
+
+  const billIds = new Set((bills as any[]).map((bill) => bill.id));
+  const billJournalCounts = new Map<string, number>();
+  for (const journal of journals) {
+    if (journal.refType === "BILL" && journal.refId && billIds.has(journal.refId)) {
+      billJournalCounts.set(journal.refId, (billJournalCounts.get(journal.refId) ?? 0) + 1);
+    }
+  }
+  let billsWithoutJournal = 0;
+  let billsWithDuplicateJournals = 0;
+  for (const billId of billIds) {
+    const count = billJournalCounts.get(billId) ?? 0;
+    if (count === 0) billsWithoutJournal += 1;
+    if (count > 1) billsWithDuplicateJournals += 1;
+  }
+
+  let unbalancedJournals = 0;
+  let journalsWithoutEntries = 0;
+  for (const journal of journals) {
+    if (journal.entries.length === 0) journalsWithoutEntries += 1;
+    const debit = journal.entries.reduce((sum, entry) => sum + entry.debitMinor, 0);
+    const credit = journal.entries.reduce((sum, entry) => sum + entry.creditMinor, 0);
+    if (debit !== credit) unbalancedJournals += 1;
+  }
+
+  const paymentIds = new Set((payments as any[]).map((row) => row.id));
+  const expenseIds = new Set((expenses as any[]).map((row) => row.id));
+  let orphanPaymentExpenseBillJournals = 0;
+  for (const journal of journals) {
+    if (!journal.refId) continue;
+    if (journal.refType === "PAYMENT" && !paymentIds.has(journal.refId)) orphanPaymentExpenseBillJournals += 1;
+    if (journal.refType === "EXPENSE" && !expenseIds.has(journal.refId)) orphanPaymentExpenseBillJournals += 1;
+    if (journal.refType === "BILL" && !billIds.has(journal.refId)) orphanPaymentExpenseBillJournals += 1;
+  }
+
+  const problems = [
+    paymentsWithoutJournal > 0 ? `${paymentsWithoutJournal} payment(s) without an approval journal` : null,
+    paymentJournalLinkMismatches > 0 ? `${paymentJournalLinkMismatches} payment approval journal link mismatch(es)` : null,
+    voidedPaymentsWithoutReversalJournal > 0
+      ? `${voidedPaymentsWithoutReversalJournal} voided payment(s) without a reversal journal`
+      : null,
+    paymentReversalLinkMismatches > 0 ? `${paymentReversalLinkMismatches} payment reversal journal link mismatch(es)` : null,
+    expensesWithoutJournal > 0 ? `${expensesWithoutJournal} expense(s) without an approval journal` : null,
+    expenseJournalLinkMismatches > 0 ? `${expenseJournalLinkMismatches} expense journal link mismatch(es)` : null,
+    voidedExpensesWithoutReversalJournal > 0
+      ? `${voidedExpensesWithoutReversalJournal} voided expense(s) without a reversal journal`
+      : null,
+    expenseReversalLinkMismatches > 0 ? `${expenseReversalLinkMismatches} expense reversal journal link mismatch(es)` : null,
+    cashRefundsWithoutJournal > 0 ? `${cashRefundsWithoutJournal} issued refund(s) without a journal` : null,
+    refundJournalLinkMismatches > 0 ? `${refundJournalLinkMismatches} refund journal link mismatch(es)` : null,
+    carryForwardsWithJournal > 0 ? `${carryForwardsWithJournal} carry-forward refund(s) incorrectly posted to the ledger` : null,
+    billsWithoutJournal > 0 ? `${billsWithoutJournal} non-zero bill(s) without a journal` : null,
+    billsWithDuplicateJournals > 0 ? `${billsWithDuplicateJournals} bill(s) with duplicate journals` : null,
+    unbalancedJournals > 0 ? `${unbalancedJournals} unbalanced posted journal(s)` : null,
+    journalsWithoutEntries > 0 ? `${journalsWithoutEntries} posted journal(s) without entries` : null,
+    orphanPaymentExpenseBillJournals > 0
+      ? `${orphanPaymentExpenseBillJournals} payment/expense/bill journal(s) reference missing domain records`
+      : null,
+  ].filter((problem): problem is string => problem != null);
+
+  const warnings = [
+    refundLegacyReferenceWarnings > 0
+      ? `${refundLegacyReferenceWarnings} historical refund journal(s) use the pre-Phase-10 payment/null reference format`
+      : null,
+  ].filter((warning): warning is string => warning != null);
+
+  return {
+    paymentsWithoutJournal,
+    paymentJournalLinkMismatches,
+    voidedPaymentsWithoutReversalJournal,
+    paymentReversalLinkMismatches,
+    expensesWithoutJournal,
+    expenseJournalLinkMismatches,
+    voidedExpensesWithoutReversalJournal,
+    expenseReversalLinkMismatches,
+    cashRefundsWithoutJournal,
+    refundJournalLinkMismatches,
+    refundLegacyReferenceWarnings,
+    carryForwardsWithJournal,
+    billsWithoutJournal,
+    billsWithDuplicateJournals,
+    unbalancedJournals,
+    journalsWithoutEntries,
+    orphanPaymentExpenseBillJournals,
+    problems,
+    warnings,
+    balanced: problems.length === 0,
+  };
 }
