@@ -17,17 +17,21 @@
  * Grace anchor = oldest unsettled bill dueDate + gracePeriodDays (documented
  * decision: PENDING payments do not add funds until approved; UI surfaces them).
  *
- * SHADOW MODE: the legacy policy below remains authoritative. The new focused
- * DeficitPolicyService evaluates the same captured facts and is compared on
- * every read. Only mismatches are logged; no meal or funds behavior is changed.
+ * SHADOW MODE: the legacy policy below remains authoritative. The focused
+ * DeficitPolicyService evaluates the same captured facts using the active
+ * persisted shadow rule version when one exists, otherwise the built-in rules.
+ * Load/validation failures fail safe to the built-in rules. Only mismatches are
+ * logged; no meal or funds behavior is changed.
  */
 import { db } from "@/lib/db";
 import { getInstitution } from "@/lib/institution";
 import {
   deficitPolicyMatchesLegacy,
   evaluateDeficitPolicy,
+  evaluateDeficitPolicyWithRules,
   type DeficitPolicyState,
 } from "@/lib/domain/policy/deficit-policy";
+import { resolveActiveDeficitRuleSet } from "@/lib/domain/rules/deficit-rules";
 
 export type { DeficitPolicyState } from "@/lib/domain/policy/deficit-policy";
 
@@ -128,9 +132,7 @@ export async function residentFundsSummary(residentId: string, client: any = db)
     }
   }
 
-  // New Rule Engine path — SHADOW ONLY. Do not use this decision to mutate or
-  // return policy state until parity has been observed and explicitly switched.
-  const shadowDecision = evaluateDeficitPolicy({
+  const policyContext = {
     availableMinor,
     deficitThresholdMinor: threshold,
     gracePeriodDays: graceDays,
@@ -139,15 +141,42 @@ export async function residentFundsSummary(residentId: string, client: any = db)
     activeExemptionExpiresAt: activeExemption?.expiresAt ?? null,
     hasActiveExemption: Boolean(activeExemption),
     now: policyNow,
-  });
+  };
+
+  // New Rule Engine path — SHADOW ONLY. Persisted active shadow rules are used
+  // when available. Any load/checksum/validation problem fails safe to the
+  // built-in rule set and never changes authoritative behavior.
+  let shadowDecision;
+  let shadowPolicySource: "DEFAULT" | "PERSISTED" = "DEFAULT";
+  let shadowPolicyVersionId: string | null = null;
+  let shadowPolicyChecksum: string | null = null;
+  try {
+    const activeRuleSet = await resolveActiveDeficitRuleSet(resident.institutionId, client);
+    shadowPolicySource = activeRuleSet.source;
+    shadowPolicyVersionId = activeRuleSet.policyVersionId;
+    shadowPolicyChecksum = activeRuleSet.checksum;
+    shadowDecision = evaluateDeficitPolicyWithRules(policyContext, activeRuleSet.rules);
+  } catch (error) {
+    console.error("[deficit-policy-shadow-load-failed]", {
+      institutionId: resident.institutionId,
+      residentId,
+      error: error instanceof Error ? error.message : "unknown error",
+    });
+    shadowDecision = evaluateDeficitPolicy(policyContext);
+  }
 
   if (!deficitPolicyMatchesLegacy(shadowDecision, { state: policyState, graceUntilIso })) {
     console.warn("[deficit-policy-shadow-mismatch]", {
+      institutionId: resident.institutionId,
+      residentId,
       legacyState: policyState,
       shadowState: shadowDecision.state,
       legacyGraceUntil: graceUntilIso,
       shadowGraceUntil: shadowDecision.graceUntilIso,
       shadowRuleVersionId: shadowDecision.ruleVersionId,
+      shadowPolicySource,
+      shadowPolicyVersionId,
+      shadowPolicyChecksum,
     });
   }
 

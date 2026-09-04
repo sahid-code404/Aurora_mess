@@ -558,6 +558,46 @@ model CustomVariableValue {
 }
 
 // ---------------------------------------------------------------------
+// Minimal Rule Engine — versioned deterministic policy rule sets
+// ---------------------------------------------------------------------
+
+model RuleDefinition {
+  id            String   @id @default(cuid())
+  institutionId String
+  key           String
+  name          String
+  description   String?
+  policyType    String
+  status        String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  versions RuleVersion[]
+
+  @@unique([institutionId, key])
+  @@index([institutionId, policyType, status])
+}
+
+model RuleVersion {
+  id               String    @id @default(cuid())
+  ruleDefinitionId String
+  version          Int
+  rulesJson        String // validated StructuredDecisionRule[] JSON; never executable code
+  checksum         String
+  effectiveFrom    DateTime?
+  effectiveUntil   DateTime?
+  status           String    @default("DRAFT") // DRAFT | ACTIVE | SCHEDULED | HISTORICAL
+  createdByUserId  String?
+  reason           String?
+  createdAt        DateTime  @default(now())
+
+  definition RuleDefinition @relation(fields: [ruleDefinitionId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleDefinitionId, version])
+  @@index([ruleDefinitionId, status, effectiveFrom])
+}
+
+// ---------------------------------------------------------------------
 // Formula engine (versioned, safe AST, DAG dependencies)
 // ---------------------------------------------------------------------
 
