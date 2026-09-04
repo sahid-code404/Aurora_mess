@@ -13,6 +13,7 @@
  */
 import {
   evaluateFirstMatchingRule,
+  type RuleConditionTrace,
   type RuleFacts,
   type StructuredDecisionRule,
 } from "@/lib/domain/rules/engine";
@@ -38,7 +39,11 @@ export type DeficitPolicyDecision = {
   graceUntilIso: string | null;
 };
 
-type DeficitRuleResult = {
+export type DeficitPolicyDetailedDecision = DeficitPolicyDecision & {
+  trace: RuleConditionTrace[];
+};
+
+export type DeficitRuleResult = {
   state: DeficitPolicyState;
   reasonCode: string;
 };
@@ -146,7 +151,8 @@ function graceUntil(context: DeficitPolicyContext): Date {
   return new Date(anchor.getTime() + context.gracePeriodDays * DAY_MS);
 }
 
-function buildFacts(context: DeficitPolicyContext): RuleFacts {
+/** Named facts exposed to the structured Rule Engine and the simulation UI. */
+export function buildDeficitRuleFacts(context: DeficitPolicyContext): RuleFacts {
   return {
     has_active_exemption: context.hasActiveExemption,
     deficit_policy_enabled: context.deficitPolicyEnabled,
@@ -179,9 +185,15 @@ function explanationFor(reasonCode: string): string {
   }
 }
 
-/** Pure, explainable deficit-policy decision. */
-export function evaluateDeficitPolicy(context: DeficitPolicyContext): DeficitPolicyDecision {
-  const evaluation = evaluateFirstMatchingRule(DEFAULT_DEFICIT_RULES, buildFacts(context));
+/**
+ * Evaluate an explicit structured deficit rule set and preserve its condition
+ * trace. This powers draft simulation and persisted shadow evaluation.
+ */
+export function evaluateDeficitPolicyWithRules(
+  context: DeficitPolicyContext,
+  rules: readonly StructuredDecisionRule<DeficitRuleResult>[]
+): DeficitPolicyDetailedDecision {
+  const evaluation = evaluateFirstMatchingRule(rules, buildDeficitRuleFacts(context));
   const state = evaluation.result.state;
 
   return {
@@ -195,7 +207,14 @@ export function evaluateDeficitPolicy(context: DeficitPolicyContext): DeficitPol
         : state === "GRACE_PERIOD" || state === "RESTRICTED"
           ? graceUntil(context).toISOString()
           : null,
+    trace: evaluation.trace,
   };
+}
+
+/** Pure, explainable default deficit-policy decision. */
+export function evaluateDeficitPolicy(context: DeficitPolicyContext): DeficitPolicyDecision {
+  const { trace: _trace, ...decision } = evaluateDeficitPolicyWithRules(context, DEFAULT_DEFICIT_RULES);
+  return decision;
 }
 
 /**
