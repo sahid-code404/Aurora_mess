@@ -1,13 +1,14 @@
 /**
  * GET /api/v1/admin/billing/periods/[id] — period detail (auth ADMIN):
- * the period row, the immutable snapshot SUMMARY (checksum + frozen totals +
- * formula), and the generated bills with resident names.
+ * the period row, immutable snapshot summary/provenance, integrity checks, and
+ * generated bills with resident names.
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { formatMinor } from "@/lib/money";
 import { monthLabel } from "@/lib/domain/billing";
+import { verifyBillingPeriodIntegrity } from "@/lib/domain/billing-integrity";
 
 export const dynamic = "force-dynamic";
 
@@ -19,20 +20,21 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     throw new ApiError(CODES.NOT_FOUND, "Billing period not found.", 404);
   }
 
-  const [snapshot, bills] = await Promise.all([
+  const [snapshot, bills, integrity] = await Promise.all([
     db.billingSnapshot.findUnique({ where: { billingPeriodId: period.id } }),
     db.bill.findMany({
       where: { billingPeriodId: period.id },
       orderBy: { billNumber: "asc" },
       include: { period: { select: { id: true, year: true, month: true, status: true } } },
     }),
+    verifyBillingPeriodIntegrity(period.id),
   ]);
 
-  const residentIds = [...new Set(bills.map((b) => b.residentId))];
+  const residentIds = [...new Set(bills.map((bill) => bill.residentId))];
   const profiles = residentIds.length
     ? await db.userProfile.findMany({ where: { userId: { in: residentIds } }, select: { userId: true, fullName: true } })
     : [];
-  const nameMap = new Map(profiles.map((p) => [p.userId, p.fullName]));
+  const nameMap = new Map(profiles.map((profile) => [profile.userId, profile.fullName]));
 
   let snapshotSummary: Record<string, unknown> | null = null;
   if (snapshot) {
@@ -46,7 +48,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       } else if (typeof payload?.guestIncomeMinor === "number") {
         guestIncomeMinor = payload.guestIncomeMinor;
       } else if (Array.isArray(payload?.residents)) {
-        guestIncomeMinor = payload.residents.reduce((sum: number, r: any) => sum + (Number(r.guestAmountMinor) || 0), 0);
+        guestIncomeMinor = payload.residents.reduce(
+          (sum: number, resident: any) => sum + (Number(resident.guestAmountMinor) || 0),
+          0
+        );
       }
     } catch {
       formula = null;
@@ -87,23 +92,24 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         createdAt: period.createdAt.toISOString(),
       },
       snapshot: snapshotSummary,
-      bills: bills.map((b) => ({
-        id: b.id,
-        billNumber: b.billNumber,
-        residentId: b.residentId,
-        residentName: nameMap.get(b.residentId) ?? "Resident",
-        status: b.status,
-        residentMealCount: b.residentMealCount,
-        guestMealCount: b.guestMealCount,
-        subtotalMinor: b.subtotalMinor,
-        subtotalFormatted: formatMinor(b.subtotalMinor),
-        adjustmentsMinor: b.adjustmentsMinor,
-        paymentsMinor: b.paymentsMinor,
-        paymentsFormatted: formatMinor(b.paymentsMinor),
-        totalDueMinor: b.totalDueMinor,
-        totalDueFormatted: formatMinor(b.totalDueMinor),
-        dueDate: b.dueDate.toISOString(),
-        generatedAt: b.generatedAt.toISOString(),
+      integrity,
+      bills: bills.map((bill) => ({
+        id: bill.id,
+        billNumber: bill.billNumber,
+        residentId: bill.residentId,
+        residentName: nameMap.get(bill.residentId) ?? "Resident",
+        status: bill.status,
+        residentMealCount: bill.residentMealCount,
+        guestMealCount: bill.guestMealCount,
+        subtotalMinor: bill.subtotalMinor,
+        subtotalFormatted: formatMinor(bill.subtotalMinor),
+        adjustmentsMinor: bill.adjustmentsMinor,
+        paymentsMinor: bill.paymentsMinor,
+        paymentsFormatted: formatMinor(bill.paymentsMinor),
+        totalDueMinor: bill.totalDueMinor,
+        totalDueFormatted: formatMinor(bill.totalDueMinor),
+        dueDate: bill.dueDate.toISOString(),
+        generatedAt: bill.generatedAt.toISOString(),
       })),
     },
   };
