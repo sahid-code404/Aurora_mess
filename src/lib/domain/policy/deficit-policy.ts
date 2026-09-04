@@ -11,7 +11,11 @@
  * During shadow mode, funds.ts compares this result with the legacy policy and
  * keeps the legacy result authoritative until parity is proven.
  */
-import { evaluateFirstMatchingRule, type DecisionRule } from "@/lib/domain/rules/engine";
+import {
+  evaluateFirstMatchingRule,
+  type RuleFacts,
+  type StructuredDecisionRule,
+} from "@/lib/domain/rules/engine";
 
 export type DeficitPolicyState = "AVAILABLE" | "GRACE_PERIOD" | "RESTRICTED" | "EXEMPTED";
 
@@ -34,86 +38,163 @@ export type DeficitPolicyDecision = {
   graceUntilIso: string | null;
 };
 
-type RuleResult = Omit<DeficitPolicyDecision, "ruleVersionId">;
+type DeficitRuleResult = {
+  state: DeficitPolicyState;
+  reasonCode: string;
+};
 
 const DAY_MS = 86_400_000;
+const fact = (key: string) => ({ source: "FACT" as const, key });
+const literal = (value: string | number | boolean | null) => ({ source: "LITERAL" as const, value });
+
+/**
+ * Default deficit rule set, expressed entirely as deterministic data.
+ * This exact shape can later be persisted/versioned after shadow parity is
+ * established; the evaluator itself will not need to change.
+ */
+export const DEFAULT_DEFICIT_RULES: readonly StructuredDecisionRule<DeficitRuleResult>[] = [
+  {
+    id: "deficit.active_exemption",
+    version: 1,
+    priority: 100,
+    when: {
+      logic: "AND",
+      conditions: [{ left: fact("has_active_exemption"), operator: "IS_TRUE" }],
+    },
+    result: { state: "EXEMPTED", reasonCode: "ACTIVE_POLICY_EXEMPTION" },
+  },
+  {
+    id: "deficit.policy_disabled",
+    version: 1,
+    priority: 90,
+    when: {
+      logic: "AND",
+      conditions: [{ left: fact("deficit_policy_enabled"), operator: "IS_FALSE" }],
+    },
+    result: { state: "AVAILABLE", reasonCode: "POLICY_DISABLED" },
+  },
+  {
+    id: "deficit.within_threshold",
+    version: 1,
+    priority: 80,
+    when: {
+      logic: "AND",
+      conditions: [
+        {
+          left: fact("deficit_amount"),
+          operator: "<=",
+          right: fact("deficit_threshold"),
+        },
+      ],
+    },
+    result: { state: "AVAILABLE", reasonCode: "WITHIN_DEFICIT_THRESHOLD" },
+  },
+  {
+    id: "deficit.grace_expired",
+    version: 1,
+    priority: 70,
+    when: {
+      logic: "AND",
+      conditions: [
+        { left: fact("has_due_anchor"), operator: "IS_TRUE" },
+        {
+          left: fact("days_overdue"),
+          operator: ">",
+          right: fact("grace_period_days"),
+        },
+      ],
+    },
+    result: { state: "RESTRICTED", reasonCode: "DEFICIT_GRACE_EXPIRED" },
+  },
+  {
+    id: "deficit.grace_active",
+    version: 1,
+    priority: 60,
+    when: {
+      logic: "AND",
+      conditions: [
+        { left: fact("has_due_anchor"), operator: "IS_TRUE" },
+        {
+          left: fact("deficit_amount"),
+          operator: ">",
+          right: fact("deficit_threshold"),
+        },
+      ],
+    },
+    result: { state: "GRACE_PERIOD", reasonCode: "DEFICIT_GRACE_ACTIVE" },
+  },
+  {
+    id: "deficit.grace_started",
+    version: 1,
+    priority: 50,
+    when: {
+      logic: "AND",
+      conditions: [
+        {
+          left: fact("deficit_amount"),
+          operator: ">",
+          right: fact("deficit_threshold"),
+        },
+      ],
+    },
+    result: { state: "GRACE_PERIOD", reasonCode: "DEFICIT_GRACE_STARTED" },
+  },
+] as const;
 
 function graceUntil(context: DeficitPolicyContext): Date {
   const anchor = context.oldestUnsettledDueAt ?? context.now;
   return new Date(anchor.getTime() + context.gracePeriodDays * DAY_MS);
 }
 
-const DEFICIT_RULES: readonly DecisionRule<DeficitPolicyContext, RuleResult>[] = [
-  {
-    id: "deficit.active_exemption",
-    version: 1,
-    priority: 100,
-    when: (ctx) => ctx.hasActiveExemption,
-    decide: (ctx) => ({
-      state: "EXEMPTED",
-      reasonCode: "ACTIVE_POLICY_EXEMPTION",
-      explanation: "An active deficit-restriction exemption applies to this resident.",
-      graceUntilIso: ctx.activeExemptionExpiresAt?.toISOString() ?? null,
-    }),
-  },
-  {
-    id: "deficit.policy_disabled",
-    version: 1,
-    priority: 90,
-    when: (ctx) => !ctx.deficitPolicyEnabled,
-    decide: () => ({
-      state: "AVAILABLE",
-      reasonCode: "POLICY_DISABLED",
-      explanation: "Deficit restriction is disabled for this institution.",
-      graceUntilIso: null,
-    }),
-  },
-  {
-    id: "deficit.within_threshold",
-    version: 1,
-    priority: 80,
-    when: (ctx) => ctx.availableMinor >= -ctx.deficitThresholdMinor,
-    decide: () => ({
-      state: "AVAILABLE",
-      reasonCode: "WITHIN_DEFICIT_THRESHOLD",
-      explanation: "The resident's available funds are within the configured deficit threshold.",
-      graceUntilIso: null,
-    }),
-  },
-  {
-    id: "deficit.grace_expired",
-    version: 1,
-    priority: 70,
-    when: (ctx) => ctx.oldestUnsettledDueAt !== null && graceUntil(ctx).getTime() < ctx.now.getTime(),
-    decide: (ctx) => ({
-      state: "RESTRICTED",
-      reasonCode: "DEFICIT_GRACE_EXPIRED",
-      explanation: "The resident is beyond the deficit threshold and the configured grace period has expired.",
-      graceUntilIso: graceUntil(ctx).toISOString(),
-    }),
-  },
-  {
-    id: "deficit.grace_active",
-    version: 1,
-    priority: 60,
-    when: () => true,
-    decide: (ctx) => ({
-      state: "GRACE_PERIOD",
-      reasonCode: ctx.oldestUnsettledDueAt ? "DEFICIT_GRACE_ACTIVE" : "DEFICIT_GRACE_STARTED",
-      explanation: ctx.oldestUnsettledDueAt
-        ? "The resident is beyond the deficit threshold but remains inside the grace period."
-        : "The resident is beyond the deficit threshold; the grace period starts now because no unsettled bill due date is available.",
-      graceUntilIso: graceUntil(ctx).toISOString(),
-    }),
-  },
-] as const;
+function buildFacts(context: DeficitPolicyContext): RuleFacts {
+  return {
+    has_active_exemption: context.hasActiveExemption,
+    deficit_policy_enabled: context.deficitPolicyEnabled,
+    deficit_amount: Math.max(0, -context.availableMinor),
+    deficit_threshold: context.deficitThresholdMinor,
+    has_due_anchor: context.oldestUnsettledDueAt !== null,
+    days_overdue: context.oldestUnsettledDueAt
+      ? (context.now.getTime() - context.oldestUnsettledDueAt.getTime()) / DAY_MS
+      : 0,
+    grace_period_days: context.gracePeriodDays,
+  };
+}
+
+function explanationFor(reasonCode: string): string {
+  switch (reasonCode) {
+    case "ACTIVE_POLICY_EXEMPTION":
+      return "An active deficit-restriction exemption applies to this resident.";
+    case "POLICY_DISABLED":
+      return "Deficit restriction is disabled for this institution.";
+    case "WITHIN_DEFICIT_THRESHOLD":
+      return "The resident's available funds are within the configured deficit threshold.";
+    case "DEFICIT_GRACE_EXPIRED":
+      return "The resident is beyond the deficit threshold and the configured grace period has expired.";
+    case "DEFICIT_GRACE_ACTIVE":
+      return "The resident is beyond the deficit threshold but remains inside the grace period.";
+    case "DEFICIT_GRACE_STARTED":
+      return "The resident is beyond the deficit threshold; the grace period starts now because no unsettled bill due date is available.";
+    default:
+      return "The deficit policy produced a decision.";
+  }
+}
 
 /** Pure, explainable deficit-policy decision. */
 export function evaluateDeficitPolicy(context: DeficitPolicyContext): DeficitPolicyDecision {
-  const evaluation = evaluateFirstMatchingRule(DEFICIT_RULES, context);
+  const evaluation = evaluateFirstMatchingRule(DEFAULT_DEFICIT_RULES, buildFacts(context));
+  const state = evaluation.result.state;
+
   return {
-    ...evaluation.result,
+    state,
+    reasonCode: evaluation.result.reasonCode,
+    explanation: explanationFor(evaluation.result.reasonCode),
     ruleVersionId: evaluation.ruleVersionId,
+    graceUntilIso:
+      state === "EXEMPTED"
+        ? context.activeExemptionExpiresAt?.toISOString() ?? null
+        : state === "GRACE_PERIOD" || state === "RESTRICTED"
+          ? graceUntil(context).toISOString()
+          : null,
   };
 }
 
