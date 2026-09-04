@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateFirstMatchingRule } from "@/lib/domain/rules/engine";
+import {
+  evaluateCondition,
+  evaluateFirstMatchingRule,
+  evaluateGroup,
+  type RuleCondition,
+} from "@/lib/domain/rules/engine";
 import {
   deficitPolicyMatchesLegacy,
   evaluateDeficitPolicy,
@@ -7,6 +12,8 @@ import {
 } from "@/lib/domain/policy/deficit-policy";
 
 const NOW = new Date("2026-09-05T00:00:00.000Z");
+const fact = (key: string) => ({ source: "FACT" as const, key });
+const literal = (value: string | number | boolean | null) => ({ source: "LITERAL" as const, value });
 
 function context(overrides: Partial<DeficitPolicyContext> = {}): DeficitPolicyContext {
   return {
@@ -22,25 +29,103 @@ function context(overrides: Partial<DeficitPolicyContext> = {}): DeficitPolicyCo
   };
 }
 
-describe("minimal Rule Engine", () => {
-  test("highest priority matching rule wins deterministically", () => {
+describe("minimal structured Rule Engine", () => {
+  const facts = {
+    amount: 8,
+    threshold: 7,
+    status: "ACTIVE",
+    enabled: true,
+    disabled: false,
+  };
+
+  test("supports the initial deterministic operator set", () => {
+    const conditions: RuleCondition[] = [
+      { left: fact("status"), operator: "==", right: literal("ACTIVE") },
+      { left: fact("status"), operator: "!=", right: literal("BLOCKED") },
+      { left: fact("amount"), operator: ">", right: fact("threshold") },
+      { left: fact("amount"), operator: ">=", right: literal(8) },
+      { left: fact("threshold"), operator: "<", right: fact("amount") },
+      { left: fact("threshold"), operator: "<=", right: literal(7) },
+      { left: fact("status"), operator: "IN", values: [literal("ACTIVE"), literal("PENDING")] },
+      { left: fact("amount"), operator: "BETWEEN", values: [literal(5), literal(10)] },
+      { left: fact("enabled"), operator: "IS_TRUE" },
+      { left: fact("disabled"), operator: "IS_FALSE" },
+    ];
+
+    for (const condition of conditions) {
+      expect(evaluateCondition(condition, facts).matched).toBe(true);
+    }
+  });
+
+  test("supports AND and OR grouping without executable rule code", () => {
+    const andGroup = evaluateGroup(
+      {
+        logic: "AND",
+        conditions: [
+          { left: fact("amount"), operator: ">", right: fact("threshold") },
+          { left: fact("enabled"), operator: "IS_TRUE" },
+        ],
+      },
+      facts
+    );
+    const orGroup = evaluateGroup(
+      {
+        logic: "OR",
+        conditions: [
+          { left: fact("status"), operator: "==", right: literal("BLOCKED") },
+          { left: fact("enabled"), operator: "IS_TRUE" },
+        ],
+      },
+      facts
+    );
+
+    expect(andGroup.matched).toBe(true);
+    expect(orGroup.matched).toBe(true);
+  });
+
+  test("highest priority matching structured rule wins deterministically", () => {
     const result = evaluateFirstMatchingRule(
       [
-        { id: "low", version: 1, priority: 10, when: () => true, decide: () => "low" },
-        { id: "high", version: 2, priority: 20, when: () => true, decide: () => "high" },
+        {
+          id: "low",
+          version: 1,
+          priority: 10,
+          when: { logic: "AND", conditions: [{ left: fact("enabled"), operator: "IS_TRUE" }] },
+          result: "low",
+        },
+        {
+          id: "high",
+          version: 2,
+          priority: 20,
+          when: { logic: "AND", conditions: [{ left: fact("enabled"), operator: "IS_TRUE" }] },
+          result: "high",
+        },
       ],
-      {}
+      facts
     );
 
     expect(result.result).toBe("high");
     expect(result.ruleVersionId).toBe("high@v2");
+    expect(result.trace.every((step) => step.matched)).toBe(true);
   });
 
-  test("no implicit default is invented when no rule matches", () => {
+  test("unknown facts and missing fallbacks fail loudly", () => {
+    expect(() =>
+      evaluateCondition({ left: fact("missing"), operator: "IS_TRUE" }, facts)
+    ).toThrow("RULE_ENGINE_UNKNOWN_FACT:missing");
+
     expect(() =>
       evaluateFirstMatchingRule(
-        [{ id: "never", version: 1, priority: 1, when: () => false, decide: () => "x" }],
-        {}
+        [
+          {
+            id: "never",
+            version: 1,
+            priority: 1,
+            when: { logic: "AND", conditions: [{ left: fact("disabled"), operator: "IS_TRUE" }] },
+            result: "x",
+          },
+        ],
+        facts
       )
     ).toThrow("RULE_ENGINE_NO_MATCH");
   });
