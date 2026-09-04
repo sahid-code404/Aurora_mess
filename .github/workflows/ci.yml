@@ -14,15 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DATABASE_URL: file:./prisma/ci.db
+  DATABASE_URL: postgresql://boardops@127.0.0.1:5432/boardops_ci?schema=public
   SESSION_SECRET: boardops-ci-only-secret-not-for-production
   NODE_ENV: test
 
 jobs:
   verify:
-    name: Typecheck, lint, tests, build
+    name: Typecheck, lint, tests, migrate, build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: boardops
+          POSTGRES_DB: boardops_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U boardops -d boardops_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout
@@ -39,6 +54,15 @@ jobs:
       - name: Generate Prisma client
         run: bunx prisma generate
 
+      - name: Validate Prisma schema
+        run: bunx prisma validate
+
+      - name: Apply committed migrations
+        run: bunx prisma migrate deploy
+
+      - name: Verify migration state
+        run: bunx prisma migrate status
+
       - name: Typecheck
         run: bunx tsc --noEmit
 
@@ -48,16 +72,7 @@ jobs:
       - name: Unit regression tests
         run: bun test tests/unit
 
-      - name: Prepare disposable integration database
-        env:
-          DATABASE_URL: file:./ci-integration.db
-        run: |
-          rm -f prisma/ci-integration.db
-          bunx prisma db push --skip-generate
-
-      - name: Financial integration tests
-        env:
-          DATABASE_URL: file:./ci-integration.db
+      - name: PostgreSQL financial integration tests
         run: bun test tests/integration
 
       - name: Production build
