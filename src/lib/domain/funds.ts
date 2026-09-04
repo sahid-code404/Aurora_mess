@@ -16,11 +16,20 @@
  * GRACE_PERIOD (below −threshold, grace not expired) → RESTRICTED (past grace).
  * Grace anchor = oldest unsettled bill dueDate + gracePeriodDays (documented
  * decision: PENDING payments do not add funds until approved; UI surfaces them).
+ *
+ * SHADOW MODE: the legacy policy below remains authoritative. The new focused
+ * DeficitPolicyService evaluates the same captured facts and is compared on
+ * every read. Only mismatches are logged; no meal or funds behavior is changed.
  */
 import { db } from "@/lib/db";
 import { getInstitution } from "@/lib/institution";
+import {
+  deficitPolicyMatchesLegacy,
+  evaluateDeficitPolicy,
+  type DeficitPolicyState,
+} from "@/lib/domain/policy/deficit-policy";
 
-export type DeficitPolicyState = "AVAILABLE" | "GRACE_PERIOD" | "RESTRICTED" | "EXEMPTED";
+export type { DeficitPolicyState } from "@/lib/domain/policy/deficit-policy";
 
 export type ResidentFundsSummary = {
   residentId: string;
@@ -97,6 +106,10 @@ export async function residentFundsSummary(residentId: string, client: any = db)
   const amountToPayMinor = unsettledBills.reduce((s, b) => s + b.totalDueMinor, 0);
   const deficitMinor = Math.max(0, -availableMinor);
 
+  // Legacy policy remains AUTHORITATIVE during shadow mode.
+  // Capture one clock instant so the legacy and shadow decisions compare the
+  // same grace boundary rather than differing by a few milliseconds.
+  const policyNow = new Date();
   let policyState: DeficitPolicyState = "AVAILABLE";
   let graceUntilIso: string | null = null;
   if (activeExemption) {
@@ -107,12 +120,35 @@ export async function residentFundsSummary(residentId: string, client: any = db)
     if (oldestDue) {
       const graceUntil = new Date(oldestDue.getTime() + graceDays * 24 * 60 * 60 * 1000);
       graceUntilIso = graceUntil.toISOString();
-      policyState = graceUntil < new Date() ? "RESTRICTED" : "GRACE_PERIOD";
+      policyState = graceUntil < policyNow ? "RESTRICTED" : "GRACE_PERIOD";
     } else {
       // Deficit with no bill anchor yet: grace window starts now.
       policyState = "GRACE_PERIOD";
-      graceUntilIso = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000).toISOString();
+      graceUntilIso = new Date(policyNow.getTime() + graceDays * 24 * 60 * 60 * 1000).toISOString();
     }
+  }
+
+  // New Rule Engine path — SHADOW ONLY. Do not use this decision to mutate or
+  // return policy state until parity has been observed and explicitly switched.
+  const shadowDecision = evaluateDeficitPolicy({
+    availableMinor,
+    deficitThresholdMinor: threshold,
+    gracePeriodDays: graceDays,
+    deficitPolicyEnabled: Boolean(inst?.settings.deficitPolicyEnabled),
+    oldestUnsettledDueAt: unsettledBills[0]?.dueDate ?? null,
+    activeExemptionExpiresAt: activeExemption?.expiresAt ?? null,
+    hasActiveExemption: Boolean(activeExemption),
+    now: policyNow,
+  });
+
+  if (!deficitPolicyMatchesLegacy(shadowDecision, { state: policyState, graceUntilIso })) {
+    console.warn("[deficit-policy-shadow-mismatch]", {
+      legacyState: policyState,
+      shadowState: shadowDecision.state,
+      legacyGraceUntil: graceUntilIso,
+      shadowGraceUntil: shadowDecision.graceUntilIso,
+      shadowRuleVersionId: shadowDecision.ruleVersionId,
+    });
   }
 
   return {
