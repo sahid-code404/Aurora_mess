@@ -1,9 +1,7 @@
 /**
  * GET /api/v1/admin/ledger — the double-entry ledger feed (auth ADMIN).
- * Journals (newest first, 50/page, keyset cursor) with their entries expanded
- * to account codes and formatted amounts. Meta: current account balances and
- * the reconciliation result (payments/expenses without journals, unbalanced
- * journals — all must be zero, mirroring the readiness gate).
+ * Journals (newest first, keyset pagination) with account balances and one
+ * authoritative reconciliation result shared with billing readiness.
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
@@ -34,22 +32,19 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   ]);
 
   return {
-    data: page.items.map((j) => serializeJournal(j)),
+    data: page.items.map((journal) => serializeJournal(journal)),
     meta: {
       nextCursor: page.nextCursor,
-      accounts: accounts.map((a) => ({
-        code: a.code,
-        name: a.name,
-        type: a.type,
-        debitMinor: a.debitMinor,
-        creditMinor: a.creditMinor,
-        balanceMinor: a.balanceMinor,
-        balanceFormatted: formatMinor(a.balanceMinor),
+      accounts: accounts.map((account) => ({
+        code: account.code,
+        name: account.name,
+        type: account.type,
+        debitMinor: account.debitMinor,
+        creditMinor: account.creditMinor,
+        balanceMinor: account.balanceMinor,
+        balanceFormatted: formatMinor(account.balanceMinor),
       })),
-      reconcile: {
-        ...reconcile,
-        balanced: reconcile.paymentsWithoutJournal === 0 && reconcile.expensesWithoutJournal === 0 && reconcile.unbalancedJournals === 0,
-      },
+      reconcile,
     },
   };
 });
