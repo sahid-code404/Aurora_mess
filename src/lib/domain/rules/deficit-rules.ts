@@ -54,6 +54,28 @@ function canonicalRuleJson(rules: readonly StructuredDecisionRule<DeficitRuleRes
   return JSON.stringify(rules);
 }
 
+/**
+ * PostgreSQL SERIALIZABLE transactions protect both monotonically increasing
+ * version numbers and the single-active-version invariant. Prisma reports
+ * serialization/write conflicts as P2034; bounded retry is safe because every
+ * mutation is enclosed by the transaction and therefore fully rolled back.
+ */
+async function serializableWrite<T>(work: (tx: any) => Promise<T>): Promise<T> {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await db.$transaction(work, { isolationLevel: "Serializable" });
+    } catch (error) {
+      const retryable =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as any).code === "P2034";
+      if (!retryable || attempt === 3) throw error;
+    }
+  }
+  throw new Error("RULE_SERIALIZABLE_RETRY_EXHAUSTED");
+}
+
 export function parseDeficitRuleSet(input: unknown): DeficitRuleSet {
   const parsed = parseStructuredRuleSet(input, deficitRuleResultSchema);
   const seen = new Set<string>();
@@ -241,7 +263,7 @@ export async function createDeficitRuleDraft(input: {
 }): Promise<RuleVersionView> {
   const rawRules = parseDeficitRuleSet(input.rules);
 
-  const created = await db.$transaction(async (tx) => {
+  const created = await serializableWrite(async (tx) => {
     const definition = await ensureDeficitDefinition(input.institutionId, tx);
     const maxVersion = await tx.ruleVersion.aggregate({
       where: { ruleDefinitionId: definition.id },
@@ -294,12 +316,15 @@ export async function resolveActiveDeficitRuleSet(
 ): Promise<ActiveDeficitRuleSet> {
   const definition = await findDeficitDefinition(institutionId, client);
   if (definition) {
+    const now = new Date();
     const active = await client.ruleVersion.findFirst({
       where: {
         ruleDefinitionId: definition.id,
         status: "ACTIVE",
-        OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: new Date() } }],
-        AND: [{ OR: [{ effectiveUntil: null }, { effectiveUntil: { gte: new Date() } }] }],
+        AND: [
+          { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: now } }] },
+          { OR: [{ effectiveUntil: null }, { effectiveUntil: { gte: now } }] },
+        ],
       },
       orderBy: { version: "desc" },
     });
@@ -410,7 +435,7 @@ export async function activateDeficitRuleVersion(input: {
     );
   }
 
-  const activated = await db.$transaction(async (tx) => {
+  const activated = await serializableWrite(async (tx) => {
     const candidate = await tx.ruleVersion.findUnique({
       where: { id: input.versionId },
       include: { definition: true },
