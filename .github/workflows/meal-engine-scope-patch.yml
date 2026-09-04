@@ -1,0 +1,32 @@
+name: Apply Selected Meal Scope To Engine
+
+on:
+  push:
+    branches: [feat/meal-selected-scope]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[meal-engine-scope-patched]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/meal-selected-scope
+          fetch-depth: 0
+
+      - name: Patch meal engine
+        run: python3 scripts/patch-meal-engine-selected-scope.py
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/lib/domain/meal-engine.ts
+          git commit -m "feat: apply selected meal scope in meal engine [meal-engine-scope-patched]"
+          git push origin HEAD:feat/meal-selected-scope
