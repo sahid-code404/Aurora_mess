@@ -9,11 +9,28 @@ import {
   type DeficitPolicyContext,
   type DeficitRuleResult,
 } from "@/lib/domain/policy/deficit-policy";
-import type { StructuredDecisionRule } from "@/lib/domain/rules/engine";
+import type {
+  RuleCondition,
+  RuleOperand,
+  StructuredDecisionRule,
+} from "@/lib/domain/rules/engine";
 import { parseStructuredRuleSet } from "@/lib/domain/rules/schema";
 
 export const DEFICIT_RULE_KEY = "deficit_meal_restriction";
 export const DEFICIT_POLICY_TYPE = "DEFICIT_RESTRICTION";
+
+export const DEFICIT_RULE_FACT_TYPES = {
+  has_active_exemption: "boolean",
+  deficit_policy_enabled: "boolean",
+  deficit_amount: "number",
+  deficit_threshold: "number",
+  has_due_anchor: "boolean",
+  days_overdue: "number",
+  grace_period_days: "number",
+} as const;
+
+type DeficitFactType = (typeof DEFICIT_RULE_FACT_TYPES)[keyof typeof DEFICIT_RULE_FACT_TYPES];
+type RuleValueType = DeficitFactType | "string" | "null";
 
 const deficitRuleResultSchema = z
   .object({
@@ -76,6 +93,105 @@ async function serializableWrite<T>(work: (tx: any) => Promise<T>): Promise<T> {
   throw new Error("RULE_SERIALIZABLE_RETRY_EXHAUSTED");
 }
 
+function operandType(operand: RuleOperand): RuleValueType {
+  if (operand.source === "FACT") {
+    const type = DEFICIT_RULE_FACT_TYPES[operand.key as keyof typeof DEFICIT_RULE_FACT_TYPES];
+    if (!type) {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        `Unknown deficit-policy fact '${operand.key}'.`,
+        422
+      );
+    }
+    return type;
+  }
+
+  if (operand.value === null) return "null";
+  if (typeof operand.value === "number") return "number";
+  if (typeof operand.value === "boolean") return "boolean";
+  return "string";
+}
+
+function requireOperandType(
+  operand: RuleOperand | undefined,
+  expected: RuleValueType,
+  operator: string
+): void {
+  if (!operand || operandType(operand) !== expected) {
+    throw new ApiError(
+      CODES.VALIDATION_FAILED,
+      `${operator} requires ${expected} operands in deficit rules.`,
+      422
+    );
+  }
+}
+
+function validateConditionSemantics(condition: RuleCondition): void {
+  const leftType = operandType(condition.left);
+
+  if ([">", ">=", "<", "<="].includes(condition.operator)) {
+    if (leftType !== "number") {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        `${condition.operator} requires numeric operands in deficit rules.`,
+        422
+      );
+    }
+    requireOperandType(condition.right, "number", condition.operator);
+    return;
+  }
+
+  if (condition.operator === "BETWEEN") {
+    if (leftType !== "number") {
+      throw new ApiError(CODES.VALIDATION_FAILED, "BETWEEN requires numeric operands in deficit rules.", 422);
+    }
+    for (const operand of condition.values ?? []) requireOperandType(operand, "number", "BETWEEN");
+    return;
+  }
+
+  if (condition.operator === "IS_TRUE" || condition.operator === "IS_FALSE") {
+    if (leftType !== "boolean") {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        `${condition.operator} requires a boolean operand in deficit rules.`,
+        422
+      );
+    }
+    return;
+  }
+
+  if (condition.operator === "IN") {
+    for (const operand of condition.values ?? []) {
+      const valueType = operandType(operand);
+      if (valueType !== leftType && valueType !== "null") {
+        throw new ApiError(
+          CODES.VALIDATION_FAILED,
+          "IN values must use the same value type as the left operand.",
+          422
+        );
+      }
+    }
+    return;
+  }
+
+  if (condition.operator === "==" || condition.operator === "!=") {
+    const rightType = condition.right ? operandType(condition.right) : "null";
+    if (rightType !== leftType && rightType !== "null" && leftType !== "null") {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        `${condition.operator} operands must use compatible value types.`,
+        422
+      );
+    }
+  }
+}
+
+function validateDeficitRuleSemantics(rules: readonly StructuredDecisionRule<DeficitRuleResult>[]): void {
+  for (const rule of rules) {
+    for (const condition of rule.when.conditions) validateConditionSemantics(condition);
+  }
+}
+
 export function parseDeficitRuleSet(input: unknown): DeficitRuleSet {
   const parsed = parseStructuredRuleSet(input, deficitRuleResultSchema);
   const seen = new Set<string>();
@@ -85,6 +201,7 @@ export function parseDeficitRuleSet(input: unknown): DeficitRuleSet {
     }
     seen.add(rule.id);
   }
+  validateDeficitRuleSemantics(parsed);
   return parsed;
 }
 
