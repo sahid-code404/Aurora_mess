@@ -4,6 +4,7 @@ import {
   calculateNormalMealState,
   computeInstanceStatus,
   evaluateResidentMeal,
+  scopedRowAffectsMeal,
   type MealEvalContext,
 } from "../../src/lib/domain/meal-engine";
 
@@ -78,5 +79,27 @@ describe("meal-state regression invariants", () => {
     expect(computeInstanceStatus(new Date("2026-09-05T09:59:59.000Z"), cutoff, end)).toBe("OPEN");
     expect(computeInstanceStatus(new Date("2026-09-05T10:00:00.000Z"), cutoff, end)).toBe("LOCKED");
     expect(computeInstanceStatus(new Date("2026-09-05T12:00:00.000Z"), cutoff, end)).toBe("COMPLETED");
+  });
+});
+
+describe("meal scope matching", () => {
+  test("legacy/missing scope and ALL_MEALS remain backwards compatible", () => {
+    expect(scopedRowAffectsMeal({}, "breakfast")).toBe(true);
+    expect(scopedRowAffectsMeal({ mealScope: "ALL_MEALS", selectedMeals: [] }, "breakfast")).toBe(true);
+  });
+
+  test("SELECTED_MEALS affects only explicitly selected definitions", () => {
+    const row = {
+      mealScope: "SELECTED_MEALS",
+      selectedMeals: [{ mealDefinitionId: "breakfast" }, { mealDefinitionId: "dinner" }],
+    };
+
+    expect(scopedRowAffectsMeal(row, "breakfast")).toBe(true);
+    expect(scopedRowAffectsMeal(row, "dinner")).toBe(true);
+    expect(scopedRowAffectsMeal(row, "lunch")).toBe(false);
+  });
+
+  test("empty SELECTED_MEALS fails closed rather than broadening to every meal", () => {
+    expect(scopedRowAffectsMeal({ mealScope: "SELECTED_MEALS", selectedMeals: [] }, "lunch")).toBe(false);
   });
 });
