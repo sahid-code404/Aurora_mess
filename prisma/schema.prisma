@@ -1,6 +1,7 @@
 // =====================================================================
 // AURORA RESIDENCY MESS — Resident Meal, Finance & Operations Platform
-// Prisma schema (SQLite). Status enums are Strings (SQLite has no enums);
+// Prisma schema (PostgreSQL). Domain states remain Strings so application-level
+// state-machine validation stays identical across database providers;
 // state transitions are validated in domain services (src/lib/domain).
 // MONEY RULE: every financial value is an Int in minor units (paise).
 // No mutable "balance" column — funds derive from the ledger.
@@ -11,7 +12,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -516,44 +517,44 @@ model LedgerEntry {
 model VariableDefinition {
   id              String    @id @default(cuid())
   institutionId   String
-  key             String    // stable machine key: e.g. "kitchen_staff_salary", "meal_charge", "total_resident_meals"
+  key             String // stable machine key: e.g. "kitchen_staff_salary", "meal_charge", "total_resident_meals"
   displayName     String
   description     String
-  category        String    // SYSTEM | CUSTOM | DERIVED
-  valueType       String    // MONEY | NUMBER | PERCENTAGE | COUNT | DURATION | BOOLEAN
-  unit            String    // INR | PERCENT | MEALS | RESIDENTS | DAYS | HOURS | NONE
+  category        String // SYSTEM | CUSTOM | DERIVED
+  valueType       String // MONEY | NUMBER | PERCENTAGE | COUNT | DURATION | BOOLEAN
+  unit            String // INR | PERCENT | MEALS | RESIDENTS | DAYS | HOURS | NONE
   scope           String    @default("BILLING_PERIOD") // GLOBAL | BILLING_PERIOD | RESIDENT | MEAL | DATE
   frequency       String?   @default("MONTHLY") // CONSTANT | MONTHLY | ONE_TIME
-  providerKey     String?   // For SYSTEM variables, e.g. "RESIDENT_MEAL_ENGINE", "EXPENSE_ENGINE"
+  providerKey     String? // For SYSTEM variables, e.g. "RESIDENT_MEAL_ENGINE", "EXPENSE_ENGINE"
   isPinned        Boolean   @default(false)
   archivedAt      DateTime?
   createdByUserId String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  customValues    CustomVariableValue[]
+  customValues CustomVariableValue[]
 
   @@unique([institutionId, key])
 }
 
 model CustomVariableValue {
-  id                   String              @id @default(cuid())
+  id                   String    @id @default(cuid())
   variableDefinitionId String
-  valueMinor           Int?                // For MONEY in paise
-  valueNumber          Float?              // For NUMBER, PERCENTAGE, COUNT, DURATION
-  valueBoolean         Boolean?            // For BOOLEAN
-  valueText            String?             // Textual/memo representation
+  valueMinor           Int? // For MONEY in paise
+  valueNumber          Float? // For NUMBER, PERCENTAGE, COUNT, DURATION
+  valueBoolean         Boolean? // For BOOLEAN
+  valueText            String? // Textual/memo representation
   effectiveFrom        DateTime
   effectiveUntil       DateTime?
-  billingPeriodKey     String?             // "YYYY-MM" e.g. "2026-09"
+  billingPeriodKey     String? // "YYYY-MM" e.g. "2026-09"
   billingPeriodId      String?
   residentId           String?
   supersedesId         String?
   createdByUserId      String?
-  createdAt            DateTime            @default(now())
-  updatedAt            DateTime            @updatedAt
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  definition           VariableDefinition  @relation(fields: [variableDefinitionId], references: [id], onDelete: Cascade)
+  definition VariableDefinition @relation(fields: [variableDefinitionId], references: [id], onDelete: Cascade)
 }
 
 // ---------------------------------------------------------------------
@@ -561,57 +562,57 @@ model CustomVariableValue {
 // ---------------------------------------------------------------------
 
 model FormulaDefinition {
-  id                 String    @id @default(cuid())
-  institutionId      String
-  name               String    @default("Meal Charge")
-  description        String?
-  outputVariableKey  String    @default("meal_charge")
-  scope              String    @default("BILLING_PERIOD") // GLOBAL | BILLING_PERIOD | RESIDENT | MEAL
-  status             String    @default("ACTIVE") // ACTIVE | ARCHIVED | DRAFT
-  activeVersionId    String?
-  archivedAt         DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @default(now()) @updatedAt
+  id                String    @id @default(cuid())
+  institutionId     String
+  name              String    @default("Meal Charge")
+  description       String?
+  outputVariableKey String    @default("meal_charge")
+  scope             String    @default("BILLING_PERIOD") // GLOBAL | BILLING_PERIOD | RESIDENT | MEAL
+  status            String    @default("ACTIVE") // ACTIVE | ARCHIVED | DRAFT
+  activeVersionId   String?
+  archivedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
 
-  versions           FormulaVersion[]
+  versions FormulaVersion[]
 
   @@unique([institutionId, outputVariableKey])
 }
 
 model FormulaVersion {
-  id                   String             @id @default(cuid())
+  id                   String    @id @default(cuid())
   formulaDefinitionId  String
   version              Int
-  inputMode            String             @default("FORMULA") // FORMULA | NATURAL_LANGUAGE
-  expressionSource     String             // canonical formula text
-  naturalSource        String?            // original natural language, if any
-  normalizedExpression String?            // auto-formatted expression
-  compiledAstJson      String             // validated AST (JSON) — the only thing ever evaluated
-  humanPreview         String             // "(Total Market Expense − Guest Income) ÷ Total Resident Meals"
-  outputType           String             @default("MONEY_PER_MEAL")
+  inputMode            String    @default("FORMULA") // FORMULA | NATURAL_LANGUAGE
+  expressionSource     String // canonical formula text
+  naturalSource        String? // original natural language, if any
+  normalizedExpression String? // auto-formatted expression
+  compiledAstJson      String // validated AST (JSON) — the only thing ever evaluated
+  humanPreview         String // "(Total Market Expense − Guest Income) ÷ Total Resident Meals"
+  outputType           String    @default("MONEY_PER_MEAL")
   checksum             String
   createdByUserId      String?
   reason               String?
   effectiveFrom        DateTime?
   effectiveUntil       DateTime?
-  status               String             @default("ACTIVE") // ACTIVE | SCHEDULED | DRAFT | HISTORICAL
-  active               Boolean            @default(false)
-  createdAt            DateTime           @default(now())
+  status               String    @default("ACTIVE") // ACTIVE | SCHEDULED | DRAFT | HISTORICAL
+  active               Boolean   @default(false)
+  createdAt            DateTime  @default(now())
 
-  definition           FormulaDefinition  @relation(fields: [formulaDefinitionId], references: [id], onDelete: Cascade)
-  dependencies         FormulaDependency[]
+  definition   FormulaDefinition   @relation(fields: [formulaDefinitionId], references: [id], onDelete: Cascade)
+  dependencies FormulaDependency[]
 
   @@unique([formulaDefinitionId, version])
 }
 
 model FormulaDependency {
-  id               String         @id @default(cuid())
+  id               String   @id @default(cuid())
   formulaVersionId String
   variableKey      String
-  dependencyType   String         @default("DIRECT") // DIRECT | DERIVED
-  createdAt        DateTime       @default(now())
+  dependencyType   String   @default("DIRECT") // DIRECT | DERIVED
+  createdAt        DateTime @default(now())
 
-  formulaVersion   FormulaVersion @relation(fields: [formulaVersionId], references: [id], onDelete: Cascade)
+  formulaVersion FormulaVersion @relation(fields: [formulaVersionId], references: [id], onDelete: Cascade)
 
   @@unique([formulaVersionId, variableKey])
 }
