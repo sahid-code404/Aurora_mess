@@ -15,7 +15,7 @@ import Money from "@/components/glass/Money";
 import { apiJson, useEnvelopeQuery, useInvalidateResident, RESIDENT_KEYS } from "./api";
 import { addDaysToKey, formatMinor, formatTimeInTz, friendlyError } from "./format";
 import { useNow } from "./use-now";
-import type { GuestMealDto, LeavePreview, MealInstanceDto, MealsMeta } from "./types";
+import type { GuestMealDto, LeavePreview, MealInstanceDto, MealsMeta, MealOptionDto } from "./types";
 import { ApiClientError } from "@/lib/api";
 import { broadcastNotification } from "@/lib/broadcast";
 import { cn } from "@/lib/utils";
@@ -247,26 +247,34 @@ export function LeaveDialog({
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mealScope, setMealScope] = useState<"ALL_MEALS" | "SELECTED_MEALS">("ALL_MEALS");
+  const [selectedMealIds, setSelectedMealIds] = useState<string[]>([]);
   const previewTimer = useRef<number | null>(null);
+
+  const mealOptionsQuery = useEnvelopeQuery<MealOptionDto[]>(open ? "/api/v1/meal-options" : null);
+  const mealOptions = mealOptionsQuery.data?.data ?? [];
 
   useEffect(() => {
     if (open) {
       setStartDate(todayKey);
       setEndDate(todayKey);
       setReason("");
+      setMealScope("ALL_MEALS");
+      setSelectedMealIds([]);
       setError(null);
     }
   }, [open, todayKey]);
 
   const reasonValid = reason.trim().length >= 3;
   const datesValid = startDate <= endDate;
+  const selectionValid = mealScope === "ALL_MEALS" || selectedMealIds.length > 0;
 
   // Server-side impact preview (POST ?preview — never saves). Debounced.
   const [preview, setPreview] = useState<LeavePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
-    if (!open || !datesValid || !reasonValid) {
+    if (!open || !datesValid || !reasonValid || !selectionValid) {
       setPreview(null);
       return;
     }
@@ -278,6 +286,8 @@ export function LeaveDialog({
           startDate,
           endDate,
           reason: reason.trim(),
+          mealScope,
+          mealDefinitionIds: mealScope === "SELECTED_MEALS" ? selectedMealIds : [],
           preview: true,
         });
         setPreview(res.preview);
@@ -290,7 +300,7 @@ export function LeaveDialog({
     return () => {
       if (previewTimer.current) window.clearTimeout(previewTimer.current);
     };
-  }, [open, startDate, endDate, reason, datesValid, reasonValid]);
+  }, [open, startDate, endDate, reason, datesValid, reasonValid, selectionValid, mealScope, selectedMealIds]);
 
   const dayCount = useMemo(() => {
     if (!datesValid) return 0;
@@ -305,6 +315,8 @@ export function LeaveDialog({
         startDate,
         endDate,
         reason: reason.trim(),
+        mealScope,
+        mealDefinitionIds: mealScope === "SELECTED_MEALS" ? selectedMealIds : [],
       });
       invalidate([RESIDENT_KEYS.leaveRequests, RESIDENT_KEYS.meals, RESIDENT_KEYS.dashboard, RESIDENT_KEYS.notifications]);
       broadcastNotification("leave_requested");
@@ -333,7 +345,7 @@ export function LeaveDialog({
         <SheetFooterActions onCancel={() => onOpenChange(false)}>
           <GlassButton
             loading={submitting}
-            disabled={!datesValid || !reasonValid || submitting}
+            disabled={!datesValid || !reasonValid || !selectionValid || submitting}
             onClick={() => void submit()}
           >
             Submit request
@@ -367,6 +379,70 @@ export function LeaveDialog({
           </GlassField>
         </div>
 
+        <GlassField label="Meals during leave" hint="Choose whether leave applies to every regular meal or only specific meals.">
+          <div className="space-y-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => { setMealScope("ALL_MEALS"); setSelectedMealIds([]); }}
+                className={cn(
+                  "glass-inset min-h-11 rounded-md px-3 text-sm font-medium transition-all",
+                  mealScope === "ALL_MEALS" ? "ring-2 ring-ring text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                All meals
+              </button>
+              <button
+                type="button"
+                onClick={() => setMealScope("SELECTED_MEALS")}
+                className={cn(
+                  "glass-inset min-h-11 rounded-md px-3 text-sm font-medium transition-all",
+                  mealScope === "SELECTED_MEALS" ? "ring-2 ring-ring text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Selected meals
+              </button>
+            </div>
+
+            {mealScope === "SELECTED_MEALS" && (
+              <div className="glass-inset rounded-md p-2">
+                {mealOptionsQuery.isPending ? (
+                  <InlinePreviewSkeleton />
+                ) : mealOptions.length === 0 ? (
+                  <p className="px-2 py-1 text-xs text-muted-foreground">No selectable meals are configured.</p>
+                ) : (
+                  <div className="grid gap-1 sm:grid-cols-2">
+                    {mealOptions.map((meal) => {
+                      const checked = selectedMealIds.includes(meal.id);
+                      return (
+                        <button
+                          key={meal.id}
+                          type="button"
+                          aria-pressed={checked}
+                          onClick={() =>
+                            setSelectedMealIds((current) =>
+                              current.includes(meal.id) ? current.filter((id) => id !== meal.id) : [...current, meal.id]
+                            )
+                          }
+                          className={cn(
+                            "flex min-h-10 items-center justify-between rounded-md px-3 text-left text-sm transition-colors",
+                            checked ? "bg-primary/12 font-medium text-primary" : "hover:bg-foreground/5"
+                          )}
+                        >
+                          <span className="truncate">{meal.name}</span>
+                          <span className={cn("ml-2 text-xs", checked ? "text-primary" : "text-muted-foreground")}>
+                            {checked ? "Selected" : "Add"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </GlassField>
+
         <GlassField
           label="Reason"
           error={reason.trim().length > 0 && !reasonValid ? "A short reason is required." : undefined}
@@ -386,9 +462,9 @@ export function LeaveDialog({
             {dayCount} day{dayCount !== 1 ? "s" : ""} of leave
           </p>
           <div className="mt-1">
-            {!datesValid || !reasonValid ? (
+            {!datesValid || !reasonValid || !selectionValid ? (
               <p className="py-1.5 text-xs text-muted-foreground">
-                Write a short reason to see how many meals will be affected.
+                {!selectionValid ? "Select at least one meal to preview this leave." : "Write a short reason to see how many meals will be affected."}
               </p>
             ) : previewLoading ? (
               <InlinePreviewSkeleton />
