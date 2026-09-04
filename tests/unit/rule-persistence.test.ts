@@ -23,6 +23,24 @@ describe("persisted deficit rule validation", () => {
     expect(() => parseDeficitRuleSet(rules)).toThrow();
   });
 
+  test("rejects unknown deficit-policy fact names even on otherwise valid conditions", () => {
+    const rules = cloneDefault();
+    rules[0].when.conditions[0].left.key = "arbitrary_database_value";
+
+    expect(() => parseDeficitRuleSet(rules)).toThrow("Unknown deficit-policy fact");
+  });
+
+  test("rejects numeric operators applied to boolean facts", () => {
+    const rules = cloneDefault();
+    rules[0].when.conditions[0] = {
+      left: { source: "FACT", key: "has_active_exemption" },
+      operator: ">",
+      right: { source: "LITERAL", value: 0 },
+    };
+
+    expect(() => parseDeficitRuleSet(rules)).toThrow("requires numeric operands");
+  });
+
   test("rejects malformed operator payloads", () => {
     const rules = cloneDefault();
     rules[2].when.conditions[0] = {
