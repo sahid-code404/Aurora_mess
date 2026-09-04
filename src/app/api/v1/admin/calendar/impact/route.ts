@@ -1,8 +1,7 @@
 /**
- * POST /api/v1/admin/calendar/impact — impact preview (spec §147):
- * how many meal services WOULD be disabled by a disableMeals event over the
- * window. Counted from ACTIVE definitions × matching dates — no instances are
- * created and nothing is saved.
+ * POST /api/v1/admin/calendar/impact — impact preview (spec §44, §147):
+ * count meal services that WOULD be disabled over the window, honoring
+ * ALL_MEALS vs SELECTED_MEALS without creating instances or saving state.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -16,11 +15,18 @@ import {
   parseWeekdaysCsv,
   requireInstitutionContext,
 } from "@/lib/domain/meal-engine";
+import {
+  mealDefinitionIdsSchema,
+  mealScopeSchema,
+  validateMealScopeSelection,
+} from "@/lib/domain/meal-scope";
 
 const bodySchema = z.object({
   startDate: dateKeySchema,
   endDate: dateKeySchema,
   disableMeals: z.boolean().default(true),
+  mealScope: mealScopeSchema.default("ALL_MEALS"),
+  mealDefinitionIds: mealDefinitionIdsSchema,
 });
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
@@ -37,11 +43,38 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   }
 
   if (!body.disableMeals) {
-    return { data: { affectedMealServices: 0, note: "Meals are not disabled by this event." } };
+    if (body.mealScope !== "ALL_MEALS" || (body.mealDefinitionIds?.length ?? 0) > 0) {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        "Meal scope can only be selected when this event disables meals.",
+        422
+      );
+    }
+    return {
+      data: {
+        affectedMealServices: 0,
+        perDefinition: [],
+        mealScope: "ALL_MEALS",
+        selectedMeals: [],
+        note: "Meals are not disabled by this event.",
+      },
+    };
   }
 
+  const selection = await validateMealScopeSelection({
+    institutionId: ctx.institutionId,
+    mealScope: body.mealScope,
+    mealDefinitionIds: body.mealDefinitionIds,
+  });
+
   const defs = await db.mealDefinition.findMany({
-    where: { institutionId: ctx.institutionId, archivedAt: null },
+    where: {
+      institutionId: ctx.institutionId,
+      archivedAt: null,
+      active: true,
+      mealType: { not: "GUEST_ONLY" },
+      ...(body.mealScope === "SELECTED_MEALS" ? { id: { in: selection.ids } } : {}),
+    },
     select: {
       id: true,
       name: true,
@@ -70,7 +103,12 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   }
 
   return {
-    data: { affectedMealServices, perDefinition },
+    data: {
+      affectedMealServices,
+      perDefinition,
+      mealScope: body.mealScope,
+      selectedMeals: selection.meals,
+    },
     meta: {
       startDate: body.startDate,
       endDate: body.endDate,
@@ -82,6 +120,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
 
 function getWeekday(dateKey: string): number {
   const [y, m, d] = dateKey.split("-").map(Number);
-  const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun
+  const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
   return jsDay === 0 ? 7 : jsDay;
 }
