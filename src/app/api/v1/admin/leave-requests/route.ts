@@ -30,18 +30,17 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   const residentIds = items.map((l) => l.residentId);
   const leaveIds = items.map((l) => l.id);
-  const [residents, selections] = await Promise.all([
-    residentIds.length
-      ? db.user.findMany({ where: { id: { in: residentIds } }, include: { profile: true } })
-      : Promise.resolve([]),
-    leaveIds.length
-      ? db.leaveRequestMeal.findMany({
-          where: { leaveRequestId: { in: leaveIds } },
-          include: { mealDefinition: { select: { id: true, name: true } } },
-        })
-      : Promise.resolve([]),
-  ]);
-  const residentById = new Map(residents.map((r) => [r.id, r]));
+  const residents = residentIds.length
+    ? await db.user.findMany({ where: { id: { in: residentIds } }, include: { profile: true } })
+    : [];
+  const selections = leaveIds.length
+    ? await db.leaveRequestMeal.findMany({
+        where: { leaveRequestId: { in: leaveIds } },
+        include: { mealDefinition: { select: { id: true, name: true } } },
+      })
+    : [];
+
+  const residentById = new Map(residents.map((resident) => [resident.id, resident] as const));
   const selectionsByLeave = new Map<string, typeof selections>();
   for (const selection of selections) {
     const current = selectionsByLeave.get(selection.leaveRequestId) ?? [];
