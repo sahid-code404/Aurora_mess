@@ -18,7 +18,6 @@
  *  - Journals: per bill, Dr RESIDENT_FUNDS (subtotal) / Cr MEAL_CHARGE_INCOME
  *    (resident meal part) + Cr GUEST_INCOME (guest part), refType BILL.
  */
-import { createHash } from "node:crypto";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { getInstitution } from "@/lib/institution";
@@ -26,11 +25,12 @@ import { appendAudit } from "@/lib/audit";
 import { appendOutbox } from "@/lib/outbox";
 import { formatMinor, multiplyRoundHalfUp } from "@/lib/money";
 import { addDaysToKey, localDateMidnightUtc, monthBoundsInTz, zonedTimeToUtc } from "@/lib/time";
-import { postJournal, type JournalLine } from "./ledger";
+import { postJournal, reconcileInstitution, type JournalLine } from "./ledger";
 import { FormulaAst } from "./formula/ast";
 import { evaluateFormula } from "./formula/evaluator";
 import { gatherPeriodVariables, periodBounds } from "./formula/period-variables";
 import { resolveFormulaVersionForPeriod } from "./formula/versions";
+import { billingSnapshotChecksum } from "./billing-integrity";
 
 const UNSETTLED_BILL_STATUSES = ["GENERATED", "PARTIALLY_PAID", "OVERDUE"];
 const GUEST_CONFIRMED = ["CONFIRMED", "CONSUMED"];
@@ -265,34 +265,14 @@ export async function computeReadiness(periodId: string, client: any = db): Prom
     detail: mealChargeProblem ?? undefined,
   });
 
-  // 5. Ledger reconciled with approved records (mirrors reconcileInstitution).
-  const [paymentsNoJournal, expensesNoJournal, journals] = await Promise.all([
-    client.payment.count({
-      where: { institutionId: period.institutionId, status: "APPROVED", approvedJournalId: null },
-    }),
-    client.expense.count({
-      where: { institutionId: period.institutionId, status: "APPROVED", journalId: null },
-    }),
-    client.ledgerJournal.findMany({
-      where: { institutionId: period.institutionId, status: "POSTED" },
-      include: { entries: { select: { debitMinor: true, creditMinor: true } } },
-    }),
-  ]);
-  const unbalancedJournals = journals.filter(
-    (j: any) =>
-      (j.entries as any[]).reduce((s, e) => s + e.debitMinor, 0) !==
-      (j.entries as any[]).reduce((s, e) => s + e.creditMinor, 0)
-  ).length;
-  const reconcileProblems = [
-    paymentsNoJournal > 0 ? `${paymentsNoJournal} approved payment(s) without a journal` : null,
-    expensesNoJournal > 0 ? `${expensesNoJournal} approved expense(s) without a journal` : null,
-    unbalancedJournals > 0 ? `${unbalancedJournals} unbalanced journal(s)` : null,
-  ].filter(Boolean);
+  // 5. One authoritative reconciliation kernel shared with the ledger view.
+  //    This includes refunds, reversal links, bill journals, and journal shape.
+  const reconciliation = await reconcileInstitution(period.institutionId, client);
   checks.push({
     key: "ledger_reconciled",
-    label: "Ledger reconciled with approved records",
-    pass: reconcileProblems.length === 0,
-    detail: reconcileProblems.length > 0 ? reconcileProblems.join("; ") : undefined,
+    label: "Ledger reconciled with financial records",
+    pass: reconciliation.balanced,
+    detail: reconciliation.problems.length > 0 ? reconciliation.problems.join("; ") : undefined,
   });
 
   // 6. No duplicate resident meals (same resident on the same instance twice).
@@ -703,7 +683,7 @@ export async function generateBilling(
       },
     };
     const payloadJson = JSON.stringify(payload);
-    const checksum = createHash("sha256").update(JSON.stringify(JSON.parse(payloadJson))).digest("hex");
+    const checksum = billingSnapshotChecksum(payloadJson);
 
     const snapshot = await tx.billingSnapshot.create({
       data: {
@@ -726,8 +706,11 @@ export async function generateBilling(
     const dueDate = localDateMidnightUtc(addDaysToKey(bounds.endKey, inst.settings.billingDueDays));
     const formulaDetail = {
       period: { year: period.year, month: period.month, startKey: bounds.startKey, endKey: bounds.endKey },
+      snapshot: { id: snapshot.id, checksum },
       formula: {
+        versionId: formulaVersion.id,
         version: formulaVersion.version,
+        checksum: formulaVersion.checksum,
         expressionSource: formulaVersion.expressionSource,
         humanPreview: formulaVersion.humanPreview,
       },
@@ -1010,100 +993,26 @@ export function derivePaymentStatus(bills: { status: string; dueDate: Date }[]):
 }
 
 // ---------------------------------------------------------------------------
-// ROLLBACK / REMOVE PERIOD BILLS
+// LEGACY DESTRUCTIVE RESET — intentionally disabled
 // ---------------------------------------------------------------------------
 
 /**
- * Completely removes generated bills for a period and resets it to OPEN.
- * Used to remove prematurely generated current-month bills or restore period state.
+ * Kept only as a compatibility symbol for any older internal caller. Posted
+ * billing journals and generated historical artifacts are immutable: correction
+ * must use reopen + bill adjustments / reversal journals, never physical delete.
  */
 export async function removePeriodBills(
   periodId: string,
   actorUserId = "SYSTEM"
 ): Promise<{ removedCount: number; periodId: string }> {
-  return db.$transaction(async (tx: any) => {
-    const period = await tx.billingPeriod.findUnique({ where: { id: periodId } });
-    if (!period) throw new ApiError(CODES.NOT_FOUND, "Billing period not found.", 404);
-
-    const bills = await tx.bill.findMany({
-      where: { billingPeriodId: periodId },
-      select: { id: true },
-    });
-    const billIds = bills.map((b: any) => b.id);
-
-    let removedJournals = 0;
-    if (billIds.length > 0) {
-      // Find journals linked to these bills
-      const journals = await tx.ledgerJournal.findMany({
-        where: { institutionId: period.institutionId, refType: "BILL", refId: { in: billIds } },
-        select: { id: true },
-      });
-      const journalIds = journals.map((j: any) => j.id);
-      if (journalIds.length > 0) {
-        await tx.ledgerEntry.deleteMany({ where: { journalId: { in: journalIds } } });
-        const jRes = await tx.ledgerJournal.deleteMany({ where: { id: { in: journalIds } } });
-        removedJournals = jRes.count;
-      }
-
-      // Delete bill adjustments & lines
-      await tx.billAdjustment.deleteMany({ where: { billId: { in: billIds } } });
-      await tx.billLine.deleteMany({ where: { billId: { in: billIds } } });
-      await tx.bill.deleteMany({ where: { id: { in: billIds } } });
-
-      // Clean up outbox items for these bills
-      const outboxEvents = await tx.outboxEvent.findMany({
-        where: { institutionId: period.institutionId, type: "NOTIFICATION" },
-        select: { id: true, payloadJson: true },
-      });
-      const outboxIdsToDelete = outboxEvents
-        .filter((e: any) => billIds.some((bid: string) => e.payloadJson.includes(bid)))
-        .map((e: any) => e.id);
-      if (outboxIdsToDelete.length > 0) {
-        await tx.outboxEvent.deleteMany({ where: { id: { in: outboxIdsToDelete } } });
-      }
-    }
-
-    // Delete snapshots for this period
-    await tx.billingSnapshot.deleteMany({ where: { billingPeriodId: periodId } });
-
-    // Reset period to OPEN
-    await tx.billingPeriod.update({
-      where: { id: periodId },
-      data: {
-        status: "OPEN",
-        generationState: null,
-        generationError: null,
-        billedAt: null,
-        closedAt: null,
-        mealChargeMinorSnapshot: null,
-        guestPriceMinorSnapshot: null,
-        formulaVersionId: null,
-      },
-    });
-
-    await appendAudit(
-      {
-        institutionId: period.institutionId,
-        actorUserId,
-        actorRole: "ADMIN",
-        action: "BILLING_RESET",
-        entityType: "BILLING_PERIOD",
-        entityId: periodId,
-        requestId: `reset_${Date.now()}`,
-        beforeSummary: period.status,
-        afterSummary: "OPEN",
-        metadata: {
-          removedBillsCount: billIds.length,
-          removedJournalsCount: removedJournals,
-          year: period.year,
-          month: period.month,
-        },
-      },
-      tx
-    );
-
-    return { removedCount: billIds.length, periodId };
-  });
+  void actorUserId;
+  const period = await db.billingPeriod.findUnique({ where: { id: periodId } });
+  if (!period) throw new ApiError(CODES.NOT_FOUND, "Billing period not found.", 404);
+  throw new ApiError(
+    CODES.BILLING_PERIOD_CLOSED,
+    "Destructive billing reset is disabled. Generated bills, snapshots, and posted journals are immutable; use reopen plus audited bill adjustments or reversal journals for corrections.",
+    409
+  );
 }
 
 // ---------------------------------------------------------------------------
