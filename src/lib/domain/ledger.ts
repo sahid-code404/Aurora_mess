@@ -275,9 +275,13 @@ export async function reconcileInstitution(
       continue;
     }
     if (journal.refId !== refund.id) {
-      // Pre-Phase-10 rows used paymentId (or null) as REFUND refId. Preserve
-      // historical validity but surface the weaker provenance explicitly.
-      refundLegacyReferenceWarnings += 1;
+      // Pre-Phase-10 rows used paymentId (or null) as REFUND refId. Only those
+      // exact legacy shapes are warnings; an unrelated reference is corruption.
+      if (journal.refId == null || (refund.paymentId != null && journal.refId === refund.paymentId)) {
+        refundLegacyReferenceWarnings += 1;
+      } else {
+        refundJournalLinkMismatches += 1;
+      }
     }
   }
 
