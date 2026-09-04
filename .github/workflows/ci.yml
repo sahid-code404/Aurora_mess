@@ -48,6 +48,18 @@ jobs:
       - name: Unit regression tests
         run: bun test tests/unit
 
+      - name: Prepare disposable integration database
+        env:
+          DATABASE_URL: file:./ci-integration.db
+        run: |
+          rm -f prisma/ci-integration.db
+          bunx prisma db push --skip-generate
+
+      - name: Financial integration tests
+        env:
+          DATABASE_URL: file:./ci-integration.db
+        run: bun test tests/integration
+
       - name: Production build
         env:
           NODE_ENV: production
