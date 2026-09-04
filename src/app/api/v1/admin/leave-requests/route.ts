@@ -1,12 +1,12 @@
 /**
  * GET /api/v1/admin/leave-requests?status=PENDING — review queue with resident
- * names + per-request preview counts (unlocked = cutoffAt > now, locked =
- * cutoffAt <= now) from existing instances. Newest first, seek pagination.
+ * names, selected meal scope, and scope-aware preview counts.
  */
 import { z } from "zod";
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
 import { requireInstitutionContext, keyOfUtcDate, dayCountBetween } from "@/lib/domain/meal-engine";
+import { mealInstanceScopeWhere, serializeSelectedMeals } from "@/lib/domain/meal-scope";
 import { listQuery, seekList } from "@/lib/domain/list";
 
 const statusEnum = z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]);
@@ -29,10 +29,25 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   });
 
   const residentIds = items.map((l) => l.residentId);
-  const residents = residentIds.length
-    ? await db.user.findMany({ where: { id: { in: residentIds } }, include: { profile: true } })
-    : [];
+  const leaveIds = items.map((l) => l.id);
+  const [residents, selections] = await Promise.all([
+    residentIds.length
+      ? db.user.findMany({ where: { id: { in: residentIds } }, include: { profile: true } })
+      : Promise.resolve([]),
+    leaveIds.length
+      ? db.leaveRequestMeal.findMany({
+          where: { leaveRequestId: { in: leaveIds } },
+          include: { mealDefinition: { select: { id: true, name: true } } },
+        })
+      : Promise.resolve([]),
+  ]);
   const residentById = new Map(residents.map((r) => [r.id, r]));
+  const selectionsByLeave = new Map<string, typeof selections>();
+  for (const selection of selections) {
+    const current = selectionsByLeave.get(selection.leaveRequestId) ?? [];
+    current.push(selection);
+    selectionsByLeave.set(selection.leaveRequestId, current);
+  }
 
   const now = new Date();
   const data = await Promise.all(
@@ -40,12 +55,27 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       const resident = residentById.get(leave.residentId);
       const startKey = keyOfUtcDate(leave.startDate);
       const endKey = keyOfUtcDate(leave.endDate);
+      const selectedRows = selectionsByLeave.get(leave.id) ?? [];
+      const scopeWhere = mealInstanceScopeWhere(
+        leave.mealScope,
+        selectedRows.map((selection) => selection.mealDefinitionId)
+      );
       const [futureUnlockedMeals, alreadyLockedMeals] = await Promise.all([
         db.mealInstance.count({
-          where: { institutionId: ctx.institutionId, serviceDate: { gte: leave.startDate, lte: leave.endDate }, cutoffAt: { gt: now } },
+          where: {
+            institutionId: ctx.institutionId,
+            serviceDate: { gte: leave.startDate, lte: leave.endDate },
+            ...scopeWhere,
+            cutoffAt: { gt: now },
+          },
         }),
         db.mealInstance.count({
-          where: { institutionId: ctx.institutionId, serviceDate: { gte: leave.startDate, lte: leave.endDate }, cutoffAt: { lte: now } },
+          where: {
+            institutionId: ctx.institutionId,
+            serviceDate: { gte: leave.startDate, lte: leave.endDate },
+            ...scopeWhere,
+            cutoffAt: { lte: now },
+          },
         }),
       ]);
       return {
@@ -58,6 +88,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         dayCount: dayCountBetween(startKey, endKey),
         reason: leave.reason,
         status: leave.status,
+        ...serializeSelectedMeals(leave.mealScope, selectedRows),
         reviewReason: leave.reviewReason,
         reviewedAt: leave.reviewedAt ? leave.reviewedAt.toISOString() : null,
         createdAt: leave.createdAt.toISOString(),
