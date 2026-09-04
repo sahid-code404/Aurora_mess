@@ -1,0 +1,75 @@
+name: Bootstrap PostgreSQL Migration
+
+on:
+  push:
+    branches: [infra/postgresql-migration]
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    if: ${{ !contains(github.event.head_commit.message, '[postgres-bootstrap]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout migration branch
+        uses: actions/checkout@v4
+        with:
+          ref: infra/postgresql-migration
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.4
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Switch Prisma datasource to PostgreSQL
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('prisma/schema.prisma')
+          text = path.read_text()
+          text = text.replace(
+              '// Prisma schema (SQLite). Status enums are Strings (SQLite has no enums);\n',
+              '// Prisma schema (PostgreSQL). Domain states remain Strings so application-level\n// state-machine validation stays identical across database providers;\n'
+          )
+          text = text.replace('provider = "sqlite"', 'provider = "postgresql"', 1)
+          path.write_text(text)
+          PY
+          rm -f prisma/dev.db
+
+      - name: Validate and format PostgreSQL schema
+        env:
+          DATABASE_URL: postgresql://boardops:boardops@127.0.0.1:5432/boardops?schema=public
+        run: |
+          bunx prisma format
+          bunx prisma validate
+
+      - name: Generate initial PostgreSQL migration from Prisma schema
+        env:
+          DATABASE_URL: postgresql://boardops:boardops@127.0.0.1:5432/boardops?schema=public
+        run: |
+          mkdir -p prisma/migrations/20260905_000000_init_postgresql
+          bunx prisma migrate diff \
+            --from-empty \
+            --to-schema-datamodel prisma/schema.prisma \
+            --script > prisma/migrations/20260905_000000_init_postgresql/migration.sql
+          printf 'provider = "postgresql"\n' > prisma/migrations/migration_lock.toml
+          test -s prisma/migrations/20260905_000000_init_postgresql/migration.sql
+
+      - name: Commit generated schema and migration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prisma/schema.prisma prisma/migrations prisma/dev.db || true
+          if git diff --cached --quiet; then
+            echo "No PostgreSQL bootstrap changes to commit."
+            exit 0
+          fi
+          git commit -m "infra: establish PostgreSQL Prisma baseline [postgres-bootstrap]"
+          git push origin HEAD:infra/postgresql-migration
