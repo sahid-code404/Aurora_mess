@@ -384,6 +384,8 @@ export interface CalendarEventRow {
   endDate: string;
   type: "HOLIDAY" | "FESTIVAL" | "MAINTENANCE" | "CUSTOM" | string;
   disableMeals: boolean;
+  mealScope: "ALL_MEALS" | "SELECTED_MEALS";
+  selectedMeals: { id: string; name: string }[];
   createdAt: string;
 }
 

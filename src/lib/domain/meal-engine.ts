@@ -57,6 +57,17 @@ export function dayCoveredBy(day: Date, row: { startDate: Date; endDate: Date })
   return utcDayFloor(row.startDate) <= day && utcDayFloor(row.endDate) >= day;
 }
 
+export type MealScopedRow = {
+  mealScope?: string | null;
+  selectedMeals?: { mealDefinitionId: string }[];
+};
+
+/** ALL_MEALS is the backwards-compatible default; SELECTED_MEALS is explicit. */
+export function scopedRowAffectsMeal(row: MealScopedRow, mealDefinitionId: string): boolean {
+  if (row.mealScope !== "SELECTED_MEALS") return true;
+  return (row.selectedMeals ?? []).some((selected) => selected.mealDefinitionId === mealDefinitionId);
+}
+
 /** Prisma P2002 (unique violation) detector — used by create-skip loops. */
 export function isUniqueViolation(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: string }).code === "P2002";
@@ -208,7 +219,7 @@ export async function isRestrictionActive(
 export type EvalInputs = {
   resident: { id: string; membershipEffectiveFrom: Date | null; membershipEffectiveUntil: Date | null };
   institutionId: string;
-  instance: { serviceDate: Date; cutoffAt: Date };
+  instance: { serviceDate: Date; cutoffAt: Date; mealDefinitionId: string };
   definition: { defaultVisible?: boolean | null; defaultState?: string | null } | null;
   snapshot: Record<string, any> | null;
   rm: { baselineState: string; residentSelectedState: string | null; adminOverrideState: string | null };
@@ -231,8 +242,11 @@ export async function buildEvalContext(inputs: EvalInputs): Promise<MealEvalCont
         startDate: { lte: dayEnd },
         endDate: { gte: dayStart },
       },
+      include: { selectedMeals: { select: { mealDefinitionId: true } } },
     });
-    calendarDisabled = (events as { startDate: Date; endDate: Date }[]).some((e) => dayCoveredBy(dayStart, e));
+    calendarDisabled = (events as ({ startDate: Date; endDate: Date } & MealScopedRow)[]).some(
+      (e) => dayCoveredBy(dayStart, e) && scopedRowAffectsMeal(e, inputs.instance.mealDefinitionId)
+    );
   }
 
   let onLeave = inputs.overrides?.onLeave ?? false;
@@ -244,8 +258,11 @@ export async function buildEvalContext(inputs: EvalInputs): Promise<MealEvalCont
         startDate: { lte: dayEnd },
         endDate: { gte: dayStart },
       },
+      include: { selectedMeals: { select: { mealDefinitionId: true } } },
     });
-    onLeave = (leaves as { startDate: Date; endDate: Date }[]).some((l) => dayCoveredBy(dayStart, l));
+    onLeave = (leaves as ({ startDate: Date; endDate: Date } & MealScopedRow)[]).some(
+      (l) => dayCoveredBy(dayStart, l) && scopedRowAffectsMeal(l, inputs.instance.mealDefinitionId)
+    );
   }
 
   const restricted = inputs.overrides?.skipPolicy
@@ -408,10 +425,12 @@ export async function ensureResidentMeals(
   // Bulk context data for the whole range.
   const disableEvents = (await client.calendarEvent.findMany({
     where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
-  })) as { startDate: Date; endDate: Date }[];
+    include: { selectedMeals: { select: { mealDefinitionId: true } } },
+  })) as ({ startDate: Date; endDate: Date } & MealScopedRow)[];
   const approvedLeaves = (await client.leaveRequest.findMany({
     where: { residentId, status: "APPROVED", startDate: { lte: toMid }, endDate: { gte: fromMid } },
-  })) as { startDate: Date; endDate: Date }[];
+    include: { selectedMeals: { select: { mealDefinitionId: true } } },
+  })) as ({ startDate: Date; endDate: Date } & MealScopedRow)[];
   const restricted = await isRestrictionActive(residentId, institutionId, client);
 
   const from = resident.membershipEffectiveFrom ? new Date(resident.membershipEffectiveFrom) : null;
@@ -438,8 +457,12 @@ export async function ensureResidentMeals(
 
     const ctx: MealEvalContext = {
       visible,
-      calendarDisabled: disableEvents.some((e) => dayCoveredBy(dayStart, e)),
-      onLeave: approvedLeaves.some((l) => dayCoveredBy(dayStart, l)),
+      calendarDisabled: disableEvents.some(
+        (e) => dayCoveredBy(dayStart, e) && scopedRowAffectsMeal(e, inst.mealDefinitionId)
+      ),
+      onLeave: approvedLeaves.some(
+        (l) => dayCoveredBy(dayStart, l) && scopedRowAffectsMeal(l, inst.mealDefinitionId)
+      ),
       restricted,
       adminOverride: null,
       selected: null,
@@ -535,10 +558,12 @@ export async function refreshAndLock(
 
   const disableEvents = (await client.calendarEvent.findMany({
     where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
-  })) as { startDate: Date; endDate: Date; createdAt: Date }[];
+    include: { selectedMeals: { select: { mealDefinitionId: true } } },
+  })) as ({ startDate: Date; endDate: Date; createdAt: Date } & MealScopedRow)[];
   const leaves = (await client.leaveRequest.findMany({
     where: { residentId: { in: residentIds }, status: "APPROVED", startDate: { lte: toMid }, endDate: { gte: fromMid } },
-  })) as { residentId: string; startDate: Date; endDate: Date; reviewedAt: Date | null }[];
+    include: { selectedMeals: { select: { mealDefinitionId: true } } },
+  })) as ({ residentId: string; startDate: Date; endDate: Date; reviewedAt: Date | null } & MealScopedRow)[];
 
   // Policy only when enabled (avoids per-resident funds queries otherwise).
   const inst = await getInstitution(institutionId);
@@ -573,12 +598,16 @@ export async function refreshAndLock(
       // evaluation. The leave-approve route's preview ("meals whose cutoff
       // already passed will not change") stays truthful.
       calendarDisabled: disableEvents.some(
-        (e) => dayCoveredBy(dayStart, e) && e.createdAt.getTime() <= new Date(instRow.cutoffAt).getTime()
+        (e) =>
+          dayCoveredBy(dayStart, e) &&
+          scopedRowAffectsMeal(e, instRow.mealDefinitionId) &&
+          e.createdAt.getTime() <= new Date(instRow.cutoffAt).getTime()
       ),
       onLeave: leaves.some(
         (l) =>
           l.residentId === rm.residentId &&
           dayCoveredBy(dayStart, l) &&
+          scopedRowAffectsMeal(l, instRow.mealDefinitionId) &&
           l.reviewedAt != null &&
           l.reviewedAt.getTime() <= new Date(instRow.cutoffAt).getTime()
       ),
@@ -652,10 +681,12 @@ export async function refreshUnlockedEffective(
 
   const disableEvents = (await client.calendarEvent.findMany({
     where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
-  })) as { startDate: Date; endDate: Date }[];
+    include: { selectedMeals: { select: { mealDefinitionId: true } } },
+  })) as ({ startDate: Date; endDate: Date } & MealScopedRow)[];
   const leaves = (await client.leaveRequest.findMany({
     where: { residentId: { in: residentIds }, status: "APPROVED", startDate: { lte: toMid }, endDate: { gte: fromMid } },
-  })) as { residentId: string; startDate: Date; endDate: Date }[];
+    include: { selectedMeals: { select: { mealDefinitionId: true } } },
+  })) as ({ residentId: string; startDate: Date; endDate: Date } & MealScopedRow)[];
 
   const inst = await getInstitution(institutionId);
   const policyOn = !!inst?.settings.deficitPolicyEnabled && !!inst?.settings.restrictMealsOnDeficit;
@@ -682,8 +713,15 @@ export async function refreshUnlockedEffective(
 
     const ctx: MealEvalContext = {
       visible,
-      calendarDisabled: disableEvents.some((e) => dayCoveredBy(dayStart, e)),
-      onLeave: leaves.some((l) => l.residentId === rm.residentId && dayCoveredBy(dayStart, l)),
+      calendarDisabled: disableEvents.some(
+        (e) => dayCoveredBy(dayStart, e) && scopedRowAffectsMeal(e, instRow.mealDefinitionId)
+      ),
+      onLeave: leaves.some(
+        (l) =>
+          l.residentId === rm.residentId &&
+          dayCoveredBy(dayStart, l) &&
+          scopedRowAffectsMeal(l, instRow.mealDefinitionId)
+      ),
       restricted: restrictedByResident.get(rm.residentId) ?? false,
       adminOverride: rm.adminOverrideState ?? null,
       selected: rm.residentSelectedState ?? null,

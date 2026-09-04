@@ -1,8 +1,6 @@
 /**
- * POST /api/v1/admin/calendar — create a calendar event (spec §147).
- * disableMeals=true makes the engine mark covered dates NOT_AVAILABLE/
- * CALENDAR_DISABLED on the next evaluation (lazy — materialized rows refresh
- * on read/lock; future materialization picks it up at creation).
+ * POST /api/v1/admin/calendar — create a calendar event (spec §44, §147).
+ * Meal disabling may apply to ALL_MEALS or explicitly SELECTED_MEALS.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -12,6 +10,12 @@ import { dateKeySchema } from "@/lib/validation";
 import { localDateMidnightUtc } from "@/lib/time";
 import { appendAudit } from "@/lib/audit";
 import { dayCountBetween, keyOfUtcDate, requireInstitutionContext } from "@/lib/domain/meal-engine";
+import {
+  mealDefinitionIdsSchema,
+  mealScopeSchema,
+  serializeSelectedMeals,
+  validateMealScopeSelection,
+} from "@/lib/domain/meal-scope";
 
 const bodySchema = z.object({
   name: z.string().trim().min(2, "Give the event a name.").max(90),
@@ -20,6 +24,8 @@ const bodySchema = z.object({
   endDate: dateKeySchema,
   type: z.enum(["HOLIDAY", "FESTIVAL", "MAINTENANCE", "CUSTOM"]),
   disableMeals: z.boolean().default(false),
+  mealScope: mealScopeSchema.default("ALL_MEALS"),
+  mealDefinitionIds: mealDefinitionIdsSchema,
 });
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
@@ -34,8 +40,28 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   if (dayCountBetween(body.startDate, body.endDate) > 366) {
     throw new ApiError(CODES.VALIDATION_FAILED, "Events can span at most 366 days.", 400);
   }
+  if (!body.disableMeals && (body.mealScope !== "ALL_MEALS" || (body.mealDefinitionIds?.length ?? 0) > 0)) {
+    throw new ApiError(
+      CODES.VALIDATION_FAILED,
+      "Meal scope can only be selected when this event disables meals.",
+      422
+    );
+  }
+
+  const selection = await validateMealScopeSelection({
+    institutionId: ctx.institutionId,
+    mealScope: body.disableMeals ? body.mealScope : "ALL_MEALS",
+    mealDefinitionIds: body.disableMeals ? body.mealDefinitionIds : undefined,
+  });
 
   const created = await db.$transaction(async (tx) => {
+    const txSelection = await validateMealScopeSelection({
+      institutionId: ctx.institutionId,
+      mealScope: body.disableMeals ? body.mealScope : "ALL_MEALS",
+      mealDefinitionIds: selection.ids,
+      client: tx,
+    });
+
     const event = await tx.calendarEvent.create({
       data: {
         institutionId: ctx.institutionId,
@@ -45,9 +71,23 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         endDate: localDateMidnightUtc(body.endDate),
         type: body.type,
         disableMeals: body.disableMeals,
+        mealScope: body.disableMeals ? body.mealScope : "ALL_MEALS",
         createdByUserId: ctx.user.id,
+        ...(txSelection.ids.length
+          ? {
+              selectedMeals: {
+                create: txSelection.ids.map((mealDefinitionId) => ({ mealDefinitionId })),
+              },
+            }
+          : {}),
+      },
+      include: {
+        selectedMeals: {
+          include: { mealDefinition: { select: { id: true, name: true } } },
+        },
       },
     });
+
     await appendAudit(
       {
         institutionId: ctx.institutionId,
@@ -63,6 +103,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           startDate: body.startDate,
           endDate: body.endDate,
           disableMeals: body.disableMeals,
+          mealScope: event.mealScope,
+          mealDefinitionIds: txSelection.ids,
         }),
       },
       tx
@@ -79,6 +121,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       endDate: keyOfUtcDate(created.endDate),
       type: created.type,
       disableMeals: created.disableMeals,
+      ...serializeSelectedMeals(created.mealScope, created.selectedMeals),
       createdAt: created.createdAt.toISOString(),
     },
   };

@@ -1,8 +1,8 @@
 /**
- * POST /api/v1/admin/leave-requests/[id]/approve — spec §35:
- * Transaction: mark APPROVED (+audit +notification), then re-evaluate the
- * resident's UNLOCKED meals in the leave window (cutoffAt > now) — leave wins
- * over selection/baseline. Already-locked meals are untouched (frozen §36).
+ * POST /api/v1/admin/leave-requests/[id]/approve — spec §35, §43:
+ * Transaction: mark APPROVED (+audit +notification), then re-evaluate only the
+ * resident's UNLOCKED meals covered by the leave's ALL/SELECTED meal scope.
+ * Already-locked meals remain frozen (§36).
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -16,6 +16,7 @@ import {
   parseSnapshot,
   requireInstitutionContext,
 } from "@/lib/domain/meal-engine";
+import { mealInstanceScopeWhere, serializeSelectedMeals } from "@/lib/domain/meal-scope";
 import { queueNotification, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
 
 const bodySchema = z.object({ reason: z.string().trim().max(500).optional() });
@@ -27,10 +28,22 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const result = await db.$transaction(async (tx) => {
     const leave = await tx.leaveRequest.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
+      include: {
+        selectedMeals: {
+          include: { mealDefinition: { select: { id: true, name: true } } },
+        },
+      },
     });
     if (!leave) throw new ApiError(CODES.NOT_FOUND, "This leave request could not be found.", 404);
     if (leave.status !== "PENDING") {
       throw new ApiError(CODES.VALIDATION_FAILED, "This leave request was already reviewed.", 409);
+    }
+    if (leave.mealScope === "SELECTED_MEALS" && leave.selectedMeals.length === 0) {
+      throw new ApiError(
+        CODES.RESOURCE_CHANGED,
+        "This selected-meal leave has no meal selections. It cannot be approved safely.",
+        409
+      );
     }
 
     const now = new Date();
@@ -44,11 +57,15 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       },
     });
 
-    // Re-evaluate ONLY unlocked meals in the window (locked stay frozen, §35-36).
+    const selectedIds = leave.selectedMeals.map((selection) => selection.mealDefinitionId);
+    const scopeWhere = mealInstanceScopeWhere(leave.mealScope, selectedIds);
+
+    // Re-evaluate ONLY unlocked instances covered by the requested meal scope.
     const instances = await tx.mealInstance.findMany({
       where: {
         institutionId: ctx.institutionId,
         serviceDate: { gte: leave.startDate, lte: leave.endDate },
+        ...scopeWhere,
         cutoffAt: { gt: now },
       },
       include: { definition: true, definitionVersion: true },
@@ -92,6 +109,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       if (resultEval.effectiveState === "ON_LEAVE") mealsOnLeave++;
     }
 
+    const scopeSummary = serializeSelectedMeals(leave.mealScope, leave.selectedMeals);
     await appendAudit(
       {
         institutionId: ctx.institutionId,
@@ -102,26 +120,35 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         entityId: leave.id,
         requestId: ctx.requestId,
         reason: body.reason ?? null,
-        beforeSummary: JSON.stringify({ status: "PENDING" }),
+        beforeSummary: JSON.stringify({ status: "PENDING", ...scopeSummary }),
         afterSummary: JSON.stringify({
           status: "APPROVED",
           startDate: keyOfUtcDate(leave.startDate),
           endDate: keyOfUtcDate(leave.endDate),
+          ...scopeSummary,
           updatedMeals,
           mealsOnLeave,
         }),
-        metadata: { residentId: leave.residentId, updatedMeals, mealsOnLeave },
+        metadata: {
+          residentId: leave.residentId,
+          mealScope: leave.mealScope,
+          mealDefinitionIds: selectedIds,
+          updatedMeals,
+          mealsOnLeave,
+        },
       },
       tx
     );
 
+    const mealNames = leave.selectedMeals.map((selection) => selection.mealDefinition.name);
+    const scopeLabel = leave.mealScope === "SELECTED_MEALS" ? ` (${mealNames.join(", ")})` : "";
     await queueNotification(
       {
         userId: leave.residentId,
         institutionId: ctx.institutionId,
         type: "LEAVE_APPROVED",
         title: "Leave request approved",
-        message: `Your leave request (${keyOfUtcDate(leave.startDate)} to ${keyOfUtcDate(leave.endDate)}) was approved.`,
+        message: `Your leave request (${keyOfUtcDate(leave.startDate)} to ${keyOfUtcDate(leave.endDate)})${scopeLabel} was approved.`,
         entityRef: leave.id,
       },
       tx
@@ -137,7 +164,13 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       client: tx,
     });
 
-    return { updated, updatedMeals, mealsOnLeave, affectedInstances: instanceIds.length };
+    return {
+      updated,
+      updatedMeals,
+      mealsOnLeave,
+      affectedInstances: instanceIds.length,
+      scopeSummary,
+    };
   });
 
   await sweepOutboxSafe();
@@ -147,6 +180,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       status: result.updated.status,
       reviewedAt: result.updated.reviewedAt ? result.updated.reviewedAt.toISOString() : null,
       reviewReason: result.updated.reviewReason,
+      ...result.scopeSummary,
       updatedMeals: result.updatedMeals,
       mealsOnLeave: result.mealsOnLeave,
       affectedInstances: result.affectedInstances,

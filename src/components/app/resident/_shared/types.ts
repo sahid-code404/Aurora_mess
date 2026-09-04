@@ -178,6 +178,14 @@ export interface GuestMealCancelResponse {
 
 /* ------------------------------ leave requests ---------------------------- */
 
+export interface MealOptionDto {
+  id: string;
+  name: string;
+  icon: string | null;
+  colorToken: string | null;
+  mealType: string;
+}
+
 export interface LeavePreview {
   futureUnlockedMeals: number;
   alreadyLockedMeals: number;
@@ -189,6 +197,8 @@ export interface LeaveRequestDto {
   endDate: string;
   dayCount: number;
   reason: string;
+  mealScope: "ALL_MEALS" | "SELECTED_MEALS";
+  selectedMeals: { id: string; name: string }[];
   status: "PENDING" | "APPROVED" | "REJECTED" | string;
   reviewReason?: string | null;
   reviewedAt?: string | null;

@@ -43,7 +43,7 @@ import { errMessage, useInvalidate } from "./_shared/api";
 import { SelectField, TextAreaField, TextField } from "./_shared/fields";
 import { Chip, OverflowMenu } from "./_shared/chrome";
 import { fmtDate, todayKey, initialsOf } from "./_shared/format";
-import type { CalendarEventRow } from "./_shared/types";
+import type { CalendarEventRow, MealDefinitionRow } from "./_shared/types";
 
 const CAL_GET_PATH = "/api/v1/calendar";
 const CAL_ADMIN_PATH = "/api/v1/admin/calendar";
@@ -59,8 +59,9 @@ interface LeaveRequestRow {
   dayCount: number;
   reason: string;
   status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
-  futureUnlockedMeals: number;
-  alreadyLockedMeals: number;
+  mealScope: "ALL_MEALS" | "SELECTED_MEALS";
+  selectedMeals: { id: string; name: string }[];
+  preview: { futureUnlockedMeals: number; alreadyLockedMeals: number };
   createdAt: string;
 }
 
@@ -462,6 +463,9 @@ export default function AdminCalendar() {
                             <p className="truncate text-sm font-semibold">{e.name}</p>
                             <Chip tone="neutral">{m.label}</Chip>
                             {e.disableMeals && <Chip tone="danger">Meals disabled</Chip>}
+                            {e.disableMeals && e.mealScope === "SELECTED_MEALS" && e.selectedMeals.length > 0 && (
+                              <Chip tone="neutral">{e.selectedMeals.map((meal) => meal.name).join(", ")}</Chip>
+                            )}
                           </div>
                           <p className="kpi-num mt-0.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
                             <CalendarDays className="size-3" aria-hidden />
@@ -589,12 +593,17 @@ export default function AdminCalendar() {
                         {fmtDate(leave.startDate)} – {fmtDate(leave.endDate)} · {leave.dayCount}{" "}
                         {leave.dayCount === 1 ? "day" : "days"}
                       </span>
-                      {leave.futureUnlockedMeals > 0 && (
+                      {leave.preview.futureUnlockedMeals > 0 && (
                         <span className="text-muted-foreground">
-                          ({leave.futureUnlockedMeals} unlocked meals)
+                          ({leave.preview.futureUnlockedMeals} unlocked meals)
                         </span>
                       )}
                     </p>
+                    {leave.mealScope === "SELECTED_MEALS" && leave.selectedMeals.length > 0 && (
+                      <p className="mt-1 text-[11px] font-medium text-muted-foreground">
+                        Applies to: {leave.selectedMeals.map((meal) => meal.name).join(", ")}
+                      </p>
+                    )}
                     {leave.reason && (
                       <p className="mt-1 text-xs text-muted-foreground italic">
                         &ldquo;{leave.reason}&rdquo;
@@ -671,7 +680,9 @@ export default function AdminCalendar() {
                 {approveTarget.dayCount === 1 ? "day" : "days"})?
               </span>
               <span className="mt-1.5 block text-xs text-muted-foreground">
-                Future unlocked meals in this window will automatically be marked On Leave and excluded from billing.
+                {approveTarget.mealScope === "SELECTED_MEALS"
+                  ? `Only ${approveTarget.selectedMeals.map((meal) => meal.name).join(", ")} will be marked On Leave; other meals stay normal.`
+                  : "Future unlocked meals in this window will automatically be marked On Leave and excluded from billing."}
               </span>
             </>
           }
@@ -718,6 +729,13 @@ function CreateEventDialog({
   const [endDate, setEndDate] = useState("");
   const [type, setType] = useState("HOLIDAY");
   const [disableMeals, setDisableMeals] = useState(false);
+  const [mealScope, setMealScope] = useState<"ALL_MEALS" | "SELECTED_MEALS">("ALL_MEALS");
+  const [selectedMealIds, setSelectedMealIds] = useState<string[]>([]);
+  const { data: mealDefinitions } = useApiQuery<MealDefinitionRow[]>("/api/v1/admin/meal-definitions");
+  const mealOptions = (mealDefinitions ?? []).filter(
+    (meal) => meal.active && meal.archivedAt == null && meal.mealType !== "GUEST_ONLY" && meal.defaultVisible
+  );
+  const impactScopeKey = [...selectedMealIds].sort().join(",");
   const [impact, setImpact] = useState<ImpactData | null>(null);
   const [impactLoading, setImpactLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -735,7 +753,13 @@ function CreateEventDialog({
     setImpactLoading(true);
     const t = window.setTimeout(async () => {
       try {
-        const res = await postJson<ImpactData>(`${CAL_ADMIN_PATH}/impact`, { startDate, endDate });
+        const res = await postJson<ImpactData>(`${CAL_ADMIN_PATH}/impact`, {
+          startDate,
+          endDate,
+          disableMeals: true,
+          mealScope,
+          mealDefinitionIds: mealScope === "SELECTED_MEALS" ? selectedMealIds : [],
+        });
         if (!cancelled) setImpact(res);
       } catch {
         if (!cancelled) setImpact(null);
@@ -747,9 +771,10 @@ function CreateEventDialog({
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [disableMeals, datesValid, startDate, endDate]);
+  }, [disableMeals, datesValid, startDate, endDate, mealScope, impactScopeKey]);
 
-  const valid = name.trim().length >= 2 && datesValid;
+  const scopeValid = !disableMeals || mealScope === "ALL_MEALS" || selectedMealIds.length > 0;
+  const valid = name.trim().length >= 2 && datesValid && scopeValid;
 
   async function submit() {
     setSaving(true);
@@ -762,6 +787,8 @@ function CreateEventDialog({
         endDate,
         type,
         disableMeals,
+        mealScope: disableMeals ? mealScope : "ALL_MEALS",
+        mealDefinitionIds: disableMeals && mealScope === "SELECTED_MEALS" ? selectedMealIds : [],
       });
       toast.success("Event created", {
         description: disableMeals && impact ? `${impact.affectedMealServices} meal services will be disabled.` : name.trim(),
@@ -773,6 +800,8 @@ function CreateEventDialog({
       setStartDate("");
       setEndDate("");
       setDisableMeals(false);
+      setMealScope("ALL_MEALS");
+      setSelectedMealIds([]);
       setImpact(null);
     } catch (err) {
       if (err instanceof ApiClientError && err.fields) setFields(err.fields);
@@ -820,13 +849,70 @@ function CreateEventDialog({
         <div className="glass-inset flex items-center justify-between gap-3 rounded-md px-3.5 py-3">
           <div className="min-w-0">
             <p className="text-sm font-medium">Disable meals</p>
-            <p className="text-[11px] text-muted-foreground">Marks every meal in the window as not available.</p>
+            <p className="text-[11px] text-muted-foreground">Disable every meal or only selected meal types in this window.</p>
           </div>
           <GlassToggle checked={disableMeals} onChange={(next) => setDisableMeals(next)} label="Disable meals in this window" />
         </div>
 
+        {disableMeals && (
+          <div className="space-y-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => { setMealScope("ALL_MEALS"); setSelectedMealIds([]); }}
+                className={cn(
+                  "glass-inset min-h-10 rounded-md px-3 text-sm font-medium transition-all",
+                  mealScope === "ALL_MEALS" ? "ring-2 ring-ring" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                All meals
+              </button>
+              <button
+                type="button"
+                onClick={() => setMealScope("SELECTED_MEALS")}
+                className={cn(
+                  "glass-inset min-h-10 rounded-md px-3 text-sm font-medium transition-all",
+                  mealScope === "SELECTED_MEALS" ? "ring-2 ring-ring" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Selected meals
+              </button>
+            </div>
+            {mealScope === "SELECTED_MEALS" && (
+              <div className="glass-inset grid gap-1 rounded-md p-2 sm:grid-cols-2">
+                {mealOptions.length === 0 ? (
+                  <p className="px-2 py-1 text-xs text-muted-foreground sm:col-span-2">No selectable meals are configured.</p>
+                ) : (
+                  mealOptions.map((meal) => {
+                    const checked = selectedMealIds.includes(meal.id);
+                    return (
+                      <button
+                        key={meal.id}
+                        type="button"
+                        aria-pressed={checked}
+                        onClick={() =>
+                          setSelectedMealIds((current) =>
+                            current.includes(meal.id) ? current.filter((id) => id !== meal.id) : [...current, meal.id]
+                          )
+                        }
+                        className={cn(
+                          "flex min-h-9 items-center justify-between rounded-md px-3 text-left text-sm transition-colors",
+                          checked ? "bg-primary/12 font-medium text-primary" : "hover:bg-foreground/5"
+                        )}
+                      >
+                        <span className="truncate">{meal.name}</span>
+                        <span className="ml-2 text-[11px]">{checked ? "Selected" : "Add"}</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* impact preview */}
-        {disableMeals && datesValid && (
+        {disableMeals && datesValid && scopeValid && (
           <div className="rounded-md border border-warning/30 bg-warning/8 p-3.5" role="status">
             <p className="text-[12px] font-semibold text-warning">Impact preview</p>
             {impactLoading ? (
