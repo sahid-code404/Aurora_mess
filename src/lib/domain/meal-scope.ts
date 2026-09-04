@@ -48,7 +48,7 @@ export async function validateMealScopeSelection(input: {
 
   if (input.mealScope === "ALL_MEALS") return { ids: [], meals: [] };
 
-  const meals = await client.mealDefinition.findMany({
+  const meals = (await client.mealDefinition.findMany({
     where: {
       institutionId: input.institutionId,
       id: { in: ids },
@@ -57,7 +57,7 @@ export async function validateMealScopeSelection(input: {
       mealType: { not: "GUEST_ONLY" },
     },
     select: { id: true, name: true },
-  });
+  })) as { id: string; name: string }[];
 
   if (meals.length !== ids.length) {
     throw new ApiError(
@@ -67,10 +67,12 @@ export async function validateMealScopeSelection(input: {
     );
   }
 
-  const byId = new Map(meals.map((meal: { id: string; name: string }) => [meal.id, meal]));
+  const byId = new Map<string, { id: string; name: string }>(
+    meals.map((meal) => [meal.id, meal] as const)
+  );
   return {
     ids,
-    meals: ids.map((id) => byId.get(id)!).filter(Boolean),
+    meals: ids.map((id) => byId.get(id)).filter((meal): meal is { id: string; name: string } => meal != null),
   };
 }
 
