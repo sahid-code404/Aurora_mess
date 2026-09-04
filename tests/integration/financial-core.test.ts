@@ -1,7 +1,18 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { db } from "@/lib/db";
-import { getAccountBalances, postJournal } from "@/lib/domain/ledger";
+import {
+  ensureAccounts,
+  getAccountBalances,
+  postJournal,
+  reconcileInstitution,
+} from "@/lib/domain/ledger";
 import { recomputeBillSettlement, residentFundsSummary } from "@/lib/domain/funds";
+import { createRefund } from "@/lib/domain/refunds";
+import {
+  billingSnapshotChecksum,
+  verifyBillingPeriodIntegrity,
+} from "@/lib/domain/billing-integrity";
+import { removePeriodBills } from "@/lib/domain/billing";
 import { invalidateInstitutionCache } from "@/lib/institution";
 
 function unique(prefix: string): string {
@@ -114,12 +125,12 @@ describe("database-backed financial core", () => {
     expect(journal).not.toBeNull();
     expect(journal?.status).toBe("POSTED");
     expect(journal?.entries).toHaveLength(2);
-    expect(journal?.entries.reduce((sum, e) => sum + e.debitMinor, 0)).toBe(12500);
-    expect(journal?.entries.reduce((sum, e) => sum + e.creditMinor, 0)).toBe(12500);
+    expect(journal?.entries.reduce((sum, entry) => sum + entry.debitMinor, 0)).toBe(12500);
+    expect(journal?.entries.reduce((sum, entry) => sum + entry.creditMinor, 0)).toBe(12500);
 
     const balances = await getAccountBalances(institution.id);
-    const cash = balances.find((b) => b.code === "CASH");
-    const residentFunds = balances.find((b) => b.code === "RESIDENT_FUNDS");
+    const cash = balances.find((balance) => balance.code === "CASH");
+    const residentFunds = balances.find((balance) => balance.code === "RESIDENT_FUNDS");
     expect(cash?.balanceMinor).toBe(12500);
     expect(residentFunds?.balanceMinor).toBe(12500);
   });
@@ -219,5 +230,229 @@ describe("database-backed financial core", () => {
     expect(summary.deficitMinor).toBe(5000);
     expect(summary.thresholdMinor).toBe(1000);
     expect(summary.policyState).toBe("RESTRICTED");
+  });
+
+  test("concurrent cash refunds cannot double-spend the same resident credit", async () => {
+    const institution = await createInstitution();
+    const resident = await createResident(institution.id);
+
+    await db.payment.create({
+      data: {
+        institutionId: institution.id,
+        displayNumber: unique("PAY-CONCURRENT"),
+        residentId: resident.id,
+        amountMinor: 10000,
+        method: "UPI",
+        status: "APPROVED",
+      },
+    });
+
+    // Avoid chart-of-accounts creation itself being the contested write; this
+    // test isolates the resident-credit serialization boundary.
+    await ensureAccounts(institution.id);
+    invalidateInstitutionCache();
+
+    const attempts = await Promise.allSettled([
+      createRefund({
+        institutionId: institution.id,
+        residentId: resident.id,
+        amountMinor: 6000,
+        mode: "ISSUE_REFUND",
+        reason: "Concurrent refund A",
+        actorUserId: "integration-admin-a",
+        requestId: unique("refund-request-a"),
+      }),
+      createRefund({
+        institutionId: institution.id,
+        residentId: resident.id,
+        amountMinor: 6000,
+        mode: "ISSUE_REFUND",
+        reason: "Concurrent refund B",
+        actorUserId: "integration-admin-b",
+        requestId: unique("refund-request-b"),
+      }),
+    ]);
+
+    expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter((result) => result.status === "rejected")).toHaveLength(1);
+
+    const refunds = await db.refund.findMany({
+      where: { institutionId: institution.id, residentId: resident.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(refunds).toHaveLength(1);
+    expect(refunds[0].status).toBe("COMPLETED");
+    expect(refunds[0].mode).toBe("ISSUE_REFUND");
+    expect(refunds[0].amountMinor).toBe(6000);
+    expect(refunds[0].journalId).not.toBeNull();
+
+    const journal = await db.ledgerJournal.findUniqueOrThrow({
+      where: { id: refunds[0].journalId as string },
+      include: { entries: true },
+    });
+    expect(journal.refType).toBe("REFUND");
+    expect(journal.refId).toBe(refunds[0].id);
+    expect(journal.entries.reduce((sum, entry) => sum + entry.debitMinor, 0)).toBe(6000);
+    expect(journal.entries.reduce((sum, entry) => sum + entry.creditMinor, 0)).toBe(6000);
+
+    const after = await residentFundsSummary(resident.id);
+    expect(after.creditsMinor).toBe(10000);
+    expect(after.refundsIssuedMinor).toBe(6000);
+    expect(after.availableMinor).toBe(4000);
+  });
+
+  test("reconciliation catches missing refund and bill journals", async () => {
+    const institution = await createInstitution();
+    const resident = await createResident(institution.id);
+
+    await createBill({
+      institutionId: institution.id,
+      residentId: resident.id,
+      year: 2026,
+      month: 4,
+      subtotalMinor: 5000,
+      dueDate: new Date(Date.now() + 86_400_000),
+    });
+
+    await db.refund.create({
+      data: {
+        institutionId: institution.id,
+        residentId: resident.id,
+        amountMinor: 1000,
+        mode: "ISSUE_REFUND",
+        reason: "Intentionally broken reconciliation fixture",
+        status: "COMPLETED",
+        journalId: null,
+        createdByUserId: "integration-admin",
+        completedAt: new Date(),
+      },
+    });
+
+    const result = await reconcileInstitution(institution.id);
+    expect(result.cashRefundsWithoutJournal).toBe(1);
+    expect(result.billsWithoutJournal).toBe(1);
+    expect(result.balanced).toBe(false);
+    expect(result.problems.some((problem) => problem.includes("refund"))).toBe(true);
+    expect(result.problems.some((problem) => problem.includes("bill"))).toBe(true);
+  });
+
+  test("billing snapshot integrity verifies a valid frozen artifact and detects payload tampering", async () => {
+    const institution = await createInstitution();
+    const resident = await createResident(institution.id);
+    const year = 2026;
+    const month = 5;
+    const mealChargeMinor = 500;
+
+    const period = await db.billingPeriod.create({
+      data: {
+        institutionId: institution.id,
+        year,
+        month,
+        status: "BILLED",
+        billedAt: new Date(),
+        closedAt: new Date(),
+        mealChargeMinorSnapshot: mealChargeMinor,
+        formulaVersionId: null,
+      },
+    });
+
+    const payload = {
+      period: { year, month, startKey: "2026-05-01", endKey: "2026-05-31" },
+      formula: { versionId: null },
+      residents: [{ id: resident.id }],
+      totals: {
+        residentCount: 1,
+        residentMealCount: 2,
+        guestMealCount: 0,
+        eligibleExpensesMinor: 0,
+        approvedPaymentsMinor: 0,
+      },
+    };
+    const payloadJson = JSON.stringify(payload);
+    const snapshot = await db.billingSnapshot.create({
+      data: {
+        institutionId: institution.id,
+        billingPeriodId: period.id,
+        payloadJson,
+        checksum: billingSnapshotChecksum(payloadJson),
+        residentCount: 1,
+        residentMealCount: 2,
+        guestMealCount: 0,
+        eligibleExpensesMinor: 0,
+        approvedPaymentsMinor: 0,
+        mealChargeMinor,
+      },
+    });
+
+    await db.bill.create({
+      data: {
+        institutionId: institution.id,
+        residentId: resident.id,
+        billingPeriodId: period.id,
+        snapshotId: snapshot.id,
+        billNumber: unique("BILL-INTEGRITY"),
+        residentMealCount: 2,
+        guestMealCount: 0,
+        mealChargeMinor,
+        subtotalMinor: 1000,
+        totalDueMinor: 1000,
+        dueDate: new Date("2026-06-05T00:00:00.000Z"),
+        status: "GENERATED",
+      },
+    });
+
+    const valid = await verifyBillingPeriodIntegrity(period.id);
+    expect(valid.valid).toBe(true);
+    expect(valid.checks.every((check) => check.pass)).toBe(true);
+
+    const tamperedPayload = JSON.stringify({
+      ...payload,
+      totals: { ...payload.totals, residentMealCount: 999 },
+    });
+    await db.billingSnapshot.update({
+      where: { id: snapshot.id },
+      data: { payloadJson: tamperedPayload },
+    });
+
+    const tampered = await verifyBillingPeriodIntegrity(period.id);
+    expect(tampered.valid).toBe(false);
+    expect(tampered.checks.find((check) => check.key === "snapshot_checksum")?.pass).toBe(false);
+    expect(tampered.checks.find((check) => check.key === "payload_aggregates")?.pass).toBe(false);
+  });
+
+  test("destructive billing reset is disabled and cannot delete posted artifacts", async () => {
+    const institution = await createInstitution();
+    const resident = await createResident(institution.id);
+    const bill = await createBill({
+      institutionId: institution.id,
+      residentId: resident.id,
+      year: 2026,
+      month: 6,
+      subtotalMinor: 5000,
+      dueDate: new Date(Date.now() + 86_400_000),
+    });
+
+    const { journalId } = await postJournal({
+      institutionId: institution.id,
+      refType: "BILL",
+      refId: bill.id,
+      description: "Historical bill journal that must remain immutable",
+      lines: [
+        { accountCode: "RESIDENT_FUNDS", debitMinor: 5000 },
+        { accountCode: "MEAL_CHARGE_INCOME", creditMinor: 5000 },
+      ],
+    });
+
+    const beforeBills = await db.bill.count({ where: { billingPeriodId: bill.billingPeriodId } });
+    const beforeSnapshots = await db.billingSnapshot.count({ where: { billingPeriodId: bill.billingPeriodId } });
+    const beforeJournals = await db.ledgerJournal.count({ where: { id: journalId } });
+
+    await expect(removePeriodBills(bill.billingPeriodId, "integration-admin")).rejects.toThrow(
+      "Destructive billing reset is disabled"
+    );
+
+    expect(await db.bill.count({ where: { billingPeriodId: bill.billingPeriodId } })).toBe(beforeBills);
+    expect(await db.billingSnapshot.count({ where: { billingPeriodId: bill.billingPeriodId } })).toBe(beforeSnapshots);
+    expect(await db.ledgerJournal.count({ where: { id: journalId } })).toBe(beforeJournals);
   });
 });
