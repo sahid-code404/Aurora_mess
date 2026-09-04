@@ -40,7 +40,7 @@ const DAY_MS = 86_400_000;
 
 function graceUntil(context: DeficitPolicyContext): Date {
   const anchor = context.oldestUnsettledDueAt ?? context.now;
-  return new Date(anchor.getTime() + Math.max(0, context.gracePeriodDays) * DAY_MS);
+  return new Date(anchor.getTime() + context.gracePeriodDays * DAY_MS);
 }
 
 const DEFICIT_RULES: readonly DecisionRule<DeficitPolicyContext, RuleResult>[] = [
@@ -72,7 +72,7 @@ const DEFICIT_RULES: readonly DecisionRule<DeficitPolicyContext, RuleResult>[] =
     id: "deficit.within_threshold",
     version: 1,
     priority: 80,
-    when: (ctx) => ctx.availableMinor >= -Math.max(0, ctx.deficitThresholdMinor),
+    when: (ctx) => ctx.availableMinor >= -ctx.deficitThresholdMinor,
     decide: () => ({
       state: "AVAILABLE",
       reasonCode: "WITHIN_DEFICIT_THRESHOLD",
