@@ -1,0 +1,889 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→/**
+     4→     4→ * Resident Meals (#/app/meals) — THE core screen, BoardOps layout.
+     5→     5→ * Month agenda with collapsible day rows, month calendar grid, and a
+     6→     6→ * single-day view — all driven by one centered picker pill (BoardOps
+     7→     7→ * user-meals-view pattern). The agenda days AND the Day view render the
+     8→     8→ * SAME shared AgendaDaySection (agenda-day.tsx), so a day looks identical
+     9→     9→ * everywhere. The day's GUEST meals render as the FIRST row of every day
+    10→    10→ * section with a ± stepper — self-service under cutoff, no admin permission
+    11→    11→ * (add via dialog, remove/adjust inline). Optimistic ON/OFF toggles with
+    12→    12→ * spring rollback + inline plain-language messages (spec §114), guest meal
+    13→    13→ * and leave dialogs (spec §153/§154) kept from the original build.
+    14→    14→ */
+    15→    15→
+    16→    16→import { useEffect, useMemo, useRef, useState } from "react";
+    17→    17→import { AnimatePresence, motion } from "framer-motion";
+    18→    18→import {
+    19→    19→  Calendar,
+    20→    20→  CalendarDays,
+    21→    21→  Check,
+    22→    22→  ChevronLeft,
+    23→    23→  ChevronRight,
+    24→    24→  List,
+    25→    25→  Lock,
+    26→    26→  Plane,
+    27→    27→  RotateCcw,
+    28→    28→  Sun,
+    29→    29→  UserPlus,
+    30→    30→  Users,
+    31→    31→  Utensils,
+    32→    32→  type LucideIcon,
+    33→    33→} from "lucide-react";
+    34→    34→
+    35→    35→import { useQueryClient } from "@tanstack/react-query";
+    36→    36→import { useSession } from "@/hooks/use-session";
+    37→    37→import { useApiQuery } from "@/hooks/use-api-query";
+    38→    38→import GlassCard from "@/components/glass/GlassCard";
+    39→    39→import { KpiCard } from "@/components/glass/KpiCard";
+    40→    40→import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
+    41→    41→import StatusBadge from "@/components/glass/StatusBadge";
+    42→    42→import { GlassButton } from "@/components/glass/GlassButton";
+    43→    43→import SectionHeading from "@/components/glass/SectionHeading";
+    44→    44→import { EmptyState } from "@/components/glass/EmptyState";
+    45→    45→import { ErrorState } from "@/components/glass/ErrorState";
+    46→    46→import { ListSkeleton, KpiGridSkeleton } from "@/components/glass/LoadingSkeleton";
+    47→    47→
+    48→    48→import {
+    49→    49→  AgendaDaySection,
+    50→    50→  agendaGuestRows,
+    51→    51→  agendaRowFromInstance,
+    52→    52→  dayNum,
+    53→    53→  longDayLabel,
+    54→    54→  parseKey,
+    55→    55→  weekdayShort,
+    56→    56→  type Flash,
+    57→    57→} from "./_shared/agenda-day";
+    58→    58→import { pickGuestStepTarget, stepGuestMeals } from "./_shared/guest-step";
+    59→    59→import { useEnvelopeQuery, apiJson, useInvalidateResident, RESIDENT_KEYS } from "./_shared/api";
+    60→    60→import { addDaysToKey, formatDateInTz, todayKeyInTz, friendlyError } from "./_shared/format";
+    61→    61→import { useNow } from "./_shared/use-now";
+    62→    62→import { GuestMealDialog, LeaveDialog } from "./_shared/guest-leave-dialogs";
+    63→    63→import type { BillingData, GuestMealDto, LeaveRequestDto, MealInstanceDto, MealMyState, MealsMeta, ToggleResponse } from "./_shared/types";
+    64→    64→import { ApiClientError } from "@/lib/api";
+    65→    65→import { cn } from "@/lib/utils";
+    66→    66→import { SPRING_SNAPPY } from "@/lib/motion";
+    67→    67→
+    68→    68→/* ------------------------------ cache helpers ------------------------------ */
+    69→    69→
+    70→    70→interface MealsCacheValue {
+    71→    71→  data: MealInstanceDto[];
+    72→    72→  meta: MealsMeta;
+    73→    73→}
+    74→    74→
+    75→    75→function patchCacheRows(
+    76→    76→  value: MealsCacheValue | undefined,
+    77→    77→  instanceId: string,
+    78→    78→  patch: (m: MealInstanceDto) => MealInstanceDto
+    79→    79→): MealsCacheValue | undefined {
+    80→    80→  if (!value) return value;
+    81→    81→  return { ...value, data: value.data.map((m) => (m.id === instanceId ? patch(m) : m)) };
+    82→    82→}
+    83→    83→
+    84→    84→/* ------------------------------- date helpers ------------------------------ */
+    85→    85→
+    86→    86→/** (year, monthIndex 0-11) → "YYYY-MM". */
+    87→    87→function monthKeyOf(year: number, month: number): string {
+    88→    88→  return `${year}-${String(month + 1).padStart(2, "0")}`;
+    89→    89→}
+    90→    90→
+    91→    91→function monthStartKey(year: number, month: number): string {
+    92→    92→  return `${monthKeyOf(year, month)}-01`;
+    93→    93→}
+    94→    94→
+    95→    95→function monthEndKey(year: number, month: number): string {
+    96→    96→  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    97→    97→  return `${monthKeyOf(year, month)}-${String(lastDay).padStart(2, "0")}`;
+    98→    98→}
+    99→    99→
+   100→   100→/** "September 2025". */
+   101→   101→function monthLongLabel(year: number, month: number): string {
+   102→   102→  return new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric", timeZone: "UTC" }).format(
+   103→   103→    new Date(Date.UTC(year, month, 1))
+   104→   104→  );
+   105→   105→}
+   106→   106→
+   107→   107→/** "Sep 2025" — compact KPI sub for non-current months. */
+   108→   108→function monthShortKey(year: number, month: number): string {
+   109→   109→  return new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric", timeZone: "UTC" }).format(
+   110→   110→    new Date(Date.UTC(year, month, 1))
+   111→   111→  );
+   112→   112→}
+   113→   113→
+   114→   114→/** Picker pill labels — relative for ±1 day, compact otherwise (BoardOps pattern). */
+   115→   115→function dayPillLabels(key: string, todayKey: string): { top: string; bottom: string } {
+   116→   116→  if (key === todayKey) return { top: "Today", bottom: `${weekdayShort(key)}, ${formatDateInTz(key, "UTC")}` };
+   117→   117→  if (key === addDaysToKey(todayKey, -1)) return { top: "Yesterday", bottom: `${weekdayShort(key)}, ${formatDateInTz(key, "UTC")}` };
+   118→   118→  if (key === addDaysToKey(todayKey, 1)) return { top: "Tomorrow", bottom: `${weekdayShort(key)}, ${formatDateInTz(key, "UTC")}` };
+   119→   119→  return { top: formatDateInTz(key, "UTC"), bottom: weekdayShort(key) };
+   120→   120→}
+   121→   121→
+   122→   122→const WEEKDAYS_SUN_FIRST = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+   123→   123→
+   124→   124→/* ------------------------------ circular arrow ----------------------------- */
+   125→   125→
+   126→   126→function CircleArrow({
+   127→   127→  direction,
+   128→   128→  onClick,
+   129→   129→  disabled,
+   130→   130→  label,
+   131→   131→}: {
+   132→   132→  direction: "prev" | "next";
+   133→   133→  onClick: () => void;
+   134→   134→  disabled?: boolean;
+   135→   135→  label: string;
+   136→   136→}) {
+   137→   137→  const Icon = direction === "prev" ? ChevronLeft : ChevronRight;
+   138→   138→  return (
+   139→   139→    <motion.button
+   140→   140→      type="button"
+   141→   141→      whileTap={{ scale: 0.9 }}
+   142→   142→      onClick={onClick}
+   143→   143→      disabled={disabled}
+   144→   144→      aria-label={label}
+   145→   145→      className="glass-strong flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-pill transition-colors hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+   146→   146→    >
+   147→   147→      <Icon className="size-5" aria-hidden />
+   148→   148→    </motion.button>
+   149→   149→  );
+   150→   150→}
+   151→   151→
+   152→   152→/* --------------------------------- the view -------------------------------- */
+   153→   153→
+   154→   154→type ViewMode = "agenda" | "calendar" | "day";
+   155→   155→
+   156→   156→const VIEW_OPTIONS: { value: ViewMode; label: string; icon: LucideIcon }[] = [
+   157→   157→  { value: "agenda", label: "Agenda", icon: List },
+   158→   158→  { value: "calendar", label: "Calendar", icon: CalendarDays },
+   159→   159→  { value: "day", label: "Day", icon: Sun },
+   160→   160→];
+   161→   161→
+   162→   162→export default function ResidentMeals() {
+   163→   163→  const { institution } = useSession();
+   164→   164→  const tz = institution?.timezone ?? "Asia/Kolkata";
+   165→   165→  const clientToday = todayKeyInTz(tz);
+   166→   166→
+   167→   167→  const queryClient = useQueryClient();
+   168→   168→  const invalidate = useInvalidateResident();
+   169→   169→
+   170→   170→  const now0 = new Date();
+   171→   171→  const [view, setView] = useState<ViewMode>("agenda");
+   172→   172→  const [selMonth, setSelMonth] = useState(now0.getMonth());
+   173→   173→  const [selYear, setSelYear] = useState(now0.getFullYear());
+   174→   174→  const [dayKey, setDayKey] = useState(clientToday);
+   175→   175→  const [dayExpanded, setDayExpanded] = useState(true);
+   176→   176→  const [lastDayKey, setLastDayKey] = useState(clientToday);
+   177→   177→  const [expandedDay, setExpandedDay] = useState<string | null>(clientToday);
+   178→   178→  const [guestOpen, setGuestOpen] = useState(false);
+   179→   179→  const [guestDialogDate, setGuestDialogDate] = useState<string | undefined>(undefined);
+   180→   180→  const [leaveOpen, setLeaveOpen] = useState(false);
+   181→   181→  const [flash, setFlash] = useState<Record<string, Flash>>({});
+   182→   182→  const flashTimers = useRef<Record<string, number>>({});
+   183→   183→
+   184→   184→  const from = monthStartKey(selYear, selMonth);
+   185→   185→  const to = monthEndKey(selYear, selMonth);
+   186→   186→  const isThisMonth = monthKeyOf(selYear, selMonth) === clientToday.slice(0, 7);
+   187→   187→
+   188→   188→  const mealsQuery = useEnvelopeQuery<MealInstanceDto[], MealsMeta>("/api/v1/meals", { from, to });
+   189→   189→  // Guest requests for the SAME range as the meal calendar (default ±7d was
+   190→   190→  // too narrow — guests on any visible day must render in its day section).
+   191→   191→  const guestQuery = useEnvelopeQuery<GuestMealDto[]>("/api/v1/guest-meals", { from, to });
+   192→   192→  const billingQuery = useApiQuery<BillingData>("/api/v1/billing", undefined, { staleTime: 60_000 });
+   193→   193→  const leaveQuery = useApiQuery<LeaveRequestDto[]>("/api/v1/leave-requests");
+   194→   194→
+   195→   195→  const meta = mealsQuery.data?.meta;
+   196→   196→  const serverNow = useNow(meta?.serverTime ?? null, 10_000);
+   197→   197→  const todayKey = meta?.today ?? clientToday;
+   198→   198→
+   199→   199→  // A freshly picked day always opens expanded (same as the agenda's Today).
+   200→   200→  // Official "adjust state during render" pattern — no effect needed.
+   201→   201→  if (lastDayKey !== dayKey) {
+   202→   202→    setLastDayKey(dayKey);
+   203→   203→    setDayExpanded(true);
+   204→   204→  }
+   205→   205→
+   206→   206→  useEffect(() => {
+   207→   207→    return () => {
+   208→   208→      for (const t of Object.values(flashTimers.current)) window.clearTimeout(t);
+   209→   209→    };
+   210→   210→  }, []);
+   211→   211→
+   212→   212→  function flashFor(instanceId: string, message: Flash) {
+   213→   213→    setFlash((f) => ({ ...f, [instanceId]: message }));
+   214→   214→    if (flashTimers.current[instanceId]) window.clearTimeout(flashTimers.current[instanceId]);
+   215→   215→    flashTimers.current[instanceId] = window.setTimeout(() => {
+   216→   216→      setFlash((f) => {
+   217→   217→        const next = { ...f };
+   218→   218→        delete next[instanceId];
+   219→   219→        return next;
+   220→   220→      });
+   221→   221→    }, 6_500);
+   222→   222→  }
+   223→   223→
+   224→   224→  /* --------------------------- optimistic toggle --------------------------- */
+   225→   225→
+   226→   226→  async function handleToggle(meal: MealInstanceDto, next: "ON" | "OFF") {
+   227→   227→    const queries = queryClient.getQueriesData<MealsCacheValue>({
+   228→   228→      queryKey: ["api", "/api/v1/meals"],
+   229→   229→    });
+   230→   230→    const snapshots = queries.map(([key, value]) => ({ key, value }));
+   231→   231→
+   232→   232→    let current: MealInstanceDto | undefined;
+   233→   233→    for (const { value } of snapshots) {
+   234→   234→      current = value?.data.find((m) => m.id === meal.id);
+   235→   235→      if (current) break;
+   236→   236→    }
+   237→   237→    if (!current) return;
+   238→   238→
+   239→   239→    const expectedVersion = current.myState.version;
+   240→   240→
+   241→   241→    // Optimistically flip every cached copy of this row.
+   242→   242→    for (const { key } of snapshots) {
+   243→   243→      queryClient.setQueryData<MealsCacheValue>(key, (old) =>
+   244→   244→        patchCacheRows(old, meal.id, (m) => ({
+   245→   245→          ...m,
+   246→   246→          myState: { ...m.myState, effectiveState: next } as MealMyState,
+   247→   247→        }))
+   248→   248→      );
+   249→   249→    }
+   250→   250→
+   251→   251→    try {
+   252→   252→      const res = await apiJson<ToggleResponse>(`/api/v1/meals/${meal.id}/toggle`, "POST", {
+   253→   253→        state: next,
+   254→   254→        expectedVersion,
+   255→   255→      });
+   256→   256→      // Authoritative response wins.
+   257→   257→      for (const { key } of snapshots) {
+   258→   258→        queryClient.setQueryData<MealsCacheValue>(key, (old) =>
+   259→   259→          patchCacheRows(old, meal.id, (m) => ({
+   260→   260→            ...m,
+   261→   261→            myState: {
+   262→   262→              ...m.myState,
+   263→   263→              effectiveState: res.state,
+   264→   264→              effectiveReason: res.effectiveReason,
+   265→   265→              locked: res.locked,
+   266→   266→              version: res.version,
+   267→   267→            } as MealMyState,
+   268→   268→          }))
+   269→   269→        );
+   270→   270→      }
+   271→   271→      invalidate([RESIDENT_KEYS.dashboard]);
+   272→   272→    } catch (err) {
+   273→   273→      // Rollback — the toggle springs back (spec §114).
+   274→   274→      for (const { key, value } of snapshots) {
+   275→   275→        queryClient.setQueryData<MealsCacheValue>(key, value);
+   276→   276→      }
+   277→   277→      if (err instanceof ApiClientError) {
+   278→   278→        if (err.code === "MEAL_CUTOFF_PASSED") {
+   279→   279→          flashFor(meal.id, {
+   280→   280→            tone: "warning",
+   281→   281→            text: `${meal.name} is already locked. Admin can still override it.`,
+   282→   282→          });
+   283→   283→        } else if (err.code === "RESOURCE_CHANGED") {
+   284→   284→          flashFor(meal.id, { tone: "info", text: "This meal was just changed. Refreshing…" });
+   285→   285→          void queryClient.invalidateQueries({ queryKey: ["api", "/api/v1/meals"] });
+   286→   286→        } else if (err.code === "MEAL_NOT_AVAILABLE") {
+   287→   287→          flashFor(meal.id, { tone: "warning", text: "This meal isn't available to change right now." });
+   288→   288→        } else {
+   289→   289→          flashFor(meal.id, { tone: "danger", text: err.message });
+   290→   290→        }
+   291→   291→      } else {
+   292→   292→        flashFor(meal.id, { tone: "danger", text: friendlyError(err) });
+   293→   293→      }
+   294→   294→    }
+   295→   295→  }
+   296→   296→
+   297→   297→  /* ------------------------------- grouping -------------------------------- */
+   298→   298→
+   299→   299→  const meals = mealsQuery.data?.data ?? [];
+   300→   300→
+   301→   301→  const groups = useMemo(() => {
+   302→   302→    const byDate = new Map<string, MealInstanceDto[]>();
+   303→   303→    for (const m of meals) {
+   304→   304→      const list = byDate.get(m.serviceDate) ?? [];
+   305→   305→      list.push(m);
+   306→   306→      byDate.set(m.serviceDate, list);
+   307→   307→    }
+   308→   308→    return [...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+   309→   309→  }, [meals]);
+   310→   310→
+   311→   311→  const dayMap = useMemo(() => new Map(groups), [groups]);
+   312→   312→
+   313→   313→  const guestsByInstance = useMemo(() => {
+   314→   314→    const map = new Map<string, number>();
+   315→   315→    for (const g of guestQuery.data?.data ?? []) {
+   316→   316→      if (g.status === "CANCELLED") continue;
+   317→   317→      map.set(g.mealInstanceId, (map.get(g.mealInstanceId) ?? 0) + g.quantity);
+   318→   318→    }
+   319→   319→    return map;
+   320→   320→  }, [guestQuery.data]);
+   321→   321→
+   322→   322→  /* ------------------------------ guest meals ------------------------------- */
+   323→   323→
+   324→   324→  /** Active guest requests grouped per day (CANCELLED excluded). */
+   325→   325→  const activeGuests = useMemo(
+   326→   326→    () => (guestQuery.data?.data ?? []).filter((g) => g.status !== "CANCELLED"),
+   327→   327→    [guestQuery.data]
+   328→   328→  );
+   329→   329→  const guestsByDate = useMemo(() => {
+   330→   330→    const map = new Map<string, GuestMealDto[]>();
+   331→   331→    for (const g of activeGuests) {
+   332→   332→      const list = map.get(g.serviceDate) ?? [];
+   333→   333→      list.push(g);
+   334→   334→      map.set(g.serviceDate, list);
+   335→   335→    }
+   336→   336→    return map;
+   337→   337→  }, [activeGuests]);
+   338→   338→
+   339→   339→  /** Total guest meals for the visible scope (month, or the picked day). */
+   340→   340→  const monthGuestTotal = useMemo(() => activeGuests.reduce((s, g) => s + g.quantity, 0), [activeGuests]);
+   341→   341→
+   342→   342→  /** A meal on this day is still selectable for guests (cutoff + availability). */
+   343→   343→  function dayGuestAddable(dateKey: string): boolean {
+   344→   344→    const list = dayMap.get(dateKey) ?? [];
+   345→   345→    return list.some(
+   346→   346→      (m) =>
+   347→   347→        new Date(m.cutoffAt).getTime() > serverNow &&
+   348→   348→        m.myState.effectiveState !== "NOT_AVAILABLE" &&
+   349→   349→        m.myState.effectiveState !== "ON_LEAVE"
+   350→   350→    );
+   351→   351→  }
+   352→   352→
+   353→   353→  /** Open the add-guests dialog (optionally pre-set to one day's date). */
+   354→   354→  function openGuestDialog(dateKey?: string) {
+   355→   355→    setGuestDialogDate(dateKey);
+   356→   356→    setGuestOpen(true);
+   357→   357→  }
+   358→   358→
+   359→   359→  /**
+   360→   360→   * Adjust the day's guest count with the ± stepper — self-service, under
+   361→   361→   * cutoff, no admin permission (spec: guest meals behave like normal
+   362→   362→   * meals). Optimistic patch of every cached guest list copy with rollback
+   363→   363→   * and a plain-language flash, exactly like the meal toggles (spec §114).
+   364→   364→   */
+   365→   365→  async function handleGuestStep(dateKey: string, delta: 1 | -1) {
+   366→   366→    const dayGuests = guestsByDate.get(dateKey) ?? [];
+   367→   367→    const queries = queryClient.getQueriesData<{ data: GuestMealDto[]; meta: unknown }>({
+   368→   368→      queryKey: ["api", "/api/v1/guest-meals"],
+   369→   369→    });
+   370→   370→    const snapshots = queries.map(([key, value]) => ({ key, value }));
+   371→   371→
+   372→   372→    // Optimistic: apply the same target pick locally.
+   373→   373→    const target = pickGuestStepTarget(dayGuests, delta, serverNow);
+   374→   374→    if (target) {
+   375→   375→      const nextQty = delta === 1 ? target.quantity + 1 : target.quantity - 1;
+   376→   376→      for (const { key } of snapshots) {
+   377→   377→        queryClient.setQueryData<{ data: GuestMealDto[]; meta: unknown }>(key, (old) =>
+   378→   378→          old
+   379→   379→            ? {
+   380→   380→                ...old,
+   381→   381→                data: old.data.map((g) =>
+   382→   382→                  g.id !== target.id
+   383→   383→                    ? g
+   384→   384→                    : nextQty <= 0
+   385→   385→                      ? { ...g, status: "CANCELLED" }
+   386→   386→                      : { ...g, quantity: nextQty, totalPriceMinor: g.unitPriceMinor * nextQty }
+   387→   387→                ),
+   388→   388→              }
+   389→   389→            : old
+   390→   390→        );
+   391→   391→      }
+   392→   392→    }
+   393→   393→
+   394→   394→    const result = await stepGuestMeals(dayGuests, delta, serverNow);
+   395→   395→    if (result.kind === "ok") {
+   396→   396→      invalidate([RESIDENT_KEYS.guestMeals, RESIDENT_KEYS.dashboard, RESIDENT_KEYS.billing, RESIDENT_KEYS.notifications]);
+   397→   397→    } else if (result.kind === "dialog") {
+   398→   398→      // No request can absorb the +1 — the meal choice dialog takes over.
+   399→   399→      for (const { key, value } of snapshots) queryClient.setQueryData(key, value);
+   400→   400→      openGuestDialog(dateKey);
+   401→   401→    } else {
+   402→   402→      // Rollback — the counter springs back.
+   403→   403→      for (const { key, value } of snapshots) queryClient.setQueryData(key, value);
+   404→   404→      if (result.code === "RESOURCE_CHANGED") {
+   405→   405→        flashFor(`guest-${dateKey}`, { tone: "info", text: "This guest meal was just changed. Refreshing…" });
+   406→   406→        void queryClient.invalidateQueries({ queryKey: ["api", "/api/v1/guest-meals"] });
+   407→   407→      } else if (result.code === "MEAL_CUTOFF_PASSED") {
+   408→   408→        flashFor(`guest-${dateKey}`, {
+   409→   409→          tone: "warning",
+   410→   410→          text: "Guest meals for this day are locked — the cutoff already passed.",
+   411→   411→        });
+   412→   412→      } else {
+   413→   413→        flashFor(`guest-${dateKey}`, { tone: "danger", text: result.message });
+   414→   414→      }
+   415→   415→    }
+   416→   416→  }
+   417→   417→
+   418→   418→  const stats = useMemo(() => {
+   419→   419→    let on = 0;
+   420→   420→    let off = 0;
+   421→   421→    let locked = 0;
+   422→   422→    for (const m of meals) {
+   423→   423→      if (m.myState.effectiveState === "ON") on++;
+   424→   424→      else if (m.myState.effectiveState === "OFF") off++;
+   425→   425→      if (m.myState.locked) locked++;
+   426→   426→    }
+   427→   427→    return { on, off, locked };
+   428→   428→  }, [meals]);
+   429→   429→
+   430→   430→  const dayMeals = useMemo(
+   431→   431→    () =>
+   432→   432→      meals
+   433→   433→        .filter((m) => m.serviceDate === dayKey)
+   434→   434→        .sort((a, b) => (a.cutoffAt < b.cutoffAt ? -1 : 1)),
+   435→   435→    [meals, dayKey]
+   436→   436→  );
+   437→   437→
+   438→   438→  const dayStats = useMemo(() => {
+   439→   439→    let on = 0;
+   440→   440→    let off = 0;
+   441→   441→    let locked = 0;
+   442→   442→    for (const m of dayMeals) {
+   443→   443→      if (m.myState.effectiveState === "ON") on++;
+   444→   444→      else if (m.myState.effectiveState === "OFF") off++;
+   445→   445→      if (m.myState.locked) locked++;
+   446→   446→    }
+   447→   447→    return { on, off, locked };
+   448→   448→  }, [dayMeals]);
+   449→   449→
+   450→   450→  // Auto-scroll to TODAY once, after the first data load (agenda only).
+   451→   451→  const scrolledRef = useRef(false);
+   452→   452→  const todayRef = useRef<HTMLDivElement | null>(null);
+   453→   453→  useEffect(() => {
+   454→   454→    if (scrolledRef.current || view !== "agenda" || mealsQuery.isPending) return;
+   455→   455→    if (!dayMap.has(todayKey)) return;
+   456→   456→    scrolledRef.current = true;
+   457→   457→    const t = window.setTimeout(() => {
+   458→   458→      todayRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+   459→   459→    }, 250);
+   460→   460→    return () => window.clearTimeout(t);
+   461→   461→  }, [view, mealsQuery.isPending, dayMap, todayKey]);
+   462→   462→
+   463→   463→  /* ------------------------------ month nav -------------------------------- */
+   464→   464→
+   465→   465→  function shiftMonth(delta: number) {
+   466→   466→    const d = new Date(Date.UTC(selYear, selMonth + delta, 1));
+   467→   467→    setSelMonth(d.getUTCMonth());
+   468→   468→    setSelYear(d.getUTCFullYear());
+   469→   469→    const start = monthStartKey(d.getUTCFullYear(), d.getUTCMonth());
+   470→   470→    const end = monthEndKey(d.getUTCFullYear(), d.getUTCMonth());
+   471→   471→    setDayKey((k) => (k >= start && k <= end ? k : clientToday >= start && clientToday <= end ? clientToday : start));
+   472→   472→    setExpandedDay(null);
+   473→   473→  }
+   474→   474→
+   475→   475→  function resetToCurrentMonth() {
+   476→   476→    if (isThisMonth) return;
+   477→   477→    const [y, m] = clientToday.split("-").map(Number);
+   478→   478→    setSelYear(y);
+   479→   479→    setSelMonth(m - 1);
+   480→   480→    setDayKey(clientToday);
+   481→   481→    setExpandedDay(clientToday);
+   482→   482→  }
+   483→   483→
+   484→   484→  function switchView(next: ViewMode) {
+   485→   485→    setView(next);
+   486→   486→    if (next === "day" && (dayKey < from || dayKey > to)) {
+   487→   487→      setDayKey(clientToday >= from && clientToday <= to ? clientToday : from);
+   488→   488→    }
+   489→   489→    if (next === "agenda" && !expandedDay) {
+   490→   490→      setExpandedDay(dayMap.has(todayKey) ? todayKey : null);
+   491→   491→    }
+   492→   492→  }
+   493→   493→
+   494→   494→  const guestPriceMinor = billingQuery.data?.guestPriceMinor ?? null;
+   495→   495→
+   496→   496→  /* --------------------------------- render --------------------------------- */
+   497→   497→
+   498→   498→  if (mealsQuery.isPending) {
+   499→   499→    return (
+   500→   500→      <div className="space-y-4">
+   501→   501→        <div className="flex items-center justify-center gap-4">
+   502→   502→          <div className="glass-skeleton size-10 rounded-pill" />
+   503→   503→          <div className="glass-skeleton h-12 w-full max-w-[280px] rounded-pill" />
+   504→   504→          <div className="glass-skeleton size-10 rounded-pill" />
+   505→   505→        </div>
+   506→   506→        <KpiGridSkeleton count={3} />
+   507→   507→        <ListSkeleton rows={5} />
+   508→   508→      </div>
+   509→   509→    );
+   510→   510→  }
+   511→   511→
+   512→   512→  if (mealsQuery.isError || !mealsQuery.data) {
+   513→   513→    return (
+   514→   514→      <div className="space-y-4">
+   515→   515→        <ErrorState
+   516→   516→          code={mealsQuery.error?.code}
+   517→   517→          message={mealsQuery.error?.message}
+   518→   518→          onRetry={() => void mealsQuery.refetch()}
+   519→   519→        />
+   520→   520→      </div>
+   521→   521→    );
+   522→   522→  }
+   523→   523→
+   524→   524→  const leaves = leaveQuery.data ?? [];
+   525→   525→  const viewStats = view === "day" ? dayStats : stats;
+   526→   526→  // Guest KPI scope mirrors the view: the picked day in Day view, else month.
+   527→   527→  const dayGuestTotal = (guestsByDate.get(dayKey) ?? []).reduce((s, g) => s + g.quantity, 0);
+   528→   528→  const viewGuests = view === "day" ? dayGuestTotal : monthGuestTotal;
+   529→   529→  const dayPill = dayPillLabels(dayKey, todayKey);
+   530→   530→  const kpiSub = view === "day" ? dayPill.bottom : isThisMonth ? "This month" : monthShortKey(selYear, selMonth);
+   531→   531→
+   532→   532→  return (
+   533→   533→    <StaggerGroup className="space-y-4">
+   534→   534→      {/* Picker — month for agenda/calendar, day for the day view */}
+   535→   535→      <StaggerItem>
+   536→   536→      {view === "day" ? (
+   537→   537→        <div className="flex items-center justify-center gap-3 sm:gap-4">
+   538→   538→          <CircleArrow
+   539→   539→            direction="prev"
+   540→   540→            label="Previous day"
+   541→   541→            disabled={dayKey <= from}
+   542→   542→            onClick={() => setDayKey((k) => (k > from ? addDaysToKey(k, -1) : k))}
+   543→   543→          />
+   544→   544→          <button
+   545→   545→            type="button"
+   546→   546→            onClick={() => {
+   547→   547→              if (dayKey !== todayKey) {
+   548→   548→                if (todayKey >= from && todayKey <= to) setDayKey(todayKey);
+   549→   549→                else resetToCurrentMonth();
+   550→   550→              }
+   551→   551→            }}
+   552→   552→            className="glass flex min-w-0 max-w-[280px] flex-1 cursor-pointer items-center justify-center gap-2.5 rounded-pill px-4 py-2.5 transition-all hover:ring-1 hover:ring-primary/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:px-6"
+   553→   553→          >
+   554→   554→            <Calendar className="size-4 shrink-0 text-primary" aria-hidden />
+   555→   555→            <span className="min-w-0 text-center leading-tight">
+   556→   556→              <span className="block truncate text-sm font-bold text-primary">{dayPill.top}</span>
+   557→   557→              <span className="block truncate text-[11px] text-muted-foreground">{dayPill.bottom}</span>
+   558→   558→            </span>
+   559→   559→            {dayKey !== todayKey && <RotateCcw className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
+   560→   560→          </button>
+   561→   561→          <CircleArrow
+   562→   562→            direction="next"
+   563→   563→            label="Next day"
+   564→   564→            disabled={dayKey >= to}
+   565→   565→            onClick={() => setDayKey((k) => (k < to ? addDaysToKey(k, 1) : k))}
+   566→   566→          />
+   567→   567→        </div>
+   568→   568→      ) : (
+   569→   569→        <div className="flex items-center justify-center gap-3 sm:gap-4">
+   570→   570→          <CircleArrow direction="prev" label="Previous month" onClick={() => shiftMonth(-1)} />
+   571→   571→          <button
+   572→   572→            type="button"
+   573→   573→            onClick={resetToCurrentMonth}
+   574→   574→            className="glass flex min-w-0 max-w-[280px] flex-1 cursor-pointer items-center justify-center gap-2.5 rounded-pill px-4 py-2.5 transition-all hover:ring-1 hover:ring-primary/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:px-6"
+   575→   575→          >
+   576→   576→            <Calendar className="size-4 shrink-0 text-primary" aria-hidden />
+   577→   577→            <span className="min-w-0 text-center leading-tight">
+   578→   578→              <span className="block truncate text-sm font-bold text-primary">
+   579→   579→                {monthLongLabel(selYear, selMonth).split(" ")[0]}
+   580→   580→              </span>
+   581→   581→              <span className="block truncate text-[11px] text-muted-foreground">{selYear}</span>
+   582→   582→            </span>
+   583→   583→            {!isThisMonth && <RotateCcw className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
+   584→   584→          </button>
+   585→   585→          <CircleArrow direction="next" label="Next month" onClick={() => shiftMonth(1)} />
+   586→   586→        </div>
+   587→   587→      )}
+   588→   588→      </StaggerItem>
+   589→   589→
+   590→   590→      {/* KPI cards — guests are NOT normal meals: never in the ON/OFF/Locked
+   591→   591→          counts; they get their own KPI (was "Meals OFF"). */}
+   592→   592→      <StaggerItem>
+   593→   593→      <div className="grid grid-cols-3 gap-3">
+   594→   594→        <KpiCard label="Meals ON" value={String(viewStats.on)} sub={kpiSub} icon={<Check />} glow="success" tone="success" index={0} />
+   595→   595→        <KpiCard label="Guest Meals" value={String(viewGuests)} sub={kpiSub} icon={<Users />} glow="primary" tone="primary" index={1} />
+   596→   596→        <KpiCard label="Locked" value={String(viewStats.locked)} sub="after cutoff" icon={<Lock />} glow="danger" tone="danger" index={2} />
+   597→   597→      </div>
+   598→   598→      </StaggerItem>
+   599→   599→
+   600→   600→      {/* View switch + actions */}
+   601→   601→      <StaggerItem>
+   602→   602→      <div className="flex flex-wrap items-center justify-center gap-2">
+   603→   603→        <div
+   604→   604→          role="radiogroup"
+   605→   605→          aria-label="Meals view"
+   606→   606→          className="glass-inset inline-flex items-center gap-1 rounded-pill p-1"
+   607→   607→        >
+   608→   608→          {VIEW_OPTIONS.map((opt) => {
+   609→   609→            const active = view === opt.value;
+   610→   610→            const Icon = opt.icon;
+   611→   611→            return (
+   612→   612→              <button
+   613→   613→                key={opt.value}
+   614→   614→                type="button"
+   615→   615→                role="radio"
+   616→   616→                aria-checked={active}
+   617→   617→                onClick={() => switchView(opt.value)}
+   618→   618→                className={cn(
+   619→   619→                  "relative inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-pill px-3 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+   620→   620→                  active ? "text-foreground" : "text-muted-foreground hover:text-foreground/80"
+   621→   621→                )}
+   622→   622→              >
+   623→   623→                {active && (
+   624→   624→                  <motion.span
+   625→   625→                    layoutId="meals-view-pill"
+   626→   626→                    className="absolute inset-0 rounded-pill"
+   627→   627→                    style={{
+   628→   628→                      backgroundColor: "var(--segment-active-bg)",
+   629→   629→                      boxShadow: "var(--segment-active-shadow)",
+   630→   630→                    }}
+   631→   631→                    transition={{ type: "spring", stiffness: 480, damping: 38 }}
+   632→   632→                  />
+   633→   633→                )}
+   634→   634→                <Icon className="relative z-10 size-3.5" aria-hidden />
+   635→   635→                <span className="relative z-10">{opt.label}</span>
+   636→   636→              </button>
+   637→   637→            );
+   638→   638→          })}
+   639→   639→        </div>
+   640→   640→        <GlassButton variant="secondary" size="sm" onClick={() => openGuestDialog()}>
+   641→   641→          <UserPlus aria-hidden />
+   642→   642→          Guest meal
+   643→   643→        </GlassButton>
+   644→   644→        <GlassButton variant="secondary" size="sm" onClick={() => setLeaveOpen(true)}>
+   645→   645→          <Plane aria-hidden />
+   646→   646→          Apply for leave
+   647→   647→        </GlassButton>
+   648→   648→      </div>
+   649→   649→      </StaggerItem>
+   650→   650→
+   651→   651→      {/* Content — agenda / calendar / day */}
+   652→   652→      <StaggerItem>
+   653→   653→      {view === "agenda" && (
+   654→   654→        <div className="space-y-2">
+   655→   655→          {groups.length === 0 ? (
+   656→   656→            <EmptyState
+   657→   657→              icon={Utensils}
+   658→   658→              title={`No meals scheduled for ${monthLongLabel(selYear, selMonth)}`}
+   659→   659→              description="Your mess hasn't published meal times for this month. Check back soon."
+   660→   660→            />
+   661→   661→          ) : (
+   662→   662→            <AnimatePresence initial={false} mode="popLayout">
+   663→   663→              {groups.map(([date, dayList]) => (
+   664→   664→                <motion.div
+   665→   665→                  key={date}
+   666→   666→                  ref={date === todayKey ? todayRef : undefined}
+   667→   667→                  initial={{ opacity: 0, y: 8 }}
+   668→   668→                  animate={{ opacity: 1, y: 0 }}
+   669→   669→                  exit={{ opacity: 0, scale: 0.98 }}
+   670→   670→                  transition={SPRING_SNAPPY}
+   671→   671→                >
+   672→   672→                  <AgendaDaySection
+   673→   673→                    dateKey={date}
+   674→   674→                    isToday={date === todayKey}
+   675→   675→                    rows={dayList.map((m) =>
+   676→   676→                      agendaRowFromInstance(m, tz, serverNow, guestsByInstance.get(m.id) ?? 0)
+   677→   677→                    )}
+   678→   678→                    guests={agendaGuestRows(guestsByDate.get(date) ?? [], serverNow)}
+   679→   679→                    guestAddable={dayGuestAddable(date)}
+   680→   680→                    guestFlash={flash[`guest-${date}`]}
+   681→   681→                    onAddGuests={() => openGuestDialog(date)}
+   682→   682→                    onGuestStep={(delta) => void handleGuestStep(date, delta)}
+   683→   683→                    expanded={expandedDay === date}
+   684→   684→                    onToggleExpand={() => setExpandedDay((prev) => (prev === date ? null : date))}
+   685→   685→                    flash={flash}
+   686→   686→                    onToggleMeal={(row, next) => {
+   687→   687→                      const inst = meals.find((m) => m.id === row.id);
+   688→   688→                      if (inst) void handleToggle(inst, next);
+   689→   689→                    }}
+   690→   690→                  />
+   691→   691→                </motion.div>
+   692→   692→              ))}
+   693→   693→            </AnimatePresence>
+   694→   694→          )}
+   695→   695→        </div>
+   696→   696→      )}
+   697→   697→
+   698→   698→      {view === "calendar" && (
+   699→   699→        <GlassCard className="p-4">
+   700→   700→          {/* Weekday headers (Sun-first) */}
+   701→   701→          <div className="mb-2 grid grid-cols-7 gap-1">
+   702→   702→            {WEEKDAYS_SUN_FIRST.map((wd) => (
+   703→   703→              <div key={wd} className="py-1 text-center text-[10px] font-medium text-muted-foreground">
+   704→   704→                {wd}
+   705→   705→              </div>
+   706→   706→            ))}
+   707→   707→          </div>
+   708→   708→          {/* Calendar grid */}
+   709→   709→          <div className="grid grid-cols-7 gap-1">
+   710→   710→            {(() => {
+   711→   711→              const startJsDay = parseKey(from).getUTCDay();
+   712→   712→              const lastDay = parseKey(to).getUTCDate();
+   713→   713→              const cells: (string | null)[] = [];
+   714→   714→              for (let i = 0; i < startJsDay; i++) cells.push(null);
+   715→   715→              for (let d = 1; d <= lastDay; d++) {
+   716→   716→                cells.push(`${monthKeyOf(selYear, selMonth)}-${String(d).padStart(2, "0")}`);
+   717→   717→              }
+   718→   718→              while (cells.length % 7 !== 0) cells.push(null);
+   719→   719→
+   720→   720→              return cells.map((key, i) => {
+   721→   721→                if (!key) return <div key={`pad-${i}`} className="aspect-square min-h-[44px]" />;
+   722→   722→                const entries = dayMap.get(key) ?? [];
+   723→   723→                const dayGuests = guestsByDate.get(key) ?? [];
+   724→   724→                const guestCount = dayGuests.reduce((s, g) => s + g.quantity, 0);
+   725→   725→                const isToday = key === todayKey;
+   726→   726→                const isPast = key < todayKey;
+   727→   727→                const onCount = entries.filter((m) => m.myState.effectiveState === "ON").length;
+   728→   728→                const offCount = entries.filter((m) => m.myState.effectiveState === "OFF").length;
+   729→   729→                const hasLocked = entries.some((m) => m.myState.locked);
+   730→   730→
+   731→   731→                return (
+   732→   732→                  <button
+   733→   733→                    key={key}
+   734→   734→                    type="button"
+   735→   735→                    onClick={() => {
+   736→   736→                      setDayKey(key);
+   737→   737→                      switchView("day");
+   738→   738→                    }}
+   739→   739→                    aria-label={`${longDayLabel(key)}${entries.length ? `, ${entries.length} meals` : ", no meals"}`}
+   740→   740→                    className={cn(
+   741→   741→                      "relative flex aspect-square min-h-[44px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] transition-all focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+   742→   742→                      isToday
+   743→   743→                        ? "bg-primary/15 ring-1 ring-primary/40"
+   744→   744→                        : entries.length > 0
+   745→   745→                          ? "glass-inset hover:ring-1 hover:ring-primary/30"
+   746→   746→                          : "opacity-40 hover:opacity-70",
+   747→   747→                      !isToday && isPast && "opacity-60"
+   748→   748→                    )}
+   749→   749→                  >
+   750→   750→                    <span className={cn("font-bold", isToday ? "text-primary" : "text-foreground")}>{dayNum(key)}</span>
+   751→   751→                    {(entries.length > 0 || guestCount > 0) && (
+   752→   752→                      <span className="flex items-center gap-0.5">
+   753→   753→                        {onCount > 0 && <span className="size-1.5 rounded-full bg-success" />}
+   754→   754→                        {offCount > 0 && <span className="size-1.5 rounded-full bg-warning" />}
+   755→   755→                        {hasLocked && <span className="size-1.5 rounded-full bg-danger" />}
+   756→   756→                        {guestCount > 0 && <span className="size-1.5 rounded-full bg-primary" />}
+   757→   757→                      </span>
+   758→   758→                    )}
+   759→   759→                  </button>
+   760→   760→                );
+   761→   761→              });
+   762→   762→            })()}
+   763→   763→          </div>
+   764→   764→          {/* Legend */}
+   765→   765→          <div className="mt-3 flex flex-wrap items-center justify-center gap-4 border-t border-border/40 pt-3">
+   766→   766→            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+   767→   767→              <span className="size-1.5 rounded-full bg-success" /> ON
+   768→   768→            </span>
+   769→   769→            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+   770→   770→              <span className="size-1.5 rounded-full bg-warning" /> OFF
+   771→   771→            </span>
+   772→   772→            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+   773→   773→              <span className="size-1.5 rounded-full bg-danger" /> Locked
+   774→   774→            </span>
+   775→   775→            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+   776→   776→              <span className="size-1.5 rounded-full bg-primary" /> Guests
+   777→   777→            </span>
+   778→   778→          </div>
+   779→   779→        </GlassCard>
+   780→   780→      )}
+   781→   781→
+   782→   782→      {view === "day" && (
+   783→   783→        <div className="space-y-3">
+   784→   784→          {dayMeals.length === 0 ? (
+   785→   785→            <EmptyState
+   786→   786→              icon={Utensils}
+   787→   787→              title="No meals on this date"
+   788→   788→              description={
+   789→   789→                dayKey < todayKey
+   790→   790→                  ? "No meal records for this past date."
+   791→   791→                  : "The kitchen hasn't published meals for this date yet — try another day."
+   792→   792→              }
+   793→   793→            />
+   794→   794→          ) : (
+   795→   795→            <AnimatePresence initial={false} mode="popLayout">
+   796→   796→              <motion.div
+   797→   797→                key={dayKey}
+   798→   798→                initial={{ opacity: 0, y: 8 }}
+   799→   799→                animate={{ opacity: 1, y: 0 }}
+   800→   800→                exit={{ opacity: 0, scale: 0.98 }}
+   801→   801→                transition={SPRING_SNAPPY}
+   802→   802→              >
+   803→   803→                {/* The Day view is the agenda's day section for the picked date. */}
+   804→   804→                <AgendaDaySection
+   805→   805→                  dateKey={dayKey}
+   806→   806→                  isToday={dayKey === todayKey}
+   807→   807→                  rows={dayMeals.map((m) =>
+   808→   808→                    agendaRowFromInstance(m, tz, serverNow, guestsByInstance.get(m.id) ?? 0)
+   809→   809→                  )}
+   810→   810→                  guests={agendaGuestRows(guestsByDate.get(dayKey) ?? [], serverNow)}
+   811→   811→                  guestAddable={dayGuestAddable(dayKey)}
+   812→   812→                  guestFlash={flash[`guest-${dayKey}`]}
+   813→   813→                  onAddGuests={() => openGuestDialog(dayKey)}
+   814→   814→                  onGuestStep={(delta) => void handleGuestStep(dayKey, delta)}
+   815→   815→                  expanded={dayExpanded}
+   816→   816→                  onToggleExpand={() => setDayExpanded((e) => !e)}
+   817→   817→                  flash={flash}
+   818→   818→                  onToggleMeal={(row, next) => {
+   819→   819→                    const inst = dayMeals.find((m) => m.id === row.id);
+   820→   820→                    if (inst) void handleToggle(inst, next);
+   821→   821→                  }}
+   822→   822→                />
+   823→   823→              </motion.div>
+   824→   824→            </AnimatePresence>
+   825→   825→          )}
+   826→   826→        </div>
+   827→   827→      )}
+   828→   828→      </StaggerItem>
+   829→   829→
+   830→   830→      {/* My leave requests */}
+   831→   831→      <StaggerItem>
+   832→   832→      <section aria-labelledby="meals-leave" className="space-y-3">
+   833→   833→        <SectionHeading>
+   834→   834→          <span id="meals-leave">My leave requests</span>
+   835→   835→        </SectionHeading>
+   836→   836→        {leaveQuery.isPending ? (
+   837→   837→          <ListSkeleton rows={2} />
+   838→   838→        ) : leaves.length === 0 ? (
+   839→   839→          <EmptyState
+   840→   840→            icon={Plane}
+   841→   841→            title="No leave requests yet"
+   842→   842→            description="Going out of town? Apply for leave and your meals turn off while you're away."
+   843→   843→          />
+   844→   844→        ) : (
+   845→   845→          <div className="max-h-96 space-y-2.5 overflow-y-auto pr-1">
+   846→   846→            {leaves.map((l) => (
+   847→   847→              <div key={l.id} className="glass-inset rounded-md p-3.5">
+   848→   848→                <div className="flex items-start justify-between gap-3">
+   849→   849→                  <div className="min-w-0">
+   850→   850→                    <p className="kpi-num text-sm font-semibold">
+   851→   851→                      {l.startDate} → {l.endDate}
+   852→   852→                    </p>
+   853→   853→                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{l.reason}</p>
+   854→   854→                  </div>
+   855→   855→                  <StatusBadge status={l.status} />
+   856→   856→                </div>
+   857→   857→                <p className="mt-1.5 text-xs text-muted-foreground">
+   858→   858→                  {l.preview.futureUnlockedMeals} future unlocked meals will turn off
+   859→   859→                  {l.preview.alreadyLockedMeals > 0
+   860→   860→                    ? `; ${l.preview.alreadyLockedMeals} locked meals stay unchanged`
+   861→   861→                    : ""}
+   862→   862→                  .
+   863→   863→                </p>
+   864→   864→                {l.status === "REJECTED" && l.reviewReason && (
+   865→   865→                  <p className="mt-1 text-xs font-medium text-danger">Reason: {l.reviewReason}</p>
+   866→   866→                )}
+   867→   867→              </div>
+   868→   868→            ))}
+   869→   869→          </div>
+   870→   870→        )}
+   871→   871→      </section>
+   872→   872→      </StaggerItem>
+   873→   873→
+   874→   874→      <GuestMealDialog
+   875→   875→        open={guestOpen}
+   876→   876→        onOpenChange={(next) => {
+   877→   877→          setGuestOpen(next);
+   878→   878→          if (!next) setGuestDialogDate(undefined);
+   879→   879→        }}
+   880→   880→        tz={tz}
+   881→   881→        todayKey={todayKey}
+   882→   882→        guestPriceMinor={guestPriceMinor}
+   883→   883→        initialDate={guestDialogDate}
+   884→   884→      />
+   885→   885→      <LeaveDialog open={leaveOpen} onOpenChange={setLeaveOpen} todayKey={todayKey} />
+   886→   886→    </StaggerGroup>
+   887→   887→  );
+   888→   888→}
+   889→   889→

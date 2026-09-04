@@ -1,0 +1,402 @@
+   931→   or post a memo journal and apply it at next generation.
+   932→
+   933→8. MODERATE — Bill adjustments mutate totalDue/status with no journal and no funds-model effect.
+   934→   File: src/app/api/v1/admin/bills/[id]/adjustment/route.ts:52-79.
+   935→   Why wrong: after a discount/surcharge, bill.totalDueMinor (and funds.amountToPay) diverges from
+   936→   subtotalMinor (funds.charges) and from the ledger — the two money projections disagree with each
+   937→   other and with RESIDENT_FUNDS; income accounts never reflect the correction. (Route header documents
+   938→   the decision, but the ledger-is-source-of-truth invariant is broken.)
+   939→   Fix: post an adjustment journal (discount: Dr MEAL_CHARGE_INCOME / Cr RESIDENT_FUNDS; surcharge
+   940→   mirrored) and include adjustmentsMinor in the funds derivation.
+   941→
+   942→9. MINOR — Arithmetic confirmation is fully client-supplied (bypass).
+   943→   Files: billing.ts:418-427 + generate/route.ts:15-19 only verify answer == a+b for CLIENT-CHOSEN a,b
+   944→   (range 2-9). The readiness-issued challenge (readiness/route.ts:25-26) is never tied to the generate
+   945→   call. Spec §54 says it "prevents accidental clicks. It is not authentication", so impact is low, but
+   946→   the gate is decorative for scripted clients. Fix: have the server issue/sign the challenge and
+   947→   verify the same pair on generate.
+   948→
+   949→10. MINOR — Overdue comparisons flip at UTC midnight (05:30 IST).
+   950→    Files: dueDate stored as a UTC-midnight date marker (billing.ts:641) but compared to wall-clock
+   951→    `new Date()` in billing.ts:917, bills/route.ts:42, admin/bills/route.ts:85,
+   952→    bills/[id]/adjustment/route.ts:60 — a bill shows overdue 5.5h late in Asia/Kolkata. Fix: compare
+   953→    against the zoned end-of-day instant or store dueDate as a tz instant.
+   954→
+   955→11. MINOR — Unbilled leavers & empty bills.
+   956→    Files: billing.ts:477-486 (residents = status ACTIVE only) — a resident deactivated after consuming
+   957→    meals never gets a bill (their meals still lower the per-meal charge via the formula divisor, cost
+   958→    never recovered); conversely an ACTIVE resident with 0 meals + 0 guests gets an empty PAID bill
+   959→    (billing.ts:656-734, no zero-subtotal skip). Fix: bill any resident with ON meals in the period
+   960→    regardless of current status; skip (or explicitly mark) zero-subtotal bills.
+   961→
+   962→12. MINOR — derivePaymentStatus labels any past-due PARTIALLY_PAID bill "Overdue" (display only,
+   963→    billing.ts:915-920).
+   964→
+   965→VERIFIED CLEAN (no bugs found):
+   966→- postJournal (ledger.ts:70-109): Dr=Cr enforced before write, zero/negative/both-sides lines rejected,
+   967→  tx-aware; all 6 call sites post balanced journals; reversal journals for payment/expense voids are
+   968→  correct mirrored entries.
+   969→- Generation idempotency & concurrency: status OPEN + generationState:null guard (updateMany), Bill
+   970→  @@unique([residentId, billingPeriodId]), bill-number findUnique collision skip, readiness re-run
+   971→  inside the transaction with rollback — running generation twice fails cleanly with
+   972→  BILLING_ALREADY_BILLED; reopening is restricted (BILLED only, 48h window, audit-only, bills stay
+   973→  authoritative; REOPENED periods can't regenerate).
+   974→- Formula parser precedence (expression→term→primary, left-assoc), whitelist, arity checks, node/depth
+   975→  budgets, divide-by-zero → FORMULA_DIVIDE_BY_ZERO (blocks billing), unknown node types throw.
+   976→- period-variables month boundaries: serviceDate/expense.date compared as UTC-midnight markers,
+   977→  payment submittedAt as tz instants — both conventions applied consistently; no off-by-one found.
+   978→- User↔UserProfile inverted relation: every audited billing query uses the correct side
+   979→  (user.profile include / userProfile.userId lookups); institutionId scoping present on all other
+   980→  billing queries and list endpoints.
+   981→- Readiness checks 1-9, 11 (period open, pending payments/expenses, formula version, ledger reconcile,
+   982→  duplicate meals/instances, guest total recompute) all correctly scoped and computed.
+   983→
+   984→Next actions (for orchestrator): fix #1 first (one-line, unblocks correct pricing everywhere),
+   985→then #2/#3 before any real billing run; #4-#8 before multi-tenant/production use. Re-run E2E
+   986→generation through the LIVE path after fixing #1 and verify the generated meal charge equals
+   987→(snapshot.total market cost − guest income)/meals rounded to paise.
+   988→
+   989→---
+   990→Task ID: 10
+   991→Agent: Main Orchestrator (Z.ai Code)
+   992→Task: User report "fix the logics" — full domain-logic audit + fixes across money, billing, meals, payments, refunds
+   993→
+   994→Work Log:
+   995→- User had signed in successfully (post Task-8 auth fix) and browsed all admin views; no runtime
+   996→  errors in their traffic → ran 3 PARALLEL audit agents (9-a billing/ledger, 9-b meals/tasks,
+   997→  9-c payments/funds) over the domain code; their findings are appended above under Task IDs 9-a/9-b/9-c.
+   998→- CRITICAL FIX 1 — money.ts divideMinorRoundHalfUp returned 100× the true quotient (empirically
+   999→  verified: 1734000/352 → 492600 instead of 4926). EVERY division (formula preview/evaluator,
+  1000→  billing generation, per-meal estimates) overcharged 100×. Fixed integer math (base=floor(q/10),
+  1001→  bump ONE minor unit on half-up); 11-case test table passes; live formula preview now −₹1.51
+  1002→  for (0−11000)/73 where it would have been −₹151.00.
+  1003→- CRITICAL FIX 2 — billing.ts billed guest meals at CURRENT settings price instead of the
+  1004→  per-request totalPriceMinor frozen at booking (fixed-price instances diverged). Bills now use
+  1005→  Σ stored totals with an "as booked" provenance label.
+  1006→- CRITICAL FIX 3 — negative per-meal charge could generate negative bills/lines (Sep data is
+  1007→  exactly this: (0−11000)/73). Readiness check 4 now fails with an explanatory message.
+  1008→- CRITICAL FIX 4 — refunds were payable against PENDING (unapproved) money
+  1009→  (creditable=available+pending). Now approved funds only; post-condition re-verifies
+  1010→  available ≥ 0 inside the tx (concurrent over-refund rolls back).
+  1011→- CRITICAL FIX 5 — CARRY_FORWARD refunds erased real credit from availableMinor (subtract with
+  1012→  no journal). carryForwardMinor is now informational; available = credits − charges − refundsIssued.
+  1013→- CRITICAL FIX 6 — bills never settled after generation. New deterministic
+  1014→  recomputeBillSettlement(tx, residentId) in funds.ts: pool = Σ APPROVED payments allocated FIFO
+  1015→  to live bills (oldest due first, capped at subtotal+adjustments, status PAID/PARTIALLY_PAID/
+  1016→  OVERDUE derived). Called in payment approve AND void (recompute excludes/includes the payment —
+  1017→  no attribution drift; an incremental un-apply over-reversed during testing, which motivated the
+  1018→  full-recompute design). Verified: meera approve → bill PAID; true-up pass fixed sahid's stale
+  1019→  state; riya PAID with 109532 unapplied credit (minus 50000 refund = funds kernel available).
+  1020→- MODERATE FIXES: ISSUE_REFUND journal now Dr RESIDENT_FUNDS / Cr CASH directly (was Cr
+  1021→  REFUND_PAYABLE, never settled → CASH overstated); readiness submitted-tasks count scoped via
+  1022→  task.institutionId (was global); meal toggle + admin override writes are now version-conditional
+  1023→  updateMany (atomic optimistic concurrency, RESOURCE_CHANGED on race — verified 409 wrong-version
+  1024→  / 200 correct-version); task submission only legal from IN_PROGRESS (spec §61); login rate
+  1025→  limits reworked to failures-only per IP+email (10 fails/15min) + 30/15min IP cap — successes no
+  1026→  longer self-lockout and one tester can't block a real user (rateLimitCount/rateLimitCheck added
+  1027→  to rate-limit.ts); guest-meal creation is idempotent (IdempotencyRecord scope GUEST_MEAL_ADD,
+  1028→  client sends crypto.randomUUID per dialog open — verified same key replays same row, 1 DB row);
+  1029→  pay-dialog now sends idempotencyKey (payments route already supported it); expense POST rejects
+  1030→  dates inside BILLED periods (BILLING_PERIOD_CLOSED 409); dateKeySchema rejects impossible
+  1031→  calendar dates (2026-02-30); refreshAndLock honors freeze-at-cutoff semantics — leave approved
+  1032→  or calendar event created AFTER a meal's cutoff can no longer retroactively flip that meal
+  1033→  (only facts known at cutoff participate in the frozen evaluation).
+  1034→
+  1035→Verification (all live):
+  1036→- lint clean; dev server healthy; no console errors.
+  1037→- Formula preview: correct paise math; readiness Sep fails on negative charge + pending items (correct).
+  1038→- Payment approve → journal balanced Dr CASH 200000/Cr RESIDENT_FUNDS; bill settled to PAID.
+  1039→- Refund 1500 > available 1095.32 → INSUFFICIENT_REFUND_CREDIT with exact amount; refund 500 →
+  1040→  available 595.32, journal Dr RESIDENT_FUNDS/Cr CASH balanced.
+  1041→- Void + recompute + true-up: all 5 Aug bills correct (2 PAID, 3 PARTIALLY_PAID).
+  1042→- Browser E2E: admin dashboard KPIs (−₹1.51 per-meal now truthful), resident sahid dashboard
+  1043→  balance −₹156.72 + amount-to-pay ₹156.72 + billing page "BILL-202608-0001 PARTIALLY_PAID
+  1044→  Total ₹3,656.72 Left ₹156.72"; meal toggle version-guard verified via UI + curl.
+  1045→- Old 500s in dev.log (task-submissions ?status filter, generate for period cmtkm9gpu…) traced to
+  1046→  the PRE-re-seed database generation (institution cmtkm9ftg…) — both endpoints return 200 now.
+  1047→
+  1048→Stage Summary:
+  1049→- 6 critical + ~10 moderate logic bugs fixed across money.ts, billing.ts, funds.ts, refunds,
+  1050→  payments approve/void, meals toggle, admin override, task submission, login rate limits,
+  1051→  guest-meals idempotency, expenses closed-period guard, date validation, meal-engine freeze.
+  1052→- Money integrity restored: divisions correct, guest billing matches confirmed bookings, refunds
+  1053→  only pay out approved funds, bills settle FIFO from the approved pool, ledger stays balanced.
+  1054→- Files touched: src/lib/money.ts, src/lib/domain/billing.ts, src/lib/domain/funds.ts,
+  1055→  src/lib/domain/meal-engine.ts, src/lib/rate-limit.ts, src/lib/validation.ts,
+  1056→  api/v1/admin/refunds/route.ts, api/v1/admin/payments/[id]/approve + void routes,
+  1057→  api/v1/meals/[instanceId]/toggle, api/v1/admin/meals/[instanceId]/override,
+  1058→  api/v1/tasks/[id]/submission, api/v1/auth/login, api/v1/guest-meals,
+  1059→  api/v1/admin/expenses, resident _shared/pay-dialog.tsx + guest-leave-dialogs.tsx.
+  1060→
+  1061→---
+  1062→Task ID: 6-b
+  1063→Agent: frontend-styling-expert-b
+  1064→Task: Polish the two DASHBOARDS (resident #/app/dashboard + admin #/admin/dashboard) to the
+  1065→"Liquid Glass II" premium standard — hero treatment, staggered KPI grid, animated lists.
+  1066→UI-only: every prop/hook/API path/domain string preserved. Only 2 files touched.
+  1067→
+  1068→Work Log:
+  1069→- Read worklog + reference APIs first: glass/GlassCard (sheen/entrance/entranceDelay/strong/
+  1070→  interactive), KpiCard (NEW index prop → entranceDelay = 0.06+i*0.08), PageHeader,
+  1071→  SectionHeading, ActivityItem, GlassButton, LoadingSkeleton, lib/motion (SPRING_SOFT,
+  1072→  staggerDelay), resident _shared/{format,icons,use-now,types}, admin _shared/chrome (KpiGrid),
+  1073→  globals.css (verified --primary/--warning/--gold vars + all effect classes exist).
+  1074→- src/components/app/resident/dashboard.tsx:
+  1075→  • PageHeader → hero GlassCard (strong + liquid-sheen + entrance, p-5 sm:p-7): display-font
+  1076→    h1 (font-display text-[26px] sm:text-[32px] font-bold), greeting/date/localTime subtitle,
+  1077→    aurora gradient blob (absolute -right-10 -top-10 size-44 from-primary/25 via-gold/15 to-
+  1078→    transparent blur-2xl, pointer-events-none, content relative z-10) with .float-y gated on
+  1079→    useReducedMotion, and the "Today's meals" GlassButton CTA (unchanged target/copy).
+  1080→  • KPI grid → gap-4 + index={0..3} on each KpiCard (built-in 0.06→0.3s mount stagger).
+  1081→  • TodayMealCard: GlassCard sheen + entrance + entranceDelay (0.28 + staggerDelay(i)); icon
+  1082→    container upgraded to the icon-orb pattern tinted via existing mealTint() (ON→emerald,
+  1083→    else frost/primary) — size-11 rounded-xl + inset highlight + primary glow shadow.
+  1084→  • Pinned announcements: warning-tinted orb (from-warning/22→warning/6, --warning glow) +
+  1085→    GlassCard sheen/entrance stagger (0.36 + staggerDelay(i)); border-warning/25 kept.
+  1086→  • Activity feed: rows wrapped in motion.div initial{opacity:0,y:16}→{1,0} with
+  1087→    {...SPRING_SOFT, delay: ACTIVITY_OFFSET + staggerDelay(i)} (0.44 base; staggerDelay's
+  1088→    0.4s clamp = "max ~6 staggered then rest together"); kept max-h-96 overflow-y-auto +
+  1089→    ActivityItem + unread dot.
+  1090→  • Loading (shimmer skeletons) and error (PageHeader + ErrorState) branches untouched;
+  1091→    PageHeader import retained (still used in the error branch).
+  1092→- src/components/app/admin/dashboard.tsx:
+  1093→  • PageHeader → hero GlassCard (strong + sheen + entrance): "{greeting.text} 👋" display h1,
+  1094→    institution · local-time subtitle (kpi-num), same aurora blob + reduced-motion-gated
+  1095→    float-y, and a NEW hero CTA "Needs attention · N" (GlassButton primary, TriangleAlert)
+  1096→    that navigates to the FIRST existing needsAttention href — only rendered when queues are
+  1097→    non-empty (reuses existing routes, no new navigation surface).
+  1098→  • Replaced the KpiGrid wrapper call with an inline grid (gap-4, same breakpoints) that maps
+  1099→    the SAME 4 KpiSpec objects to KpiCard with index={i} (the shared KpiGrid in _shared/chrome
+  1100→    doesn't forward index and is off-limits to edit). KpiGrid import removed cleanly; copy
+  1101→    ("Month just started" tooltip, "per meal · …") intact.
+  1102→  • Needs attention cards: GlassCard interactive + sheen (hover lift/press preserved), warning
+  1103→    icon-orb, entrance via a wrapping motion.div (SPRING_SOFT + 0.3 + staggerDelay(i)) — NOT
+  1104→    GlassCard's entrance prop, because in the interactive branch GlassCard omits the
+  1105→    animationDelay style while .anim-rise runs at 0s, which masks the framer delay (verified
+  1106→    in-browser: all cards rose together; after the change the 0.3s+ stagger spring is live).
+  1107→  • Both section headings now use glass/SectionHeading (h2 + gradient tick + action slot) with
+  1108→    the SAME aria-labelledby ids preserved via inner <span id>; "All clear" StatusBadge moved
+  1109→    into the action slot.
+  1110→  • Activity feed: kept the clickable audit rows (toast-on-click behavior is existing logic —
+  1111→    ActivityItem is a div with no onClick, so literal reuse would drop interactivity); rows
+  1112→    restyled to ActivityItem's chip look (border/border bg-muted/50 rounded-pill), each
+  1113→    wrapped in the motion stagger (0.38 + staggerDelay(i)); container max-h-[22rem] → max-h-96
+  1114→    per the long-list rule (still glass + overflow-y-auto).
+  1115→  • Loading skeletons and error branch untouched.
+  1116→- Verification (live, dev server left running):
+  1117→  • `bun run lint` → passes with ZERO warnings/errors.
+  1118→  • `bunx tsc --noEmit` → NO errors in either of my 2 files (repo has pre-existing errors in
+  1119→    unrelated files: seed.ts, other admin screens, GlassCard itself — not mine, untouched).
+  1120→  • agent-browser smoke tests: logged in as resident (sahid@) and admin (admin@): both
+  1121→    dashboards render — hero card (glass-strong liquid-sheen anim-rise), blob with float-y,
+  1122→    h1 font-display sizes, KPI stagger 0.06/0.14/0.22/0.3s, meal/announcement delays 0.28-0.4s,
+  1123→    attention-card spring stagger confirmed via opacity sampling (0 → hold → spring settle at
+  1124→    0.3s+), 12 activity rows, aria-labelledby ids intact, ZERO console/page errors.
+  1125→  • No stray files left; only the 2 allowed .tsx files modified.
+  1126→
+  1127→Stage Summary:
+  1128→- Both dashboards now carry the full Liquid Glass II treatment: strong hero panel with aurora
+  1129→  blob + display type + primary CTA, staggered KPI grid (index prop), icon-orb meal/attention
+  1130→  icons, spring-staggered lists clamped at ~6 items, long-list scroll containment, reduced-
+  1131→  motion gating on the hero float.
+  1132→- Admin got a hero shortcut ("Needs attention · N" → first queue) built purely from existing
+  1133→  hrefs; resident hero keeps its "Today's meals" CTA. All data fetching, hooks, API paths,
+  1134→  domain copy and screen structure are byte-identical in behavior.
+  1135→- Known notes for the glass/ owner: GlassCard's interactive+entrance combo drops
+  1136→  entranceDelay (style not forwarded → .anim-rise fires at 0s and masks the framer spring);
+  1137→  callers can work around it by wrapping, as done here for the admin attention cards.
+  1138→
+  1139→---
+  1140→
+  1141→Task ID: 6-a
+  1142→Agent: frontend-styling-expert-a
+  1143→Task: Liquid Glass II polish — shared chrome components (11 files in src/components/glass/)
+  1144→
+  1145→Work Log:
+  1146→- Read worklog + design-system foundation first (globals.css materials/effects, lib/motion presets) and the reference implementations (GlassCard, GlassButton, BottomNav, AppBar, KpiCard, AuthScreen) before touching anything.
+  1147→- Sidebar.tsx: outer <aside> keeps the load-bearing geometry AppRoot pairs with `lg:pl-[260px]` (fixed inset-y-0 left-0 w-[260px]); the visible rail now floats inside that footprint on a 12px moat (glass-nav + liquid-sheen + rounded-xl, 236px wide) with a slide-in-from-left mount spring (x:-24 → 0, SPRING_SOFT). Brand header: font-display wordmark + glow-breathe logo orb. Nav rows: h-11 (44px) rounded-pill rows with a layoutId shared spring indicator (border-primary/30 + bg-primary/14 + inset highlight), icon pop on activation (remount key + SPRING_POP), BottomNav-style hovers (hover:bg-foreground/5 dark:hover:bg-white/6). Unread badge gains pulse-dot. User footer: two-row glass-inset card (primary-gradient initials orb; theme toggle + sign-out both 44px targets).
+  1148→- MoreSheet.tsx: rounded-t-[36px] sheet, w-11 drag-handle pill, spring-feel Radix slide-up (data-[state=open]:duration-[520ms] ease-[cubic-bezier(0.32,1.26,0.4,1)] riding the Radix slide-in keyframes — y:100%→0 with overshoot; 260ms settle on exit), tiles cascade in with real SPRING_SOFT springs (0.04s steps), each tile = glass-inset + liquid-sheen with a primary icon orb + whileTap press. safe-b kept.
+  1149→- FilterSheet.tsx: identical sheet treatment (handle pill, spring-eased slide, cascading title/body/footer at 0.04/0.1/0.16s delays); desktop inline panel gains liquid-sheen + anim-rise + font-display title; added "use client" (file now imports framer-motion). Prop API unchanged.
+  1150→- ConfirmDialog.tsx: shell scale-fades in from 0.94 (inline `--tw-enter-scale` var riding the Radix zoom-in keyframes) with a spring-like overshoot curve, 200ms fade-zoom exit (Radix keeps mount during exit); tone-tinted icon orb (TriangleAlert danger / Info primary) pops with SPRING_POP; header/footer cascade with SPRING_SOFT; font-display title. Destructive confirm still uses GlassButton destructive; reason-input + focus logic untouched.
+  1151→- TabRow.tsx: active pill is now the primary-tinted shared-layout indicator (border-primary/30 bg-primary/14 + glow, SPRING_SNAPPY via lib preset instead of inline spring), active text text-primary, count badge tints primary when active, scroll row uses no-scrollbar + fade-x, springy whileTap on tab buttons. role=tablist/tab + aria-selected preserved.
+  1152→- ActivityItem.tsx: primary-tinted icon orb (icon-orb pattern from the cheatsheet), spring hover lift (y:-2, guarded by useReducedMotion), subtle staggered mount entrance (new optional `index` prop, 0.05s steps capped 0.3s), new optional `unread` prop renders a pulse-dot next to the title. Now a client component ("use client" added — both importers already client modules).
+  1153→- EmptyState.tsx: icon floats in a tinted primary orb (float-y wrapper, 64px rounded-full, inset highlight + glow shadow); root gains anim-rise; stays 100% server-safe (pure CSS, no directive needed).
+  1154→- ErrorState.tsx: danger orb pops in with a springy wobble (scale 0.5 + rotate -12 → settle via SPRING_POP), root anim-rise entrance, kpi-num on the support code chip, GlassButton secondary retry kept.
+  1155→- LoadingSkeleton.tsx: ListSkeleton rows + KpiGridSkeleton cards stagger in with anim-rise (0.05–0.06s steps, capped 0.3/0.36s) so loading layouts cascade like loaded ones; all exports (Skeleton, SkeletonLine, SkeletonCard, KpiGridSkeleton, ListSkeleton, default) and signatures unchanged; still server-safe CSS-only.
+  1156→- GlassToggle.tsx: checked track crossfades to the mint primary gradient + tinted glow (same fill treatment as GlassButton primary), knob slides on SPRING_SNAPPY, every transition honors useReducedMotion; switch semantics, geometry and icon crossfade unchanged.
+  1157→- Money.tsx: verified — every amount already renders inside .kpi-num (tabular lining figures + tight tracking); formatting logic untouched, doc comment added to lock the invariant.
+  1158→- Backward compatibility: every exported name + prop preserved; only ADDITIVE optional props (ActivityItem `unread`/`index`). All interactive elements ≥44px touch targets with focus-visible:outline-2/offset-2/outline-ring; aria labels preserved; no blue/indigo hues introduced.
+  1159→- Verification: `bun run lint` → exit 0, zero warnings/errors. `bunx tsc --noEmit` → zero errors in all 11 touched files (repo has pre-existing tsc errors elsewhere — scripts/, examples/, skills/ and some app screens — none in components/glass/). NOTE: the dev server was NOT listening on port 3000 at any point during this task (no bun/next process; last dev.log entry is a 200 response) — per instructions I did NOT start/restart it, so no curl render check was possible. Orchestrator should restart it and eyeball: desktop sidebar rail (floating + active pill), More/Filter sheets (staggered tiles), ConfirmDialog (orb + spring zoom), TabRow (primary pill + edge fades), GlassToggle (mint glow).
+  1160→
+  1161→Stage Summary:
+  1162→- All 11 shared chrome components now speak fluent Liquid Glass II: floating sidebar rail with shared-layout nav pills, spring bottom sheets with staggered icon-orb tiles, spring scale-in confirm dialog with tone orbs, primary tab indicator with fade-x scroll row, orb'd activity rows with hover lift, floating empty-state orbs, wobbling error orbs, staggered skeletons, glowing primary toggle. All 23 screens inherit the look through these primitives without touching any screen file.
+  1163→- Zero API breakage; motion all sourced from lib/motion presets; useReducedMotion honored wherever significant motion was added; sheets remain safe-area aware; server-safe components stayed server-safe.
+  1164→
+  1165→---
+  1166→
+  1167→Task ID: 7
+  1168→Agent: Main Orchestrator (Z.ai Code)
+  1169→Task: Full frontend redesign — "Liquid Glass II" premium, mobile-first, heavily animated (user request: world-class premium liquid glass rounded frontend, mobile-first, lots of animations).
+  1170→
+  1171→Work Log:
+  1172→- Read worklog + audited the entire frontend surface (globals.css tokens, 20 glass primitives, AppRoot/AuthScreen shell, 23 screens) to find the highest-leverage transformation path.
+  1173→- Rewrote src/app/globals.css — Liquid Glass II token system: dark-first deep-ink canvas, animated aurora canopy (4 GPU-transform-only drifting blobs, emerald/gold/rose/teal — NO blue/indigo), film grain, vignette, thicker glass (blur 30–38px, saturate 170–180%, inset top highlight + bottom shade), oversized radius scale (20/26/30/36/pill), and 10 new effect utilities (.liquid-sheen hover sweep, .anim-rise entrance, .glow-breathe, .text-liquid, .float-y, .pulse-dot, shimmer skeletons, .fade-x, .font-display).
+  1174→- layout.tsx: added Sora display font (--font-display, h1–h3 default), aurora canopy child spans + grain layer; providers.tsx: defaultTheme dark.
+  1175→- New src/lib/motion.ts — shared spring presets (SPRING_SOFT/SNAPPY/POP) + entrance variants so every surface moves with one liquid personality.
+  1176→- Rebuilt core primitives (all 23 screens inherit): GlassCard (sheen sweeps, entrance/entranceDelay stagger, spring interactive lift), GlassButton (pill radii, mint gradient + tinted glow + specular + CSS sheen, hover spring), KpiCard (index-staggered entrance, glowing icon orbs, display-font numerals), SegmentedControl (taller pills), StatusBadge (glassy insets + pulse dots), PageHeader/SectionHeading (CSS entrance, display font, gradient tick).
+  1177→- Rebuilt AuthScreen: floating glass card, glow-breathe brand orb, liquid-gradient headline, staggered fields, AnimatePresence mode crossfade, animated password eye + error surfaces.
+  1178→- Rebuilt shell: BottomNav → floating detached pill (safe-area margin, layoutId spring indicator, icon pop on activation), AppBar (animated title swap, popping unread badge, gradient avatar), AppRoot (spring page transitions rise/settle, upgraded loading curtain, v2 footer pill).
+  1179→- Delegated Task 6-a (frontend-styling-expert): 11 chrome components (Sidebar floating rail, MoreSheet/FilterSheet spring sheets, ConfirmDialog, TabRow, ActivityItem, EmptyState, ErrorState, LoadingSkeleton, GlassToggle, Money).
+  1180→- Delegated Task 6-b (frontend-styling-expert): both dashboards (hero glass cards w/ aurora blob, staggered KPI grids via KpiCard index, animated lists).
+  1181→- Fixed GlassCard bug flagged by 6-b: interactive+entrance dropped entranceDelay (CSS .anim-rise fired at 0s masking the framer delay) + fixed its tsc onDrag cast error — interactive branch now animates purely via framer spring with delay.
+  1182→- Dev server had died mid-task; restarted in background (PID 32611, HTTP 200).
+  1183→- Verification: bun run lint → zero warnings; tsc clean for all glass/ + app shell files (pre-existing unrelated errors in admin screens left untouched); agent-browser E2E at 390px + 1440px: auth (mobile+desktop, dark+light via VLM), resident login → #/app/dashboard, hero/KPIs/floating-nav visually verified, bottom-nav → Meals, meal toggle On→Off→On (API persisted), admin desktop login → sidebar rail + glowing active pill + hero + staggered KPIs, sidebar nav (residents → payments), theme toggle light-mode VLM pass, logout → auth screen with token cleared from localStorage, admin mobile More sheet (rounded glass sheet + drag handle + icon orbs). Zero console/page errors throughout; dev.log clean.
+  1184→
+  1185→Stage Summary:
+  1186→- The entire app now speaks Liquid Glass II: animated aurora canvas, deep frosted materials, oversized pill radii, spring physics everywhere (entrance staggers, sheen sweeps, morphing nav indicators, icon pops, sliding pills), mobile-first floating pill navigation, dark-first with a luminous light theme.
+  1187→- Foundation files: globals.css, layout.tsx, providers.tsx, lib/motion.ts, GlassCard, GlassButton, KpiCard, SegmentedControl, StatusBadge, PageHeader, SectionHeading, BottomNav, AppBar, AuthScreen, AppRoot. Agent 6-a: 11 chrome components. Agent 6-b: resident + admin dashboards.
+  1188→- Test accounts unchanged: admin@messtest.in / Admin#12345, sahid@messtest.in / Resident#12345.
+  1189→
+  1190→---
+  1191→Task ID: 9
+  1192→Agent: Main Orchestrator (Z.ai Code)
+  1193→Task: Remove hover shine animations (user request: "remove the shining animations when hover") — strip the .liquid-sheen hover light-sweep effect from the Liquid Glass II design system.
+  1194→
+  1195→Work Log:
+  1196→- Located the hover shine: the `.liquid-sheen` class in globals.css — a diagonal band of light that swept across glass surfaces on hover/focus (translateX -240% → 460% over 1.05s). Confirmed the only other "shine" candidates (loading-skeleton shimmer, static specular highlight, glow-breathe) are NOT hover-triggered, so scope = liquid-sheen only.
+  1197→- globals.css: deleted the entire .liquid-sheen rule block (base, ::after sweep, hover/focus-visible trigger, light-mode gradient override) + updated the LIQUID EFFECTS section header comment. Kept shimmer skeletons, glow-breathe, text-liquid, float-y, anim-rise untouched.
+  1198→- GlassCard.tsx: removed the `sheen` prop entirely (docs, interface, withSheen computation, both className branches). No external `sheen=` usages existed, but bare boolean `sheen` attributes did exist and were missed by the first grep — found via tsc: KpiCard.tsx (1), admin/dashboard.tsx (2), resident/dashboard.tsx (3). Removed all 6.
+  1199→- GlassButton.tsx: removed `liquid-sheen` from primary/secondary/destructive VARIANT_CLASSES + doc comment. Static specular top highlight and spring hover lift/press kept.
+  1200→- Removed `liquid-sheen` class usages from: BottomNav (nav pill), Sidebar (rail), KpiCard (KpiSkeleton), MoreSheet (tiles), FilterSheet (desktop panel + doc comment), AuthScreen (error surface, login card, policies inset, dev-seed details).
+  1201→- Discovered Turbopack served a STALE CSS chunk (curl showed 4 liquid-sheen rules in the served css despite clean source) — a plain `touch` did NOT invalidate it; a real content edit (probe comment) triggered recompile. Probe comment removed afterwards; served CSS verified clean (0 occurrences).
+  1202→- Verification: grep → zero liquid-sheen/sheen references in src; `bun run lint` → clean; `bunx tsc --noEmit` → zero errors in all touched files (pre-existing unrelated errors in admin/_shared/api.ts, billing.tsx, residents.tsx remain untouched, as before).
+  1203→- agent-browser E2E: auth screen renders (no sheen DOM nodes, no sheen CSS rules); resident login sahid@messtest.in → #/app/dashboard (8 glass surfaces, card ::after content = "none" — the sweep element no longer exists); hovered a card (mouse 412,245) → no shine band, no visual breakage; nav → Meals (51 glass surfaces, 0 sheen nodes); Breakfast meal toggle off→on roundtrip verified (API persisted, state restored); zero page/console errors; dev.log clean.
+  1204→
+  1205→Stage Summary:
+  1206→- The hover shine sweep (.liquid-sheen) is fully removed from the design system — CSS rule deleted, class stripped from all 9 consuming files, GlassCard's `sheen` prop removed with all 6 bare-attribute usages.
+  1207→- Everything else in Liquid Glass II is untouched: spring entrance staggers, hover lift/press physics, morphing nav indicators, static specular highlights, glow-breathe, aurora canvas, shimmer loading skeletons.
+  1208→- Gotcha for future agents: Turbopack dev may serve stale CSS chunks after source-only edits — `touch` is NOT enough; make a real content edit to force recompile, then verify via curl on the _next/static CSS chunk.
+  1209→
+  1210→---
+  1211→Task ID: 11-b
+  1212→Agent: frontend-styling-expert
+  1213→Task: Restyle the two dashboards (resident #/app/dashboard + admin #/admin/dashboard) to the
+  1214→BoardOps-Fresh composition (GreetingCard hero with gradient name, auto-fit grid-kpi with
+  1215→clickable cards, glass-inset activity rows) while KEEPING the Liquid Glass II mint theme
+  1216→(materials, springs, radii, aurora canvas). Only the 2 dashboard files touched.
+  1217→
+  1218→Work Log:
+  1219→- Read worklog (Tasks 7, 6-a, 6-b, 9), globals.css (grid-kpi/grid-cards, glow-* utilities,
+  1220→  kpi-num/font-display/anim-rise), lib/motion springs, the NEW lib/gradients.ts
+  1221→  (gradientForName/initialsOf/getTimeGreeting) + rewritten KpiCard.tsx API (glow/onClick/
+  1222→  navLabel), and the BoardOps reference dashboard-view.tsx + greetings.ts.
+  1223→- src/components/app/resident/dashboard.tsx:
+  1224→  • Hero → BoardOps GreetingCard composition inside the existing GlassCard strong+entrance:
+  1225→    tz-aware date/localTime line moved ABOVE the headline (kpi-num, mb-2), display h1 now
+  1226→    "Good <morning>, <FirstName> <emoji>" with the first name in a deterministic per-name
+  1227→    gradient (bg-gradient-to-br bg-clip-text text-transparent + gradientForName(fullName))
+  1228→    and the getTimeGreeting() emoji at the end. Server greeting text/icon no longer rendered
+  1229→    (client-local greeting per BoardOps); localTime/institution data kept. Aurora blob,
+  1230→    reduced-motion-gated float-y, "Today's meals" CTA all untouched.
+  1231→  • KPI grid: `grid grid-cols-1 gap-4 min-[420px]:grid-cols-2 xl:grid-cols-4` → `grid-kpi
+  1232→    gap-3`; every KpiCard now navigates via the new API: Meals Today → #/app/meals
+  1233→    (success), Available Balance → #/app/payments (primary), Amount to Pay → #/app/billing
+  1234→    (warning), Payment Status → #/app/billing (glow maps API values: Overdue→danger,
+  1235→    Due→warning, Settled→success) + navLabel for aria. index/value/sub/icon preserved.
+  1236→  • Aligned the Payment Status icon check with the real API values (==="Settled" →
+  1237→    BadgeCheck instead of the stale "clear" comparison — presentation only).
+  1238→  • Today's meals / pinned announcements / activity sections verified (already icon-orb +
+  1239→    ActivityItem glass-inset pattern from 6-b): no changes, staggered entrances kept.
+  1240→- src/components/app/admin/dashboard.tsx:
+  1241→  • Hero → BoardOps GreetingCard: new en-US date line above the headline
+  1242→    (weekday/day/month), display h1 "Good <morning>, Admin <FirstName> <emoji>" where BOTH
+  1243→    the "Admin" prefix word and the first name render with gradientForName(adminName) (name
+  1244→    from the cached useSession() profile; falls back to just "Admin" when the profile has
+  1245→    no name). Institution + localTime line kept below; aurora blob + float-y + entrance +
+  1246→    "Needs attention · N" CTA untouched.
+  1247→  • KPI grid: breakpoint grid → `grid-kpi gap-3`; specs extracted into a typed AdminKpiSpec[]
+  1248→    (label/value/sub/icon/glow/href/navLabel): Residents → #/admin/residents (success),
+  1249→    Meals Today → #/admin/meals (success), Available Funds → #/admin/funds (primary),
+  1250→    Meal Charge → #/admin/billing (warning). All copy/tooltip content identical.
+  1251→  • "Month just started" tooltip trigger changed from <button> to <span> — it now renders
+  1252→    INSIDE the KpiCard whole-card motion.button, and a nested interactive element would be
+  1253→    invalid HTML (React validateDOMNesting warning). Hover tooltip + dotted underline kept.
+  1254→  • Activity rows: now the glass-inset + icon-orb pattern (glass-inset rounded-md rows with
+  1255→    size-10 rounded-xl primary-tinted orbs, matching ActivityItem exactly) instead of bare
+  1256→    pill chips; toast-on-click, stagger springs, max-h-96 scroll, focus rings all preserved.
+  1257→- Verification: `bun run lint` → clean, zero warnings. `bunx tsc --noEmit | grep -E
+  1258→  "resident/dashboard|admin/dashboard"` → EMPTY (31 pre-existing errors all in examples/
+  1259→  + scripts/seed.ts, untouched). grep: no liquid-sheen/sheen refs. curl / → 200; dev.log
+  1260→  shows successful recompile after edits, no compile errors. Dev server left running.
+  1261→- Deliberately untouched: loading skeletons (KpiGridSkeleton/ListSkeleton still use the
+  1262→  old breakpoint grid — shared primitive, off-limits), non-KPI card grids (today's meals,
+  1263→  needs-attention), nav/shell/primitives, all query/mutation/error/reduced-motion logic.
+  1264→
+  1265→Stage Summary:
+  1266→- Both dashboards now follow the BoardOps-Fresh composition — date-line + gradient-name
+  1267→  greeting hero, auto-fit grid-kpi with glowing navigable KPI cards (ArrowUpRight hints,
+  1268→  aria labels, whole-card buttons), glass-inset activity rows with icon orbs — while
+  1269→  remaining 100% Liquid Glass II (glass-strong hero + aurora blob + float-y, SPRING_SOFT
+  1270→  staggers, font-display, kpi-num). Zero data-logic changes; only the 2 allowed files
+  1271→  modified; lint + tsc clean for both files.
+  1272→
+  1273→---
+  1274→Task ID: 10
+  1275→Agent: Main Orchestrator (Z.ai Code)
+  1276→Task: Redesign the app's layout/design to match github.com/sahid-code404/BoardOps-Fresh while KEEPING the existing Liquid Glass II mint theme (user: "i like this ui theme but design like this project").
+  1277→
+  1278→Work Log:
+  1279→- Cloned and studied BoardOps-Fresh (apps/web). Key discovery: their LIVE shell mounts only TopBar + MobileSidebar drawer + MobileBottomNav at ALL viewports (DesktopSidebar exists in the repo but is never mounted) — i.e. a centered max-w-6xl column with floating top bar, floating bottom pill, and a left drawer; NO persistent desktop sidebar. Design DNA: dual-line animated title (context label + view label), theme popover (light/dark/system + spring check), gradient avatar per user, ⌘K command palette, grouped nav (Workspace/Finance/Administration) with SOLID primary active pill + chevron, auto-fit KPI grids (grid-kpi), clickable whole-card KPIs with ArrowUpRight, greeting card with per-name gradient + emoji, glass-soft/glow utilities.
+  1280→- globals.css: added .grid-kpi / .grid-cards / .grid-cards-sm auto-fit grids and .glow-primary/success/warning/danger status glows (BoardOps pattern, ported to our tokens).
+  1281→- NEW src/lib/gradients.ts: gradientForName (deterministic Tailwind gradient — mint/emerald/gold/rose palette, no blue/indigo), initialsOf, getTimeGreeting.
+  1282→- nav.ts rewritten: BoardOps taxonomy — ADMIN groups Workspace (Home/Meals/Meal config/Calendar) + Finance (Money/Funds/Expenses/Billing) + Administration (Residents/Tasks/Announcements/Notifications/Formulas/Settings/Audit); RESIDENT groups Workspace + Finance + Account. Added `primary` flag (bottom pill = 4 primary + More, both roles) and `keywords` for the palette. Removed old bottomNav/sidebarGroups exports.
+  1283→- NEW TopBar.tsx (replaces AppBar, all viewports): sticky glass-nav pill max-w-6xl centered — hamburger → drawer, dual-line animated title (Admin Console/Workspace context), search → palette (sm+), theme DropdownMenu popover with rotating sun/moon + spring Check, bell with popping badge, gradient avatar (ring) → account dropdown (name/email/role badge/profile/sign-out).
+  1284→- NEW MobileSidebar.tsx (replaces MoreSheet): AnimatePresence drawer spring-sliding from left (86vw max-sm glass-strong card) — brand header + close, user row (gradient avatar), "Search Aurora ⌘K" row, grouped nav with solid-primary active pill + chevron + icon pop, unread badges, sign-out footer; Escape + body-scroll-lock + safe areas.
+  1285→- BottomNav.tsx rebuilt: now visible at ALL viewports (BoardOps signature — floating pill on desktop too), 4 primary + More (always), labels always visible, kept our layoutId morphing pill + icon pop; More opens the drawer.
+  1286→- NEW CommandPalette.tsx: ⌘K/Ctrl+K + F8 hotkeys, shadcn CommandDialog restyled glass-strong, grouped by nav taxonomy, fuzzy search over label+keywords, navigates + closes.
+  1287→- KpiCard.tsx: BoardOps composition — icon orb moved top-left, ArrowUpRight top-right, NEW `glow` prop (glow-* utilities) and `onClick`+`navLabel` (whole card becomes a motion.button with y:-3 scale:1.02 hover + 0.98 tap); skeleton reshaped to match. Existing props (value/sub/delta/index/loading) unchanged.
+  1288→- AppRoot.tsx rewired: TopBar at all viewports, drawer+palette state, main px-3/sm:6 + max-w-6xl + pb-28 (pill always visible), footer keeps sticky-bottom with pb-[calc(env+104px)] at ALL sizes (lg:pb-6 removed — pill now shows on desktop); keyed AnimatePresence page transitions kept.
+  1289→- Deleted replaced files: glass/AppBar.tsx, glass/MoreSheet.tsx, glass/Sidebar.tsx (verified zero other importers first).
+  1290→- Delegated Task 11-b (frontend-styling-expert): both dashboards restyled to BoardOps composition (greeting w/ gradient name + emoji + date line, grid-kpi clickable KPIs with glow + navLabel, activity rows with icon orbs) — see its own worklog entry.
+  1291→- Post-review fixes: footer clearance for the always-visible pill (VLM caught footer chip behind pill on desktop); merged admin greeting gradient spans so the name wraps as one unit (VLM caught "Admin"/"Mess" splitting awkwardly at 390px).
+  1292→- Verification: bun run lint → zero warnings; tsc --noEmit → zero errors in every touched file; agent-browser E2E: resident mobile login → TopBar/greeting/4 clickable KPIs/bottom pill 4+More; drawer via hamburger (Workspace/Finance/Account groups, 15 admin items, solid active pill, close-on-nav); drawer nav via bottom More; Ctrl+K palette (opens, fuzzy "meal"→Meals, select navigates + closes); theme popover (Light/Dark/System, light + dark applied/restored); account menu sign-out (token cleared); admin desktop login → "Admin Console" context, gradient greeting, grid-kpi 4-col, KPI card click → #/admin/funds; drawer Residents → #/admin/residents; bell → notifications; zero page/console errors throughout; VLM visual reviews of mobile + desktop dashboards + bottom-overlap recheck all pass.
+  1293→
+  1294→Stage Summary:
+  1295→- The app now follows the BoardOps-Fresh architecture with the Aurora liquid-glass skin: floating TopBar + left drawer + always-floating bottom pill + ⌘K palette + centered max-w-6xl column (no persistent sidebar — matching the reference's live shell exactly).
+  1296→- New primitives: TopBar, MobileSidebar, CommandPalette, gradients lib, upgraded KpiCard (glow/onClick); nav regrouped Workspace/Finance/Administration with primary flags + keywords.
+  1297→- Theme untouched: mint primary, dark-first aurora canvas, glass materials, spring physics; no sheen (Task 9 honored); no blue/indigo.
+  1298→- Foundation files for future agents: components/glass/{TopBar,MobileSidebar,BottomNav,CommandPalette,KpiCard}.tsx, components/app/{nav.ts,AppRoot.tsx}, lib/gradients.ts; AppBar/MoreSheet/Sidebar are GONE.
+  1299→
+  1300→---
+  1301→Task ID: 12
+  1302→Agent: Main Orchestrator (Z.ai Code)
+  1303→Task: "Make the meals page same like BoardOps-Fresh for both admin and users" — redesign the three Meals pages to the BoardOps-Fresh layouts while keeping the Aurora liquid-glass theme and all domain logic.
+  1304→
+  1305→Work Log:
+  1306→- Cloned/studied the reference views: user-meals-view.tsx (resident), kitchen-view.tsx (admin counts), meals-config-view.tsx (config cards). Mapping decided: resident/meals → UserMealsView pattern; admin/meals → KitchenView pattern; admin/meal-configuration → MealsConfigView card pattern (wizard untouched).
+  1307→- KpiCard.tsx: added `tone` prop ("primary"|"success"|"warning"|"danger") — tints the icon orb per metric (BoardOps colored-orb pattern), default primary, backwards compatible.
+  1308→- admin/_shared/format.ts: added mealHex (colorToken → hex accent, default teal) + initialsOf (avatar initials).
+  1309→- REWROTE resident/meals.tsx (BoardOps user-meals layout):
+  1310→  - Centered picker pill row: month picker (< September 2025 >, circular glass-strong arrows, pill click resets to current month, RotateCcw hint) for agenda/calendar; day picker (< Today/Tomorrow/d MMM + EEE, d MMM >, clamped to month range) for day view.
+  1311→  - 3 KPI cards (grid-cols-3): Meals ON (Check, success glow+tone), Meals OFF (X, warning), Locked (Lock, danger); stats computed client-side from fetched month data (BoardOps pattern); day view shows dayStats.
+  1312→  - BoardOps-style segmented control (Agenda/Calendar/Day, icons, layoutId sliding pill using --segment-active-* vars) + Guest meal + Apply for leave GlassButtons in a centered flex-wrap row.
+  1313→  - AGENDA: collapsible GlassCard DayRows — size-11 date tile (EEE + d, today primary-tinted), Today/long-date label, MiniChips (N ON success, N OFF warning, N on leave, locked count danger, N admin primary), rotating chevron; expands to compact glass-inset meal rows (tinted icon tile, window + countdown, lock icon, Admin chip, guests) with GlassToggle; flash notices still inline under the row.
+  1314→  - CALENDAR: GlassCard with 7-col Sun-first grid, weekday headers, aspect-square cells (today primary ring, past dimmed, dots success/warning/danger), cell click → day view; legend row (ON/OFF/Locked). (NEW view mode.)
+  1315→  - DAY: DayMealCards (size-12 tinted tile, window, chips, GlassToggle, footer status pill + "Change until X · countdown"/"Cutoff passed") in a 1→2 col grid.
+  1316→  - Month state drives the fetch range (month start→end, within the API's 62-day cap); query keys unchanged so optimistic toggle + prefix invalidation still work across month caches.
+  1317→  - KEPT: optimistic versioned toggle + rollback + ApiClientError flash codes, useNow server clock, upcoming guests + leave requests sections, GuestMealDialog + LeaveDialog. Removed PageHeader (TopBar carries the title, BoardOps views are headerless).
+  1318→- REWROTE admin/meals.tsx (BoardOps kitchen layout):
+  1319→  - Centered date capsule: circular prev/next + pill with relative labels (Today/Yesterday/Tomorrow or d MMM + EEE), RotateCcw when not today; server "today" captured from first undated fetch.
+  1320→  - 3 KPIs: Total Meals (meta month total, success), Guests (day totals, primary), Meals OFF (day totals, warning).
+  1321→  - Per-meal count cards: color-tinted gradient glass (inline linear-gradient + borderColor + boxShadow from mealHex), size-14 tinted icon tile, SERVICE window top-right, huge kpi-num ON count, OFF/Guests/Total pill stack, cutoff/locked line — grid-cards auto-fit.
+  1322→  - "Resident meal status" GlassCard: header + SearchField + scrollable (max-h-28rem) expandable rows — initials avatar tile, name + room, rotating chevron; expanded shows primary-tinted "Total meals consumed" banner (big count pill) + per-meal glass-inset rows (tinted tile, Locked/Overridden chips, state badge for ON_LEAVE/NOT_AVAILABLE, baseline/resident-choice/cutoff info line) with GlassToggle → opens the reason-required ConfirmDialog (audit trail domain rule kept).
+  1323→  - REMOVED the old OverrideSheet dialog (replaced by inline expandable rows); override POST + invalidate + toast flow unchanged.
+  1324→- RESTYLED admin/meal-configuration.tsx cards (BoardOps config-card pattern): top color accent bar (mealHex), size-12 tinted icon tile, Chip badge row (Hidden / ₹-price-or-Formula / schedule), cutoff preview box (glass-inset, Clock icon, "Editable until: strategy, HH:MM"), KeyValue rows reduced to Window + Default, actions pinned with mt-auto; grid → grid-cards auto-fit. DefinitionWizard/version-history/archive/delete dialogs untouched.
+  1325→- Verification: bun run lint → clean; tsc --noEmit → zero errors in touched files; agent-browser E2E: resident login → meals (month pill, KPIs, Agenda day rows with chips, today auto-expanded, Lunch toggle OFF optimistic + server-confirmed, Calendar grid cells + legend + cell-click → Day view, Day nav prev/next + switches); admin login → meals (date capsule "Today Thu, 3 Sept", 3 KPIs, gradient count cards, expand resident row → monthly banner + toggles, Dinner override → reason dialog → toast + state flip, then reverted; prev-day → "Yesterday Wed, 2 Sept"); meal-configuration cards show "Editable until:" previews + wizard still opens; zero console/page errors; mobile 390px + desktop 1280px verified (no horizontal overflow, pickers centered, bottom pill clearance via existing pb-28); VLM visual reviews of agenda/calendar/day/admin/mobile/bottom-scroll all pass (initial "overlap" flags were mid-scroll content under the floating glass nav — confirmed clean at full scroll).
+  1326→- Cosmetic fix from VLM feedback: KPI sub labels shortened ("This month"/"Sep 2025"/"after cutoff") so they don't truncate at 390px.
+  1327→
+  1328→Stage Summary:
+  1329→- All three Meals pages now follow the BoardOps-Fresh designs with the Aurora liquid-glass skin: resident = picker pill + 3 tone KPIs + Agenda/Calendar/Day with collapsible day rows; admin = date capsule + 3 KPIs + gradient count cards + expandable resident status rows with override toggles; meal-configuration = accent-bar cards with badges + cutoff preview.
+  1330→- Design-system additions: KpiCard `tone` prop, mealHex + initialsOf helpers, MiniChip/CircleArrow local patterns, calendar-grid pattern.
+
+[showing lines 931-1330 of 1332; use offset=1331 with limit to continue reading]

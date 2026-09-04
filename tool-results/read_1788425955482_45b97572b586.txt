@@ -1,0 +1,645 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Resident 360° — one resident, every dimension.
+     5→ * GET /api/v1/admin/residents/:id (+ meals today, lifecycle actions,
+     6→ * membership edit, deficit-policy exemption).
+     7→ */
+     8→
+     9→import { useMemo, useState } from "react";
+    10→import { toast } from "sonner";
+    11→import {
+    12→  ArrowLeft,
+    13→  BadgeCheck,
+    14→  CalendarPlus,
+    15→  ClipboardList,
+    16→  History,
+    17→  ReceiptText,
+    18→  ShieldPlus,
+    19→  UserRound,
+    20→  Utensils,
+    21→  Wallet,
+    22→} from "lucide-react";
+    23→import PageHeader from "@/components/glass/PageHeader";
+    24→import GlassCard from "@/components/glass/GlassCard";
+    25→import StatusBadge from "@/components/glass/StatusBadge";
+    26→import Money from "@/components/glass/Money";
+    27→import EmptyState from "@/components/glass/EmptyState";
+    28→import ErrorState from "@/components/glass/ErrorState";
+    29→import { ListSkeleton } from "@/components/glass/LoadingSkeleton";
+    30→import TabRow from "@/components/glass/TabRow";
+    31→import ConfirmDialog from "@/components/glass/ConfirmDialog";
+    32→import SectionHeading from "@/components/glass/SectionHeading";
+    33→import ActivityItem from "@/components/glass/ActivityItem";
+    34→import { GlassButton } from "@/components/glass/GlassButton";
+    35→import { useApiQuery, postJson, patchJson } from "@/hooks/use-api-query";
+    36→import { useSession } from "@/hooks/use-session";
+    37→import { goBack } from "@/hooks/use-hash-route";
+    38→import { ApiClientError } from "@/lib/api";
+    39→import { errMessage, useInvalidate } from "./_shared/api";
+    40→import { DetailDialog, Chip, KeyValue } from "./_shared/chrome";
+    41→import { TextField } from "./_shared/fields";
+    42→import { fmtDate, fmtDateTime, timeAgo } from "./_shared/format";
+    43→import type { Resident360 } from "./_shared/types";
+    44→
+    45→interface TodayMealRow {
+    46→  residentId: string;
+    47→  fullName: string;
+    48→  roomNumber: string | null;
+    49→  monthlyMealCount: number;
+    50→  today: {
+    51→    mealInstanceId: string;
+    52→    residentMealId: string;
+    53→    name: string;
+    54→    effectiveState: string;
+    55→    effectiveReason: string;
+    56→    baselineState: string;
+    57→    adminOverrideState: string | null;
+    58→    overridden: boolean;
+    59→    locked: boolean;
+    60→    version: number;
+    61→  }[];
+    62→}
+    63→
+    64→const TABS = [
+    65→  { key: "overview", label: "Overview" },
+    66→  { key: "meals", label: "Meals" },
+    67→  { key: "funds", label: "Funds" },
+    68→  { key: "payments", label: "Payments" },
+    69→  { key: "bills", label: "Bills" },
+    70→  { key: "tasks", label: "Tasks" },
+    71→  { key: "activity", label: "Activity" },
+    72→];
+    73→
+    74→type ConfirmKind = "approve" | "request-changes" | "reject" | "deactivate" | "activate" | null;
+    75→
+    76→const CONFIRM_META: Record<Exclude<ConfirmKind, null>, { title: string; description: string; confirm: string; requireReason: boolean; toast: string; destructive?: boolean }> = {
+    77→  approve: { title: "Approve resident", description: "They will be able to sign in and opt into meals.", confirm: "Approve", requireReason: false, toast: "Resident approved" },
+    78→  "request-changes": { title: "Request changes", description: "The resident will be asked to update their details.", confirm: "Request changes", requireReason: true, toast: "Changes requested" },
+    79→  reject: { title: "Reject application", description: "The application closes and sign-in is blocked.", confirm: "Reject", requireReason: true, toast: "Application rejected", destructive: true },
+    80→  deactivate: { title: "Deactivate resident", description: "Sessions are revoked and meals stop. History is preserved.", confirm: "Deactivate", requireReason: true, toast: "Resident deactivated", destructive: true },
+    81→  activate: { title: "Reactivate resident", description: "They can sign in and opt into meals again.", confirm: "Reactivate", requireReason: false, toast: "Resident reactivated" },
+    82→};
+    83→
+    84→export default function AdminResident360({ id }: { id?: string }) {
+    85→  const [tab, setTab] = useState("overview");
+    86→  const [confirm, setConfirm] = useState<ConfirmKind>(null);
+    87→  const [acting, setActing] = useState(false);
+    88→  const [membershipOpen, setMembershipOpen] = useState(false);
+    89→  const [exemptionOpen, setExemptionOpen] = useState(false);
+    90→  const invalidate = useInvalidate();
+    91→  const { institution } = useSession();
+    92→  const tz = institution?.timezone ?? "Asia/Kolkata";
+    93→
+    94→  const { data, isLoading, error, refetch } = useApiQuery<Resident360>(id ? `/api/v1/admin/residents/${id}` : null);
+    95→  const mealsQuery = useApiQuery<{ residents: TodayMealRow[] }>(id && tab === "meals" ? "/api/v1/admin/meals" : null);
+    96→
+    97→  const todayRow = useMemo(
+    98→    () => (mealsQuery.data?.residents ?? []).find((r) => r.residentId === id) ?? null,
+    99→    [mealsQuery.data, id]
+   100→  );
+   101→
+   102→  if (!id) {
+   103→    return <EmptyState icon={UserRound} title="No resident selected" description="Go back to the residents list and pick one." />;
+   104→  }
+   105→
+   106→  if (isLoading) {
+   107→    return (
+   108→      <div className="space-y-6">
+   109→        <PageHeader title="Resident 360°" subtitle="One resident, every dimension." />
+   110→        <ListSkeleton rows={5} />
+   111→      </div>
+   112→    );
+   113→  }
+   114→
+   115→  if (error || !data) {
+   116→    return (
+   117→      <div className="space-y-6">
+   118→        <PageHeader title="Resident 360°" subtitle="One resident, every dimension." />
+   119→        <ErrorState
+   120→          code={(error as ApiClientError | undefined)?.code}
+   121→          message={(error as ApiClientError | undefined)?.message ?? "This resident could not be found."}
+   122→          onRetry={() => void refetch()}
+   123→        />
+   124→        <div className="flex justify-center">
+   125→          <GlassButton variant="secondary" icon={<ArrowLeft />} onClick={() => goBack("#/admin/residents")}>
+   126→            Back to residents
+   127→          </GlassButton>
+   128→        </div>
+   129→      </div>
+   130→    );
+   131→  }
+   132→
+   133→  const { user, profile, statusHistory, funds, payments, bills, tasks } = data;
+   134→
+   135→  async function runLifecycle(kind: Exclude<ConfirmKind, null>, reason?: string) {
+   136→    if (!id) return;
+   137→    setActing(true);
+   138→    try {
+   139→      const needsBody = kind !== "approve" && kind !== "activate";
+   140→      await postJson(`/api/v1/admin/residents/${id}/${kind}`, needsBody ? { reason } : {});
+   141→      invalidate([`/api/v1/admin/residents/${id}`, "/api/v1/admin/residents", "/api/v1/admin/dashboard"]);
+   142→      toast.success(CONFIRM_META[kind].toast, { description: profile.fullName });
+   143→      setConfirm(null);
+   144→    } catch (err) {
+   145→      toast.error(errMessage(err));
+   146→    } finally {
+   147→      setActing(false);
+   148→    }
+   149→  }
+   150→
+   151→  const isPendingish = user.status === "PENDING_APPROVAL" || user.status === "CHANGES_REQUESTED";
+   152→
+   153→  return (
+   154→    <div className="space-y-5">
+   155→      {/* Header */}
+   156→      <div className="flex items-start gap-3">
+   157→        <GlassButton
+   158→          variant="ghost"
+   159→          size="sm"
+   160→          className="mt-1 size-11 shrink-0 px-0"
+   161→          aria-label="Back to residents"
+   162→          onClick={() => goBack("#/admin/residents")}
+   163→          icon={<ArrowLeft />}
+   164→        />
+   165→        <PageHeader
+   166→          title={profile.fullName}
+   167→          subtitle={
+   168→            <span className="flex flex-wrap items-center gap-2">
+   169→              <StatusBadge status={user.status} />
+   170→              <span className="text-xs">
+   171→                {profile.roomNumber ? `Room ${profile.roomNumber} · ` : ""}
+   172→                Joined {fmtDate(user.createdAt)}
+   173→              </span>
+   174→            </span>
+   175→          }
+   176→          actions={
+   177→            funds ? (
+   178→              <GlassCard className="px-4 py-3">
+   179→                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Available</p>
+   180→                <Money minor={funds.availableMinor} className="mt-0.5 block text-lg font-semibold" />
+   181→              </GlassCard>
+   182→            ) : undefined
+   183→          }
+   184→          className="min-w-0"
+   185→        />
+   186→      </div>
+   187→
+   188→      <TabRow tabs={TABS} activeKey={tab} onChange={setTab} />
+   189→
+   190→      {/* ------------------------------- Overview ------------------------------- */}
+   191→      {tab === "overview" && (
+   192→        <div className="space-y-5">
+   193→          <GlassCard className="space-y-4 p-4 sm:p-5">
+   194→            <SectionHeading>Quick actions</SectionHeading>
+   195→            <div className="flex flex-wrap gap-2">
+   196→              {isPendingish && (
+   197→                <>
+   198→                  <GlassButton variant="primary" size="sm" icon={<BadgeCheck />} onClick={() => setConfirm("approve")}>
+   199→                    Approve
+   200→                  </GlassButton>
+   201→                  <GlassButton variant="secondary" size="sm" onClick={() => setConfirm("request-changes")}>
+   202→                    Request changes
+   203→                  </GlassButton>
+   204→                  <GlassButton variant="destructive" size="sm" onClick={() => setConfirm("reject")}>
+   205→                    Reject
+   206→                  </GlassButton>
+   207→                </>
+   208→              )}
+   209→              {user.status === "ACTIVE" && (
+   210→                <GlassButton variant="destructive" size="sm" onClick={() => setConfirm("deactivate")}>
+   211→                  Deactivate
+   212→                </GlassButton>
+   213→              )}
+   214→              {user.status === "INACTIVE" && (
+   215→                <GlassButton variant="primary" size="sm" onClick={() => setConfirm("activate")}>
+   216→                  Reactivate
+   217→                </GlassButton>
+   218→              )}
+   219→              <GlassButton variant="secondary" size="sm" icon={<CalendarPlus />} onClick={() => setMembershipOpen(true)}>
+   220→                Edit membership
+   221→              </GlassButton>
+   222→            </div>
+   223→          </GlassCard>
+   224→
+   225→          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+   226→            <GlassCard className="p-4 sm:p-5">
+   227→              <SectionHeading>Membership</SectionHeading>
+   228→              <div className="mt-3">
+   229→                <KeyValue label="Member from" value={user.membershipEffectiveFrom ? fmtDate(user.membershipEffectiveFrom) : "—"} />
+   230→                <KeyValue label="Member until" value={user.membershipEffectiveUntil ? fmtDate(user.membershipEffectiveUntil) : "Open-ended"} />
+   231→                <KeyValue label="Email" value={user.email} />
+   232→                <KeyValue label="Phone" value={profile.phone ?? "—"} />
+   233→                <KeyValue label="Room" value={profile.roomNumber ?? "—"} />
+   234→              </div>
+   235→            </GlassCard>
+   236→            <GlassCard className="p-4 sm:p-5">
+   237→              <SectionHeading>Funds summary</SectionHeading>
+   238→              {funds ? (
+   239→                <div className="mt-3">
+   240→                  <KeyValue label="Deposits (approved)" value={<Money minor={funds.creditsMinor} />} />
+   241→                  <KeyValue label="Pending payments" value={<Money minor={funds.pendingPaymentsMinor} />} />
+   242→                  <KeyValue label="Charges" value={<Money minor={funds.chargesMinor} />} />
+   243→                  <KeyValue label="Available" value={<Money minor={funds.availableMinor} />} />
+   244→                  <div className="mt-2 flex flex-wrap items-center gap-2">
+   245→                    <StatusBadge status={funds.policyState} />
+   246→                    {funds.deficitMinor > 0 && <Chip tone="warning">Amount to pay <Money minor={funds.amountToPayMinor} plain /></Chip>}
+   247→                    {funds.graceUntilIso && <Chip tone="warning">Grace until {fmtDate(funds.graceUntilIso)}</Chip>}
+   248→                  </div>
+   249→                </div>
+   250→              ) : (
+   251→                <p className="mt-3 text-[13px] text-muted-foreground">Funds are tracked once the resident is active.</p>
+   252→              )}
+   253→            </GlassCard>
+   254→          </div>
+   255→
+   256→          <GlassCard className="p-4 sm:p-5">
+   257→            <SectionHeading>Status history</SectionHeading>
+   258→            {statusHistory.length === 0 ? (
+   259→              <p className="mt-3 text-[13px] text-muted-foreground">No status changes recorded yet.</p>
+   260→            ) : (
+   261→              <div className="mt-3 space-y-1.5">
+   262→                {statusHistory.map((h) => (
+   263→                  <ActivityItem
+   264→                    key={h.id}
+   265→                    icon={History}
+   266→                    title={`${h.fromStatus ? `${h.fromStatus} → ` : ""}${h.toStatus}`}
+   267→                    description={h.reason ?? "No reason recorded"}
+   268→                    time={fmtDateTime(h.createdAt, tz)}
+   269→                  />
+   270→                ))}
+   271→              </div>
+   272→            )}
+   273→          </GlassCard>
+   274→        </div>
+   275→      )}
+   276→
+   277→      {/* --------------------------------- Meals -------------------------------- */}
+   278→      {tab === "meals" && (
+   279→        <GlassCard className="space-y-4 p-4 sm:p-5">
+   280→          <SectionHeading>Meals this month</SectionHeading>
+   281→          {mealsQuery.isLoading ? (
+   282→            <ListSkeleton rows={3} />
+   283→          ) : todayRow ? (
+   284→            <>
+   285→              <div className="flex items-baseline gap-3">
+   286→                <span className="kpi-num text-3xl font-semibold">{todayRow.monthlyMealCount}</span>
+   287→                <span className="text-sm text-muted-foreground">meals confirmed this billing period</span>
+   288→              </div>
+   289→              <div>
+   290→                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Today</p>
+   291→                <div className="space-y-1.5">
+   292→                  {todayRow.today.map((m) => (
+   293→                    <div key={m.mealInstanceId} className="glass-inset flex items-center justify-between gap-3 rounded-md p-3">
+   294→                      <span className="flex min-w-0 items-center gap-2.5">
+   295→                        <Utensils className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+   296→                        <span className="truncate text-sm font-medium">{m.name}</span>
+   297→                      </span>
+   298→                      <span className="flex shrink-0 items-center gap-2">
+   299→                        {m.overridden && <Chip tone="warning">Admin override</Chip>}
+   300→                        {m.locked && <Chip tone="neutral">Locked</Chip>}
+   301→                        <StatusBadge status={m.effectiveState} />
+   302→                      </span>
+   303→                    </div>
+   304→                  ))}
+   305→                </div>
+   306→              </div>
+   307→            </>
+   308→          ) : (
+   309→            <EmptyState
+   310→              icon={Utensils}
+   311→              title="No meal rows for today"
+   312→              description="This resident has no materialized meals for today — inactive memberships and pending approvals stay out of the meal engine."
+   313→            />
+   314→          )}
+   315→        </GlassCard>
+   316→      )}
+   317→
+   318→      {/* --------------------------------- Funds -------------------------------- */}
+   319→      {tab === "funds" && (
+   320→        <GlassCard className="space-y-4 p-4 sm:p-5">
+   321→          <SectionHeading
+   322→            action={
+   323→              funds ? (
+   324→                <GlassButton variant="secondary" size="sm" icon={<ShieldPlus />} onClick={() => setExemptionOpen(true)}>
+   325→                  Create exemption
+   326→                </GlassButton>
+   327→              ) : undefined
+   328→            }
+   329→          >
+   330→            Funds & deficit policy
+   331→          </SectionHeading>
+   332→          {funds ? (
+   333→            <>
+   334→              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+   335→                <KeyValue stacked label="Deposits" value={<Money minor={funds.creditsMinor} />} />
+   336→                <KeyValue stacked label="Consumed" value={<Money minor={funds.chargesMinor} />} />
+   337→                <KeyValue stacked label="Available" value={<Money minor={funds.availableMinor} />} />
+   338→                <KeyValue stacked label="Amount to pay" value={<Money minor={funds.amountToPayMinor} />} />
+   339→              </div>
+   340→              <div className="flex flex-wrap items-center gap-2">
+   341→                <StatusBadge status={funds.policyState} />
+   342→                <Chip tone="neutral">Threshold <Money minor={funds.thresholdMinor} plain /></Chip>
+   343→                {funds.deficitMinor > 0 && (
+   344→                  <Chip tone={funds.policyState === "RESTRICTED" ? "danger" : "warning"}>
+   345→                    Deficit <Money minor={funds.deficitMinor} plain />
+   346→                  </Chip>
+   347→                )}
+   348→                {funds.graceUntilIso && <Chip tone="warning">Grace until {fmtDate(funds.graceUntilIso)}</Chip>}
+   349→              </div>
+   350→              <p className="text-[12px] leading-relaxed text-muted-foreground">
+   351→                An exemption temporarily lifts deficit restrictions (e.g. meals stay available while they settle the balance).
+   352→              </p>
+   353→            </>
+   354→          ) : (
+   355→            <p className="text-[13px] text-muted-foreground">Funds are tracked once the resident is active.</p>
+   356→          )}
+   357→        </GlassCard>
+   358→      )}
+   359→
+   360→      {/* -------------------------------- Payments ------------------------------- */}
+   361→      {tab === "payments" && (
+   362→        <GlassCard className="space-y-2 p-4 sm:p-5">
+   363→          <SectionHeading>Payments</SectionHeading>
+   364→          {payments.length === 0 ? (
+   365→            <EmptyState icon={Wallet} title="No payments yet" description="Submitted payments will appear here." />
+   366→          ) : (
+   367→            <div className="mt-3 space-y-1.5">
+   368→              {payments.map((p) => (
+   369→                <ActivityItem
+   370→                  key={p.id}
+   371→                  icon={Wallet}
+   372→                  title={`${p.displayNumber} · ${p.method}`}
+   373→                  description={p.reference ?? "No reference"}
+   374→                  time={fmtDateTime(p.submittedAt, tz)}
+   375→                  trailing={
+   376→                    <span className="flex flex-col items-end gap-1">
+   377→                      <Money minor={p.amountMinor} className="text-sm font-semibold" />
+   378→                      <StatusBadge status={p.status} />
+   379→                    </span>
+   380→                  }
+   381→                />
+   382→              ))}
+   383→            </div>
+   384→          )}
+   385→        </GlassCard>
+   386→      )}
+   387→
+   388→      {/* --------------------------------- Bills -------------------------------- */}
+   389→      {tab === "bills" && (
+   390→        <GlassCard className="space-y-2 p-4 sm:p-5">
+   391→          <SectionHeading>Bills</SectionHeading>
+   392→          {bills.length === 0 ? (
+   393→            <EmptyState icon={ReceiptText} title="No bills yet" description="Bills appear after each billing period is generated." />
+   394→          ) : (
+   395→            <div className="mt-3 space-y-1.5">
+   396→              {bills.map((b) => (
+   397→                <ActivityItem
+   398→                  key={b.id}
+   399→                  icon={ReceiptText}
+   400→                  title={b.billNumber}
+   401→                  description={`${b.lineCount} lines · due ${fmtDate(b.dueDate)}`}
+   402→                  time={fmtDateTime(b.generatedAt, tz)}
+   403→                  trailing={
+   404→                    <span className="flex flex-col items-end gap-1">
+   405→                      <Money minor={b.totalDueMinor} className="text-sm font-semibold" />
+   406→                      <StatusBadge status={b.status} />
+   407→                    </span>
+   408→                  }
+   409→                />
+   410→              ))}
+   411→            </div>
+   412→          )}
+   413→        </GlassCard>
+   414→      )}
+   415→
+   416→      {/* --------------------------------- Tasks -------------------------------- */}
+   417→      {tab === "tasks" && (
+   418→        <GlassCard className="space-y-2 p-4 sm:p-5">
+   419→          <SectionHeading>Tasks</SectionHeading>
+   420→          {tasks.length === 0 ? (
+   421→            <EmptyState icon={ClipboardList} title="No tasks assigned" description="Assign a task from the Tasks page." />
+   422→          ) : (
+   423→            <div className="mt-3 space-y-1.5">
+   424→              {tasks.map((t) => (
+   425→                <ActivityItem
+   426→                  key={t.id}
+   427→                  icon={ClipboardList}
+   428→                  title={t.description}
+   429→                  description={t.dueDate ? `Due ${fmtDate(t.dueDate)}` : "No due date"}
+   430→                  time={timeAgo(t.createdAt)}
+   431→                  trailing={
+   432→                    <span className="flex flex-col items-end gap-1">
+   433→                      {t.estimatedAmountMinor != null && <Money minor={t.estimatedAmountMinor} className="text-sm font-semibold" />}
+   434→                      <StatusBadge status={t.status} />
+   435→                    </span>
+   436→                  }
+   437→                />
+   438→              ))}
+   439→            </div>
+   440→          )}
+   441→        </GlassCard>
+   442→      )}
+   443→
+   444→      {/* -------------------------------- Activity ------------------------------- */}
+   445→      {tab === "activity" && (
+   446→        <GlassCard className="space-y-2 p-4 sm:p-5">
+   447→          <SectionHeading>Activity</SectionHeading>
+   448→          {(data.audit as unknown[]).length === 0 ? (
+   449→            <EmptyState icon={History} title="No activity recorded" description="Audit events for this resident will appear here." />
+   450→          ) : (
+   451→            <p className="mt-3 text-[13px] text-muted-foreground">See the full Audit Trail for details.</p>
+   452→          )}
+   453→        </GlassCard>
+   454→      )}
+   455→
+   456→      {/* ------------------------------ dialogs ------------------------------ */}
+   457→      {confirm && (
+   458→        <ConfirmDialog
+   459→          open
+   460→          onOpenChange={(open) => !open && setConfirm(null)}
+   461→          title={CONFIRM_META[confirm].title}
+   462→          description={CONFIRM_META[confirm].description}
+   463→          confirmLabel={CONFIRM_META[confirm].confirm}
+   464→          tone={CONFIRM_META[confirm].destructive ? "destructive" : "primary"}
+   465→          requireReason={CONFIRM_META[confirm].requireReason}
+   466→          loading={acting}
+   467→          onConfirm={(reason) => void runLifecycle(confirm, reason)}
+   468→        />
+   469→      )}
+   470→
+   471→      <MembershipDialog
+   472→        open={membershipOpen}
+   473→        onOpenChange={setMembershipOpen}
+   474→        residentId={id}
+   475→        from={user.membershipEffectiveFrom}
+   476→        until={user.membershipEffectiveUntil}
+   477→        onSaved={() => invalidate([`/api/v1/admin/residents/${id}`, "/api/v1/admin/residents"])}
+   478→      />
+   479→
+   480→      <ExemptionDialog
+   481→        open={exemptionOpen}
+   482→        onOpenChange={setExemptionOpen}
+   483→        residentId={id}
+   484→        residentName={profile.fullName}
+   485→        onSaved={() => invalidate([`/api/v1/admin/residents/${id}`, "/api/v1/admin/funds", "/api/v1/admin/residents"])}
+   486→      />
+   487→    </div>
+   488→  );
+   489→}
+   490→
+   491→/* ------------------------------------------------------------- membership */
+   492→
+   493→function toInputDate(iso: string | null): string {
+   494→  if (!iso) return "";
+   495→  const d = new Date(iso);
+   496→  if (Number.isNaN(d.getTime())) return "";
+   497→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   498→}
+   499→
+   500→function MembershipDialog({
+   501→  open,
+   502→  onOpenChange,
+   503→  residentId,
+   504→  from,
+   505→  until,
+   506→  onSaved,
+   507→}: {
+   508→  open: boolean;
+   509→  onOpenChange: (open: boolean) => void;
+   510→  residentId: string;
+   511→  from: string | null;
+   512→  until: string | null;
+   513→  onSaved: () => void;
+   514→}) {
+   515→  const [fromDate, setFromDate] = useState(() => toInputDate(from));
+   516→  const [untilDate, setUntilDate] = useState(() => toInputDate(until));
+   517→  const [saving, setSaving] = useState(false);
+   518→
+   519→  async function save() {
+   520→    setSaving(true);
+   521→    try {
+   522→      await patchJson(`/api/v1/admin/residents/${residentId}/membership`, {
+   523→        membershipEffectiveFrom: fromDate ? new Date(`${fromDate}T00:00:00`).toISOString() : null,
+   524→        membershipEffectiveUntil: untilDate ? new Date(`${untilDate}T23:59:59`).toISOString() : null,
+   525→      });
+   526→      toast.success("Membership updated", {
+   527→        description: "Meal availability follows the new dates from the next evaluation.",
+   528→      });
+   529→      onSaved();
+   530→      onOpenChange(false);
+   531→    } catch (err) {
+   532→      // The backend surfaces the closed-period restriction with plain language.
+   533→      toast.error(errMessage(err));
+   534→    } finally {
+   535→      setSaving(false);
+   536→    }
+   537→  }
+   538→
+   539→  return (
+   540→    <DetailDialog
+   541→      open={open}
+   542→      onOpenChange={onOpenChange}
+   543→      title="Edit membership dates"
+   544→      description="Changing the start date into an already-billed period is restricted — meals and charges for closed periods stay fixed."
+   545→      footer={
+   546→        <>
+   547→          <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+   548→            Cancel
+   549→          </GlassButton>
+   550→          <GlassButton loading={saving} onClick={() => void save()}>
+   551→            Save membership
+   552→          </GlassButton>
+   553→        </>
+   554→      }
+   555→    >
+   556→      <div className="space-y-4">
+   557→        <TextField label="Member from" type="date" value={fromDate} onChange={setFromDate} />
+   558→        <TextField label="Member until (optional)" type="date" value={untilDate} onChange={setUntilDate} hint="Leave empty for an open-ended membership." />
+   559→      </div>
+   560→    </DetailDialog>
+   561→  );
+   562→}
+   563→
+   564→/* ------------------------------------------------------------- exemption */
+   565→
+   566→function ExemptionDialog({
+   567→  open,
+   568→  onOpenChange,
+   569→  residentId,
+   570→  residentName,
+   571→  onSaved,
+   572→}: {
+   573→  open: boolean;
+   574→  onOpenChange: (open: boolean) => void;
+   575→  residentId: string;
+   576→  residentName: string;
+   577→  onSaved: () => void;
+   578→}) {
+   579→  const [reason, setReason] = useState("");
+   580→  const [expiresAt, setExpiresAt] = useState("");
+   581→  const [saving, setSaving] = useState(false);
+   582→
+   583→  async function save() {
+   584→    setSaving(true);
+   585→    try {
+   586→      await postJson("/api/v1/admin/policy-exemptions", {
+   587→        residentId,
+   588→        reason: reason.trim(),
+   589→        expiresAt: expiresAt || undefined,
+   590→      });
+   591→      toast.success("Exemption created", { description: `${residentName} is exempt until ${expiresAt || "cancelled"}.` });
+   592→      setReason("");
+   593→      setExpiresAt("");
+   594→      onSaved();
+   595→      onOpenChange(false);
+   596→    } catch (err) {
+   597→      toast.error(errMessage(err));
+   598→    } finally {
+   599→      setSaving(false);
+   600→    }
+   601→  }
+   602→
+   603→  const valid = reason.trim().length >= 3;
+   604→
+   605→  return (
+   606→    <DetailDialog
+   607→      open={open}
+   608→      onOpenChange={onOpenChange}
+   609→      title="Create deficit-policy exemption"
+   610→      description="While active, deficit restrictions (meal limiting) are lifted for this resident. Audited with your reason."
+   611→      footer={
+   612→        <>
+   613→          <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+   614→            Cancel
+   615→          </GlassButton>
+   616→          <GlassButton loading={saving} disabled={!valid} onClick={() => void save()}>
+   617→            Create exemption
+   618→          </GlassButton>
+   619→        </>
+   620→      }
+   621→    >
+   622→      <div className="space-y-4">
+   623→        <TextField
+   624→          label="Reason"
+   625→          value={reason}
+   626→          onChange={setReason}
+   627→          maxLength={500}
+   628→          placeholder="e.g. Salary delayed — settling by month end"
+   629→        />
+   630→        <TextField
+   631→          label="Expires on (optional)"
+   632→          type="date"
+   633→          value={expiresAt}
+   634→          onChange={setExpiresAt}
+   635→          hint="Leave empty to keep the exemption until cancelled."
+   636→        />
+   637→        <div className="glass-inset flex items-center justify-between rounded-md px-3.5 py-2.5">
+   638→          <span className="text-xs font-semibold text-muted-foreground">Policy</span>
+   639→          <Chip tone="frost">Deficit restriction</Chip>
+   640→        </div>
+   641→      </div>
+   642→    </DetailDialog>
+   643→  );
+   644→}
+   645→

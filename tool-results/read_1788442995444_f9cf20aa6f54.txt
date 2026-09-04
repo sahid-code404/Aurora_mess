@@ -1,0 +1,735 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Admin Expenses — record mess expenses (server-computed totals), review
+     5→ * (approve / reject) and void approved ones with reversals.
+     6→ * GET /api/v1/admin/expenses?status=&q=&month= · POST (multipart) ·
+     7→ * POST /:id/approve|reject|void
+     8→ */
+     9→
+    10→import { useMemo, useRef, useState } from "react";
+    11→import { AnimatePresence, motion } from "framer-motion";
+    12→import {
+    13→  Ban,
+    14→  Calendar,
+    15→  CheckCircle2,
+    16→  Clock,
+    17→  FileText,
+    18→  Package,
+    19→  Plus,
+    20→  ReceiptText,
+    21→  Trash2,
+    22→  XCircle,
+    23→  type LucideIcon,
+    24→} from "lucide-react";
+    25→import { toast } from "sonner";
+    26→import { PickerCapsule } from "@/components/glass/PickerCapsule";
+    27→import GlassCard from "@/components/glass/GlassCard";
+    28→import StatusBadge from "@/components/glass/StatusBadge";
+    29→import Money from "@/components/glass/Money";
+    30→import EmptyState from "@/components/glass/EmptyState";
+    31→import ErrorState from "@/components/glass/ErrorState";
+    32→import { ListSkeleton } from "@/components/glass/LoadingSkeleton";
+    33→import ConfirmDialog from "@/components/glass/ConfirmDialog";
+    34→import { GlassButton } from "@/components/glass/GlassButton";
+    35→import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+    36→import { cn } from "@/lib/utils";
+    37→import { useApiQuery, postJson } from "@/hooks/use-api-query";
+    38→import { useSession } from "@/hooks/use-session";
+    39→import { api, ApiClientError } from "@/lib/api";
+    40→import { SPRING_SNAPPY } from "@/lib/motion";
+    41→import { useApiMetaQuery, errMessage, useInvalidate, metaNum, metaStr } from "./_shared/api";
+    42→import { MoneyField, SelectField, TextAreaField, TextField, moneyProblem } from "./_shared/fields";
+    43→import { Chip, FilterChips, KpiGrid, KeyValue, OverflowMenu, ProofImage } from "./_shared/chrome";
+    44→import { fmtDate, fmtDateTime, fmtMinor, monthLabel, parseMoneyToMinor, todayKey } from "./_shared/format";
+    45→import type { ExpenseCategory, ExpenseRow } from "./_shared/types";
+    46→
+    47→const EXPENSES_PATH = "/api/v1/admin/expenses";
+    48→const CATEGORIES_PATH = "/api/v1/admin/expense-categories";
+    49→
+    50→/* ------------------------------------------------------------------ form */
+    51→
+    52→interface DraftItem {
+    53→  key: string;
+    54→  itemName: string;
+    55→  quantity: string;
+    56→  unit: string;
+    57→  unitPrice: string;
+    58→}
+    59→
+    60→function draftItem(): DraftItem {
+    61→  return { key: crypto.randomUUID(), itemName: "", quantity: "1", unit: "kg", unitPrice: "" };
+    62→}
+    63→
+    64→function itemEstimateMinor(item: DraftItem): number | null {
+    65→  const price = parseMoneyToMinor(item.unitPrice);
+    66→  if (price == null) return null;
+    67→  const qty = Number(item.quantity);
+    68→  if (!Number.isFinite(qty) || qty <= 0) return null;
+    69→  // Same rounding as the server: round-half-up on each line.
+    70→  return Math.round(qty * price);
+    71→}
+    72→
+    73→function ExpenseFormDialog({
+    74→  open,
+    75→  onOpenChange,
+    76→  categories,
+    77→  onSaved,
+    78→}: {
+    79→  open: boolean;
+    80→  onOpenChange: (open: boolean) => void;
+    81→  categories: ExpenseCategory[];
+    82→  onSaved: () => void;
+    83→}) {
+    84→  const [date, setDate] = useState(todayKey());
+    85→  const [categoryId, setCategoryId] = useState("");
+    86→  const [description, setDescription] = useState("");
+    87→  const [comment, setComment] = useState("");
+    88→  const [items, setItems] = useState<DraftItem[]>([draftItem()]);
+    89→  const [proof, setProof] = useState<File | null>(null);
+    90→  const [saving, setSaving] = useState(false);
+    91→  const [fields, setFields] = useState<Record<string, string>>({});
+    92→  const fileRef = useRef<HTMLInputElement | null>(null);
+    93→
+    94→  const estimate = useMemo(() => {
+    95→    let total = 0;
+    96→    let ok = true;
+    97→    for (const item of items) {
+    98→      const line = itemEstimateMinor(item);
+    99→      if (line == null) {
+   100→        ok = item.itemName.trim() !== "" || item.unitPrice.trim() !== "";
+   101→        if (!ok) break;
+   102→        continue;
+   103→      }
+   104→      total += line;
+   105→    }
+   106→    return ok ? total : null;
+   107→  }, [items]);
+   108→
+   109→  const valid =
+   110→    description.trim().length >= 2 &&
+   111→    items.length > 0 &&
+   112→    items.every(
+   113→      (i) =>
+   114→        i.itemName.trim().length > 0 &&
+   115→        Number(i.quantity) > 0 &&
+   116→        moneyProblem(i.unitPrice) === null
+   117→    );
+   118→
+   119→  function setItem(key: string, patch: Partial<DraftItem>) {
+   120→    setItems((prev) => prev.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+   121→  }
+   122→
+   123→  async function submit() {
+   124→    setSaving(true);
+   125→    setFields({});
+   126→    try {
+   127→      const form = new FormData();
+   128→      form.set("date", date);
+   129→      if (categoryId) form.set("categoryId", categoryId);
+   130→      form.set("description", description.trim());
+   131→      if (comment.trim()) form.set("comment", comment.trim());
+   132→      form.set(
+   133→        "itemsJson",
+   134→        JSON.stringify(
+   135→          items.map((i) => ({
+   136→            itemName: i.itemName.trim(),
+   137→            quantity: Number(i.quantity),
+   138→            unit: i.unit.trim() || undefined,
+   139→            unitPrice: i.unitPrice.trim(),
+   140→          }))
+   141→        )
+   142→      );
+   143→      if (proof) form.set("proof", proof);
+   144→
+   145→      const created = await api<ExpenseRow>(EXPENSES_PATH, { method: "POST", body: form });
+   146→      toast.success("Expense recorded", {
+   147→        description: `${created.displayNumber} · ${created.totalFormatted} — waiting for your approval (server-computed total).`,
+   148→      });
+   149→      onSaved();
+   150→      onOpenChange(false);
+   151→      // reset for next open
+   152→      setDescription("");
+   153→      setComment("");
+   154→      setItems([draftItem()]);
+   155→      setProof(null);
+   156→      if (fileRef.current) fileRef.current.value = "";
+   157→    } catch (err) {
+   158→      if (err instanceof ApiClientError && err.fields) setFields(err.fields);
+   159→      toast.error(errMessage(err));
+   160→    } finally {
+   161→      setSaving(false);
+   162→    }
+   163→  }
+   164→
+   165→  return (
+   166→    <DialogShell
+   167→      open={open}
+   168→      onOpenChange={onOpenChange}
+   169→      title="Add expense"
+   170→      description="Totals are always recomputed by the server from the items — the number below is an estimate."
+   171→      footer={
+   172→        <>
+   173→          <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+   174→            Cancel
+   175→          </GlassButton>
+   176→          <GlassButton loading={saving} disabled={!valid} icon={<Plus />} onClick={() => void submit()}>
+   177→            Save expense
+   178→          </GlassButton>
+   179→        </>
+   180→      }
+   181→    >
+   182→      <div className="space-y-4">
+   183→        <TextField label="Date" type="date" value={date} onChange={setDate} error={fields.date} />
+   184→        <SelectField
+   185→          label="Category"
+   186→          value={categoryId}
+   187→          onChange={setCategoryId}
+   188→          placeholder="No category"
+   189→          options={categories.map((c) => ({ value: c.id, label: c.name }))}
+   190→        />
+   191→        <TextField
+   192→          label="Description"
+   193→          value={description}
+   194→          onChange={setDescription}
+   195→          placeholder="e.g. Weekly vegetable market run"
+   196→          maxLength={200}
+   197→          error={fields.description ?? (description.trim().length > 0 && description.trim().length < 2 ? "Describe the expense in 2–200 characters." : undefined)}
+   198→        />
+   199→
+   200→        {/* items repeater */}
+   201→        <div>
+   202→          <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Items</p>
+   203→          <div className="space-y-2.5">
+   204→            <AnimatePresence initial={false}>
+   205→              {items.map((item, idx) => (
+   206→                <motion.div
+   207→                  key={item.key}
+   208→                  layout
+   209→                  initial={{ opacity: 0, y: 6 }}
+   210→                  animate={{ opacity: 1, y: 0 }}
+   211→                  exit={{ opacity: 0, height: 0 }}
+   212→                  transition={{ duration: 0.18 }}
+   213→                  className="glass-inset space-y-2.5 rounded-md p-3"
+   214→                >
+   215→                  <div className="flex items-center justify-between">
+   216→                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Item {idx + 1}</p>
+   217→                    {items.length > 1 && (
+   218→                      <button
+   219→                        type="button"
+   220→                        aria-label={`Remove item ${idx + 1}`}
+   221→                        onClick={() => setItems((prev) => prev.filter((i) => i.key !== item.key))}
+   222→                        className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-danger focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+   223→                      >
+   224→                        <Trash2 className="size-4" aria-hidden />
+   225→                      </button>
+   226→                    )}
+   227→                  </div>
+   228→                  <TextField label="Name" value={item.itemName} onChange={(v) => setItem(item.key, { itemName: v })} placeholder="e.g. Basmati rice" maxLength={90} />
+   229→                  <div className="grid grid-cols-2 gap-2.5">
+   230→                    <TextField label="Quantity" value={item.quantity} inputMode="decimal" onChange={(v) => setItem(item.key, { quantity: v })} placeholder="25" />
+   231→                    <TextField label="Unit" value={item.unit} onChange={(v) => setItem(item.key, { unit: v })} placeholder="kg" maxLength={20} />
+   232→                  </div>
+   233→                  <MoneyField label="Unit price" value={item.unitPrice} onChange={(v) => setItem(item.key, { unitPrice: v })} placeholder="90.00" />
+   234→                </motion.div>
+   235→              ))}
+   236→            </AnimatePresence>
+   237→          </div>
+   238→          <GlassButton
+   239→            variant="secondary"
+   240→            size="sm"
+   241→            className="mt-2.5"
+   242→            icon={<Plus />}
+   243→            onClick={() => setItems((prev) => [...prev, draftItem()])}
+   244→            disabled={items.length >= 50}
+   245→          >
+   246→            Add item
+   247→          </GlassButton>
+   248→          {fields.itemsJson && <p className="mt-1.5 text-[11px] font-medium text-danger">{fields.itemsJson}</p>}
+   249→        </div>
+   250→
+   251→        {/* live total — estimate */}
+   252→        <div className="glass-inset flex items-center justify-between rounded-md px-3.5 py-3">
+   253→          <span className="text-[13px] font-semibold text-muted-foreground">
+   254→            Total <span className="font-normal">(estimate)</span>
+   255→          </span>
+   256→          <span className="kpi-num text-base font-semibold">{estimate != null ? fmtMinor(estimate) : "—"}</span>
+   257→        </div>
+   258→
+   259→        {/* proof */}
+   260→        <div>
+   261→          <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Proof (optional)</p>
+   262→          <input
+   263→            ref={fileRef}
+   264→            type="file"
+   265→            accept="image/jpeg,image/png,application/pdf"
+   266→            onChange={(e) => setProof(e.target.files?.[0] ?? null)}
+   267→            className="glass-inset h-11 w-full rounded-md px-3 text-sm text-muted-foreground file:mr-3 file:rounded-pill file:border-0 file:bg-primary/12 file:px-3 file:py-1.5 file:text-[12px] file:font-semibold file:text-primary"
+   268→          />
+   269→          <p className="mt-1.5 text-[11px] text-muted-foreground">JPEG, PNG or PDF · up to 2 MB.</p>
+   270→        </div>
+   271→
+   272→        <TextAreaField label="Comment (optional)" value={comment} onChange={setComment} rows={2} maxLength={500} placeholder="Where it was bought, market notes…" />
+   273→      </div>
+   274→    </DialogShell>
+   275→  );
+   276→}
+   277→
+   278→/* ---------------------------------------------------------------- detail */
+   279→
+   280→function ExpenseDetailDialog({
+   281→  expense,
+   282→  tz,
+   283→  onClose,
+   284→  onAction,
+   285→}: {
+   286→  expense: ExpenseRow | null;
+   287→  tz: string;
+   288→  onClose: () => void;
+   289→  onAction: (kind: "approve" | "reject" | "void") => void;
+   290→}) {
+   291→  return (
+   292→    <DialogShell
+   293→      open={expense != null}
+   294→      onOpenChange={(open) => !open && onClose()}
+   295→      title={expense ? `${expense.displayNumber}` : ""}
+   296→      description={expense?.description}
+   297→      wide
+   298→      footer={
+   299→        expense ? (
+   300→          <>
+   301→            {expense.status === "PENDING" && (
+   302→              <>
+   303→                <GlassButton variant="destructive" icon={<XCircle />} onClick={() => onAction("reject")}>
+   304→                  Reject
+   305→                </GlassButton>
+   306→                <GlassButton variant="primary" icon={<CheckCircle2 />} onClick={() => onAction("approve")}>
+   307→                  Approve
+   308→                </GlassButton>
+   309→              </>
+   310→            )}
+   311→            {expense.status === "APPROVED" && (
+   312→              <GlassButton variant="destructive" icon={<Trash2 />} onClick={() => onAction("void")}>
+   313→                Void…
+   314→              </GlassButton>
+   315→            )}
+   316→          </>
+   317→        ) : undefined
+   318→      }
+   319→    >
+   320→      {expense && (
+   321→        <div className="space-y-5">
+   322→          <div>
+   323→            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Proof</p>
+   324→            <ProofImage fileId={expense.proofFileId} alt={`Proof for ${expense.displayNumber}`} />
+   325→          </div>
+   326→          <div>
+   327→            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Details</p>
+   328→            <KeyValue label="Amount" value={<span className="kpi-num text-base font-semibold">{expense.totalFormatted}</span>} />
+   329→            <KeyValue label="Status" value={<StatusBadge status={expense.status} />} />
+   330→            <KeyValue label="Source" value={expense.source === "TASK" ? "Task submission" : "Direct entry"} />
+   331→            <KeyValue label="Category" value={expense.categoryName ?? "—"} />
+   332→            <KeyValue label="Date" value={expense.dateKey ? fmtDate(expense.dateKey) : "—"} />
+   333→            <KeyValue label="Created" value={fmtDateTime(expense.createdAt, tz)} />
+   334→            {expense.reviewedAt && <KeyValue label="Reviewed" value={fmtDateTime(expense.reviewedAt, tz)} />}
+   335→            {expense.comment && <KeyValue label="Comment" value={expense.comment} />}
+   336→            <KeyValue label="Items" value={`${expense.itemCount ?? 0} line${expense.itemCount === 1 ? "" : "s"}`} />
+   337→            <KeyValue label="Journal" value={expense.journalId ? "Posted" : "—"} />
+   338→            {expense.reversalJournalId && <KeyValue label="Reversal" value="Posted" />}
+   339→            {expense.voidReason && <KeyValue label="Void reason" value={expense.voidReason} />}
+   340→          </div>
+   341→          {expense.items && expense.items.length > 0 && (
+   342→            <div>
+   343→              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Items (server-computed)</p>
+   344→              <div className="glass-inset space-y-1 rounded-md p-3">
+   345→                {expense.items.map((item) => (
+   346→                  <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-[13px]">
+   347→                    <span className="min-w-0 truncate">
+   348→                      <span className="font-medium">{item.itemName}</span>
+   349→                      <span className="kpi-num text-muted-foreground">
+   350→                        {" "}
+   351→                        · {item.quantity} {item.unit ?? "unit"} × <Money minor={item.unitPriceMinor} plain />
+   352→                      </span>
+   353→                    </span>
+   354→                    <Money minor={item.lineTotalMinor} className="shrink-0 font-semibold" />
+   355→                  </div>
+   356→                ))}
+   357→                <div className="mt-1 flex justify-between border-t border-border/50 pt-2 text-sm font-semibold">
+   358→                  <span>Total</span>
+   359→                  <Money minor={expense.totalMinor} />
+   360→                </div>
+   361→              </div>
+   362→            </div>
+   363→          )}
+   364→          {!expense.items && (
+   365→            <p className="text-[12px] leading-relaxed text-muted-foreground">
+   366→              Line items stay with the server-computed record; the list shows {expense.itemCount ?? 0} item
+   367→              {(expense.itemCount ?? 0) === 1 ? "" : "s"}.
+   368→            </p>
+   369→          )}
+   370→        </div>
+   371→      )}
+   372→    </DialogShell>
+   373→  );
+   374→}
+   375→
+   376→/* ------------------------------------------------------------------ view */
+   377→
+   378→/** Status-tinted icon tile for expense rows (BoardOps row anatomy). */
+   379→const EXPENSE_STATUS_TILE: Record<string, { className: string; Icon: LucideIcon }> = {
+   380→  PENDING: { className: "border-warning/30 bg-warning/12 text-warning", Icon: Clock },
+   381→  APPROVED: { className: "border-success/30 bg-success/12 text-success", Icon: CheckCircle2 },
+   382→  REJECTED: { className: "border-danger/30 bg-danger/12 text-danger", Icon: XCircle },
+   383→  VOIDED: { className: "border-border bg-muted/60 text-muted-foreground", Icon: Ban },
+   384→};
+   385→
+   386→function expenseTile(status: string): { className: string; Icon: LucideIcon } {
+   387→  return EXPENSE_STATUS_TILE[status] ?? { className: "border-border bg-muted/60 text-muted-foreground", Icon: ReceiptText };
+   388→}
+   389→
+   390→/** "2025-09" ± 1 → "2025-08" / "2025-10". */
+   391→function shiftMonthKey(key: string, delta: number): string {
+   392→  const [y, m] = key.split("-").map(Number);
+   393→  const d = new Date(y ?? 2025, (m ?? 1) - 1 + delta, 1);
+   394→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+   395→}
+   396→
+   397→/** Long month name for the picker pill ("September"). */
+   398→function monthLongName(key: string): string {
+   399→  const [y, m] = key.split("-").map(Number);
+   400→  return new Intl.DateTimeFormat("en-US", { month: "long" }).format(new Date(y ?? 2025, (m ?? 1) - 1, 1));
+   401→}
+   402→
+   403→/** "Sep 2025" for the month-scoped KPI label. */
+   404→function monthShortLabel(key: string): string {
+   405→  return monthLabel(Number(key.slice(0, 4)), Number(key.slice(5, 7)));
+   406→}
+   407→
+   408→export default function AdminExpenses() {
+   409→  const [status, setStatus] = useState("ALL");
+   410→  // Month scope — undefined = the server's current month (institution tz).
+   411→  // Navigating sets an explicit YYYY-MM; the list AND the month KPIs follow it
+   412→  // (the route scopes both to the requested month and echoes it in meta.month).
+   413→  const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
+   414→  const [formOpen, setFormOpen] = useState(false);
+   415→  const [detail, setDetail] = useState<ExpenseRow | null>(null);
+   416→  const [action, setAction] = useState<"approve" | "reject" | "void" | null>(null);
+   417→  const [acting, setActing] = useState(false);
+   418→  const invalidate = useInvalidate();
+   419→  const { institution } = useSession();
+   420→  const tz = institution?.timezone ?? "Asia/Kolkata";
+   421→
+   422→  const { data: envelope, isLoading, error, refetch } = useApiMetaQuery<ExpenseRow[]>(EXPENSES_PATH, {
+   423→    status: status === "ALL" ? undefined : status,
+   424→    month: monthParam,
+   425→  });
+   426→  const expenses = envelope?.data ?? [];
+   427→  const meta = envelope?.meta ?? {};
+   428→
+   429→  const categoriesQuery = useApiQuery<ExpenseCategory[]>(formOpen ? CATEGORIES_PATH : null);
+   430→  const categories = categoriesQuery.data ?? [];
+   431→
+   432→  const pendingCount = expenses.filter((e) => e.status === "PENDING").length;
+   433→
+   434→  // Effective month — the server echoes the resolved month in meta (it owns
+   435→  // the institution timezone); fall back to the client month before load.
+   436→  const thisMonthKey = todayKey().slice(0, 7);
+   437→  const activeMonthKey = metaStr(meta, "month") ?? monthParam ?? thisMonthKey;
+   438→  const isThisMonth = activeMonthKey === thisMonthKey;
+   439→
+   440→  async function runAction(kind: "approve" | "reject" | "void", reason?: string) {
+   441→    if (!detail) return;
+   442→    setActing(true);
+   443→    try {
+   444→      await postJson(`${EXPENSES_PATH}/${detail.id}/${kind}`, kind === "approve" ? {} : { reason });
+   445→      invalidate([EXPENSES_PATH, "/api/v1/admin/funds", "/api/v1/admin/dashboard", "/api/v1/admin/billing"]);
+   446→      toast.success(kind === "approve" ? "Expense approved" : kind === "reject" ? "Expense rejected" : "Expense voided", {
+   447→        description: `${detail.displayNumber} · ${detail.totalFormatted}`,
+   448→      });
+   449→      setAction(null);
+   450→      setDetail(null);
+   451→    } catch (err) {
+   452→      toast.error(errMessage(err));
+   453→    } finally {
+   454→      setActing(false);
+   455→    }
+   456→  }
+   457→
+   458→  if (error) {
+   459→    return (
+   460→      <div className="space-y-4">
+   461→        <ErrorState
+   462→          code={(error as ApiClientError | undefined)?.code}
+   463→          message={(error as ApiClientError | undefined)?.message}
+   464→          onRetry={() => void refetch()}
+   465→        />
+   466→      </div>
+   467→    );
+   468→  }
+   469→
+   470→  return (
+   471→    <div className="space-y-4">
+   472→      {/* Month capsule — circular arrows + reset pill (BoardOps picker) */}
+   473→      <PickerCapsule
+   474→        onPrev={() => setMonthParam(shiftMonthKey(activeMonthKey, -1))}
+   475→        onNext={() => setMonthParam(shiftMonthKey(activeMonthKey, 1))}
+   476→        prevLabel="Previous month"
+   477→        nextLabel="Next month"
+   478→        onPillClick={() => setMonthParam(undefined)}
+   479→        pillAriaLabel="Reset to the current month"
+   480→        resettable={!isThisMonth}
+   481→      >
+   482→        <Calendar className="size-4 shrink-0 text-primary" aria-hidden />
+   483→        <span className="min-w-0 text-center leading-tight">
+   484→          <span className="block truncate text-sm font-bold text-primary">{monthLongName(activeMonthKey)}</span>
+   485→          <span className="block truncate text-[11px] text-muted-foreground">{activeMonthKey.slice(0, 4)}</span>
+   486→        </span>
+   487→      </PickerCapsule>
+   488→
+   489→      <KpiGrid
+   490→        loading={isLoading && !envelope}
+   491→        className="lg:grid-cols-3"
+   492→        kpis={[
+   493→          {
+   494→            label: `Total Expenses · ${monthShortLabel(activeMonthKey)}`,
+   495→            value: metaStr(meta, "expensesThisMonthFormatted") ?? "—",
+   496→            icon: <ReceiptText />,
+   497→            tone: "primary",
+   498→            glow: "primary",
+   499→            sub: `${metaNum(meta, "entriesThisMonth") ?? 0} item entries approved`,
+   500→          },
+   501→          {
+   502→            label: "Remaining Funds",
+   503→            value: metaStr(meta, "remainingFundsFormatted") ?? "—",
+   504→            icon: <Package />,
+   505→            tone: "success",
+   506→            glow: "success",
+   507→            sub: "Cash & bank balance",
+   508→          },
+   509→          {
+   510→            label: "Awaiting Review",
+   511→            value: String(pendingCount),
+   512→            icon: <FileText />,
+   513→            tone: "warning",
+   514→            glow: "warning",
+   515→            sub: "Pending expenses",
+   516→          },
+   517→        ]}
+   518→      />
+   519→
+   520→      <FilterChips
+   521→        chips={[
+   522→          { value: "ALL", label: "All" },
+   523→          { value: "PENDING", label: "Pending" },
+   524→          { value: "APPROVED", label: "Approved" },
+   525→          { value: "REJECTED", label: "Rejected" },
+   526→          { value: "VOIDED", label: "Voided" },
+   527→        ]}
+   528→        value={status}
+   529→        onChange={setStatus}
+   530→      />
+   531→
+   532→      {/* Primary action — BoardOps action bar, right-aligned above the list */}
+   533→      <div className="flex flex-wrap items-center justify-end gap-2">
+   534→        <GlassButton variant="primary" icon={<Plus />} onClick={() => setFormOpen(true)}>
+   535→          Add Expense
+   536→        </GlassButton>
+   537→      </div>
+   538→
+   539→      {isLoading && !envelope ? (
+   540→        <ListSkeleton rows={5} />
+   541→      ) : expenses.length === 0 ? (
+   542→        <EmptyState
+   543→          icon={ReceiptText}
+   544→          title={status === "PENDING" ? "No pending expenses" : "No expenses recorded yet"}
+   545→          description={
+   546→            status === "PENDING"
+   547→              ? "Recorded expenses waiting for your approval will appear here."
+   548→              : "Use Add Expense to record the first mess purchase."
+   549→          }
+   550→          action={
+   551→            status !== "PENDING" ? (
+   552→              <GlassButton variant="secondary" icon={<Plus />} onClick={() => setFormOpen(true)}>
+   553→                Add Expense
+   554→              </GlassButton>
+   555→            ) : undefined
+   556→          }
+   557→        />
+   558→      ) : (
+   559→        <div className="max-h-[28rem] space-y-2.5 overflow-y-auto pr-1">
+   560→          <AnimatePresence mode="popLayout">
+   561→            {expenses.map((e, i) => (
+   562→              <motion.div
+   563→                key={e.id}
+   564→                initial={{ opacity: 0, y: 6 }}
+   565→                animate={{ opacity: 1, y: 0 }}
+   566→                exit={{ opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.15 } }}
+   567→                transition={{ ...SPRING_SNAPPY, delay: Math.min(i * 0.04, 0.2) }}
+   568→              >
+   569→                <GlassCard className="p-4">
+   570→                  <div className="flex items-start gap-3">
+   571→                    {(() => {
+   572→                      const tile = expenseTile(e.status);
+   573→                      const TileIcon = tile.Icon;
+   574→                      return (
+   575→                        <span
+   576→                          aria-hidden
+   577→                          className={cn(
+   578→                            "flex size-10 shrink-0 items-center justify-center rounded-md border [&_svg]:size-5",
+   579→                            tile.className
+   580→                          )}
+   581→                        >
+   582→                          <TileIcon aria-hidden />
+   583→                        </span>
+   584→                      );
+   585→                    })()}
+   586→                    <div className="min-w-0 flex-1">
+   587→                      <div className="flex flex-wrap items-center gap-2">
+   588→                        <p className="min-w-0 truncate text-sm font-medium" title={e.description}>
+   589→                          {e.description}
+   590→                        </p>
+   591→                        <StatusBadge status={e.status} />
+   592→                        {e.source === "TASK" && <Chip tone="frost">via task</Chip>}
+   593→                      </div>
+   594→                      <p className="kpi-num mt-0.5 truncate text-[11px] text-muted-foreground">
+   595→                        {e.displayNumber} · {e.categoryName ?? "No category"} · {e.dateKey ? fmtDate(e.dateKey) : "—"} ·{" "}
+   596→                        {e.itemCount ?? 0} item{(e.itemCount ?? 0) === 1 ? "" : "s"}
+   597→                      </p>
+   598→                      <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+   599→                        <div className="flex items-baseline gap-1">
+   600→                          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+   601→                            Total
+   602→                          </span>
+   603→                          <Money minor={e.totalMinor} className="text-base font-bold" />
+   604→                        </div>
+   605→                        <span className="kpi-num text-[11px] text-muted-foreground/80">
+   606→                          Recorded {fmtDateTime(e.createdAt, tz)}
+   607→                        </span>
+   608→                      </div>
+   609→                    </div>
+   610→                    <OverflowMenu
+   611→                      actions={[
+   612→                        { key: "view", label: "View details", icon: <FileText />, onSelect: () => setDetail(e) },
+   613→                        ...(e.status === "PENDING"
+   614→                          ? [
+   615→                              { key: "approve", label: "Approve", icon: <CheckCircle2 />, onSelect: () => setDetail(e), separatorBefore: true },
+   616→                              { key: "reject", label: "Reject…", icon: <XCircle />, onSelect: () => setDetail(e) },
+   617→                            ]
+   618→                          : []),
+   619→                        ...(e.status === "APPROVED"
+   620→                          ? [{ key: "void", label: "Void…", icon: <Trash2 />, onSelect: () => setDetail(e), destructive: true, separatorBefore: true }]
+   621→                          : []),
+   622→                      ]}
+   623→                    />
+   624→                  </div>
+   625→                </GlassCard>
+   626→              </motion.div>
+   627→            ))}
+   628→          </AnimatePresence>
+   629→        </div>
+   630→      )}
+   631→
+   632→      <ExpenseFormDialog
+   633→        open={formOpen}
+   634→        onOpenChange={setFormOpen}
+   635→        categories={categories}
+   636→        onSaved={() => invalidate([EXPENSES_PATH, "/api/v1/admin/dashboard"])}
+   637→      />
+   638→
+   639→      <ExpenseDetailDialog
+   640→        expense={detail}
+   641→        tz={tz}
+   642→        onClose={() => setDetail(null)}
+   643→        onAction={(kind) => setAction(kind)}
+   644→      />
+   645→
+   646→      {action && detail && (
+   647→        <ConfirmDialog
+   648→          open
+   649→          onOpenChange={(open) => !open && setAction(null)}
+   650→          title={
+   651→            action === "approve"
+   652→              ? "Approve expense"
+   653→              : action === "reject"
+   654→                ? "Reject expense"
+   655→                : "Void expense"
+   656→          }
+   657→          description={
+   658→            action === "approve" ? (
+   659→              <>
+   660→                The money is posted to the mess ledger (Dr Expenses / Cr Cash) and counts toward this month's formula.
+   661→                <span className="mt-2 block font-medium">
+   662→                  {detail.displayNumber} · {detail.totalFormatted}
+   663→                </span>
+   664→              </>
+   665→            ) : action === "reject" ? (
+   666→              <>
+   667→                The record stays for the audit trail but no money moves. The submitter is notified with your reason.
+   668→                <span className="mt-2 block font-medium">
+   669→                  {detail.displayNumber} · {detail.totalFormatted}
+   670→                </span>
+   671→              </>
+   672→            ) : (
+   673→              <>
+   674→                A reversal journal is posted — the money returns to cash and the expense stays visible as voided. Approved
+   675→                expenses are never deleted.
+   676→                <span className="mt-2 block font-medium">
+   677→                  {detail.displayNumber} · {detail.totalFormatted}
+   678→                </span>
+   679→              </>
+   680→            )
+   681→          }
+   682→          confirmLabel={action === "approve" ? "Approve" : action === "reject" ? "Reject" : "Void"}
+   683→          tone={action === "approve" ? "primary" : "destructive"}
+   684→          requireReason={action !== "approve"}
+   685→          loading={acting}
+   686→          onConfirm={(reason) => void runAction(action, reason)}
+   687→        />
+   688→      )}
+   689→    </div>
+   690→  );
+   691→}
+   692→
+   693→/* ------------------------------------------------------------- dialog shell */
+   694→
+   695→function DialogShell({
+   696→  open,
+   697→  onOpenChange,
+   698→  title,
+   699→  description,
+   700→  children,
+   701→  footer,
+   702→  wide,
+   703→}: {
+   704→  open: boolean;
+   705→  onOpenChange: (open: boolean) => void;
+   706→  title: string;
+   707→  description?: React.ReactNode;
+   708→  children: React.ReactNode;
+   709→  footer?: React.ReactNode;
+   710→  wide?: boolean;
+   711→}) {
+   712→  return (
+   713→    <Dialog open={open} onOpenChange={onOpenChange}>
+   714→      <DialogContent className={cn("glass-strong rounded-[28px] border-0 p-0", wide ? "sm:max-w-2xl" : "sm:max-w-md")}>
+   715→        <div className="flex max-h-[82vh] flex-col">
+   716→          <div className="px-5 pt-5 sm:px-6 sm:pt-6">
+   717→            <DialogTitle className="text-left text-lg font-semibold tracking-tight">{title}</DialogTitle>
+   718→            {description && (
+   719→              <DialogDescription className="mt-1.5 text-left text-[13px] leading-relaxed text-muted-foreground">
+   720→                {description}
+   721→              </DialogDescription>
+   722→            )}
+   723→          </div>
+   724→          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">{children}</div>
+   725→          {footer && (
+   726→            <div className="safe-b flex flex-wrap items-center justify-end gap-2 border-t border-border/50 px-5 py-4 sm:px-6">
+   727→              {footer}
+   728→            </div>
+   729→          )}
+   730→        </div>
+   731→      </DialogContent>
+   732→    </Dialog>
+   733→  );
+   734→}
+   735→

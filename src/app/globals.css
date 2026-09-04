@@ -1,0 +1,745 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================================
+   AURORA MESS — "LIQUID GLASS III" DESIGN SYSTEM (BoardOps NEXT)
+   BoardOps-Fresh structure + liquid_polish material language: dense frosted
+   glass (78–93% opacity, blur 22–30px, saturate ~155%), neutral cloudy
+   ambient background with 2–3 extremely soft accent fields, systematic
+   radius scale, premium light/dark modes, spring motion everywhere.
+   Mobile-first @320px. WCAG AA on glass.
+   Families: Mint (emerald primary) · Gold (accent) · Emerald (success) ·
+             Amber (warning) · Red (danger) · Slate (info)
+   NOTE: material classes (.glass*) are intentionally UNLAYERED so they win
+   the cascade over Tailwind utilities while remaining overridable inline.
+   ============================================================================ */
+
+@theme inline {
+  /* ---- shadcn token mapping (kept) ---- */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-display: var(--font-sora), var(--font-inter), ui-sans-serif, system-ui,
+    sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    Consolas, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  /* ---- semantic status colors ---- */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-frost: var(--primary);
+  --color-gold: var(--gold);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+
+  /* ---- radius scale — systematic (liquid_polish) ----
+     control-sm 12 · control 16 · card-sm 18 · card 22 · card-lg 26 ·
+     navigation 28 · sheet 30 · large-panel 32 · pill 999 */
+  --radius-xs: 12px;
+  --radius-sm: 16px;
+  --radius-md: 18px;
+  --radius-lg: 22px;
+  --radius-xl: 26px;
+  --radius-2xl: 28px;
+  --radius-3xl: 32px;
+  --radius-sheet: 30px;
+  --radius-pill: 999px;
+}
+
+/* ---------------------------------------------------------------- light ---- */
+:root {
+  /* legacy hook kept for any component referencing var(--radius) */
+  --radius: 22px;
+
+  /* base — luminous neutral cream */
+  --background: oklch(0.972 0.007 95);
+  --foreground: oklch(0.24 0.018 225);
+  --card: oklch(0.988 0.004 100);
+  --card-foreground: oklch(0.24 0.018 225);
+  --popover: oklch(0.985 0.005 100);
+  --popover-foreground: oklch(0.24 0.018 225);
+  --surface: oklch(0.978 0.005 100);
+  --surface-raised: oklch(0.992 0.003 100);
+
+  /* Mint — emerald primary */
+  --primary: oklch(0.52 0.085 170);
+  --primary-foreground: oklch(0.985 0.008 165);
+
+  --gold: oklch(0.62 0.12 75);
+  --secondary: oklch(0.955 0.014 145);
+  --secondary-foreground: oklch(0.32 0.025 210);
+  --muted: oklch(0.958 0.008 125);
+  --muted-foreground: oklch(0.47 0.02 215);
+  --accent: oklch(0.93 0.038 168);
+  --accent-foreground: oklch(0.34 0.06 175);
+
+  --destructive: oklch(0.5 0.199 27);
+  --destructive-foreground: oklch(0.985 0.005 25);
+  --success: oklch(0.5 0.108 158);
+  --success-foreground: oklch(0.985 0.01 160);
+  --warning: oklch(0.51 0.112 68);
+  --warning-foreground: oklch(0.99 0.01 85);
+  --danger: var(--destructive);
+  --danger-foreground: var(--destructive-foreground);
+  --info: oklch(0.55 0.1 240);
+  --info-foreground: oklch(0.985 0.005 240);
+
+  --border: oklch(0.895 0.012 140);
+  --input: oklch(0.885 0.012 140);
+  --ring: oklch(0.62 0.09 172);
+
+  --chart-1: oklch(0.55 0.088 172);
+  --chart-2: oklch(0.66 0.115 155);
+  --chart-3: oklch(0.72 0.125 75);
+  --chart-4: oklch(0.6 0.185 27);
+  --chart-5: oklch(0.55 0.02 220);
+
+  --sidebar: oklch(0.985 0.005 100);
+  --sidebar-foreground: oklch(0.24 0.018 225);
+  --sidebar-primary: oklch(0.52 0.085 170);
+  --sidebar-primary-foreground: oklch(0.985 0.008 165);
+  --sidebar-accent: oklch(0.93 0.038 168);
+  --sidebar-accent-foreground: oklch(0.34 0.06 175);
+  --sidebar-border: oklch(0.9 0.012 140);
+  --sidebar-ring: oklch(0.62 0.09 172);
+
+  /* ---- glass materials (light: dense, readable — liquid_polish targets
+     normal 78–86% / strong 86–93%, blur 20–26 / 26–34) ---- */
+  --glass-surface: rgba(255, 255, 255, 0.84);
+  --glass-surface-strong: rgba(255, 255, 255, 0.9);
+  --glass-surface-nav: rgba(255, 255, 255, 0.87);
+  --glass-border: rgba(22, 44, 36, 0.11);
+  --glass-border-strong: rgba(22, 44, 36, 0.17);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-highlight-strong: rgba(255, 255, 255, 0.97);
+  --glass-inset-bg: rgba(255, 255, 255, 0.55);
+  --glass-inset-bg-strong: rgba(255, 255, 255, 0.72);
+  --glass-inset-border: rgba(22, 44, 36, 0.09);
+  --glass-soft: rgba(255, 255, 255, 0.6);
+  --glass-fallback: rgba(247, 246, 241, 0.985);
+  --glass-blur: 22px;
+  --glass-blur-strong: 30px;
+  --glass-saturate: 155%;
+  --glass-saturate-strong: 165%;
+
+  /* ---- shadows ---- */
+  --shadow-glass: 0 1px 2px rgba(18, 36, 30, 0.05),
+    0 12px 32px -8px rgba(18, 36, 30, 0.12);
+  --shadow-glass-strong: 0 2px 4px rgba(18, 36, 30, 0.06),
+    0 24px 56px -12px rgba(18, 36, 30, 0.18);
+  --shadow-nav: 0 -6px 24px -6px rgba(18, 36, 30, 0.1);
+  --shadow-raised: 0 1px 2px rgba(18, 36, 30, 0.08),
+    0 4px 12px -2px rgba(18, 36, 30, 0.1);
+  --shadow-primary-glow: 0 6px 24px -6px color-mix(in oklab, var(--primary) 45%, transparent);
+
+  /* ---- misc ---- */
+  --segment-active-bg: rgba(255, 255, 255, 0.94);
+  --segment-active-shadow: 0 1px 2px rgba(18, 36, 30, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --auth-bg-image: url("/auth-bg-light.png");
+
+  /* ---- z-index scale ---- */
+  --z-content: 1;
+  --z-appbar: 30;
+  --z-nav: 40;
+  --z-popover: 60;
+  --z-modal: 65;
+  --z-toast: 80;
+}
+
+/* ----------------------------------------------------------------- dark ---- */
+.dark {
+  /* base — deep graphite with navy undertone */
+  --background: oklch(0.158 0.012 240);
+  --foreground: oklch(0.955 0.006 95);
+  --card: oklch(0.215 0.012 240);
+  --card-foreground: oklch(0.955 0.006 95);
+  --popover: oklch(0.225 0.012 240);
+  --popover-foreground: oklch(0.955 0.006 95);
+  --surface: oklch(0.215 0.012 240);
+  --surface-raised: oklch(0.245 0.012 240);
+
+  /* Mint — luminous emerald on ink */
+  --primary: oklch(0.79 0.128 168);
+  --primary-foreground: oklch(0.16 0.035 175);
+
+  --gold: oklch(0.78 0.135 80);
+  --secondary: oklch(0.27 0.012 240);
+  --secondary-foreground: oklch(0.92 0.006 160);
+  --muted: oklch(0.25 0.012 240);
+  --muted-foreground: oklch(0.7 0.014 200);
+  --accent: oklch(0.3 0.032 175);
+  --accent-foreground: oklch(0.88 0.05 170);
+
+  --destructive: oklch(0.64 0.178 25);
+  --destructive-foreground: oklch(0.985 0.005 25);
+  --success: oklch(0.76 0.119 162);
+  --success-foreground: oklch(0.17 0.045 165);
+  --warning: oklch(0.8 0.128 80);
+  --warning-foreground: oklch(0.18 0.04 80);
+  --danger: var(--destructive);
+  --danger-foreground: var(--destructive-foreground);
+  --info: oklch(0.74 0.09 235);
+  --info-foreground: oklch(0.17 0.03 240);
+
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.72 0.09 172);
+
+  --chart-1: oklch(0.72 0.115 168);
+  --chart-2: oklch(0.78 0.13 155);
+  --chart-3: oklch(0.8 0.125 80);
+  --chart-4: oklch(0.68 0.17 25);
+  --chart-5: oklch(0.62 0.02 220);
+
+  --sidebar: oklch(0.205 0.012 240);
+  --sidebar-foreground: oklch(0.955 0.006 95);
+  --sidebar-primary: oklch(0.79 0.128 168);
+  --sidebar-primary-foreground: oklch(0.16 0.035 175);
+  --sidebar-accent: oklch(0.3 0.032 175);
+  --sidebar-accent-foreground: oklch(0.88 0.05 170);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.72 0.09 172);
+
+  /* ---- glass materials (dark: dense graphite frost — liquid_polish
+     targets oklch(0.19–0.25) at 78–88% / 86–93%) ---- */
+  --glass-surface: oklch(0.215 0.012 240 / 0.84);
+  --glass-surface-strong: oklch(0.235 0.013 240 / 0.91);
+  --glass-surface-nav: oklch(0.205 0.012 240 / 0.87);
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --glass-border-strong: rgba(255, 255, 255, 0.24);
+  --glass-highlight: rgba(255, 255, 255, 0.2);
+  --glass-highlight-strong: rgba(255, 255, 255, 0.3);
+  --glass-inset-bg: rgba(255, 255, 255, 0.09);
+  --glass-inset-bg-strong: rgba(255, 255, 255, 0.14);
+  --glass-inset-border: rgba(255, 255, 255, 0.13);
+  --glass-soft: oklch(0.19 0.012 240 / 0.68);
+  --glass-fallback: rgba(13, 17, 22, 0.985);
+  --glass-blur: 22px;
+  --glass-blur-strong: 30px;
+  --glass-saturate: 155%;
+  --glass-saturate-strong: 165%;
+
+  /* ---- shadows (layered, cinematic) ---- */
+  --shadow-glass: 0 1px 2px rgba(0, 0, 0, 0.4),
+    0 16px 40px -12px rgba(0, 0, 0, 0.5);
+  --shadow-glass-strong: 0 2px 4px rgba(0, 0, 0, 0.45),
+    0 24px 64px -16px rgba(0, 0, 0, 0.6);
+  --shadow-nav: 0 -6px 28px -6px rgba(0, 0, 0, 0.45);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.4),
+    0 4px 14px -2px rgba(0, 0, 0, 0.4);
+  --shadow-primary-glow: 0 10px 36px -8px color-mix(in oklab, var(--primary) 55%, transparent),
+    0 2px 10px -2px color-mix(in oklab, var(--primary) 40%, transparent);
+
+  --segment-active-bg: rgba(255, 255, 255, 0.16);
+  --segment-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --auth-bg-image: url("/auth-bg-dark.png");
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+    /* Fluid root font size — scales from 14px (mobile) to 16px (desktop) */
+    font-size: clamp(14px, 0.9vw + 11px, 16px);
+    -webkit-text-size-adjust: 100%;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-synthesis-weight: none;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+  }
+}
+
+/* ============================================================================
+   BACKGROUND — CALM AMBIENT CANOPY (liquid_polish)
+   Neutral cloudy base + three extremely soft accent fields (emerald /
+   gold / violet) with a slow positional drift (GPU transforms only) + a
+   whisper of film grain + a soft vignette. Sits BELOW content so
+   backdrop-filters have something real to refract. Reduced-motion freezes
+   the drift. Content remains the star — no aurora wallpaper, no neon.
+   ============================================================================ */
+
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    radial-gradient(60% 46% at 50% 0%, rgba(255, 255, 255, 0.5), transparent 70%),
+    linear-gradient(168deg, #f8f6f1 0%, #f0eee7 55%, #e9ebe3 100%);
+}
+
+.dark .app-bg {
+  background:
+    radial-gradient(52% 40% at 50% -6%, rgba(56, 116, 98, 0.15), transparent 70%),
+    linear-gradient(168deg, #0a0e12 0%, #0d1218 52%, #090d11 100%);
+}
+
+.aurora {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.dark .aurora {
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
+
+.aurora-a1 {
+  top: -22%;
+  left: -14%;
+  width: 58vw;
+  height: 58vw;
+  background: radial-gradient(circle at 40% 40%, rgba(52, 211, 153, 0.16), transparent 62%);
+  animation: aurora-drift-a 44s ease-in-out infinite alternate;
+}
+.aurora-a2 {
+  top: -14%;
+  right: -16%;
+  width: 50vw;
+  height: 50vw;
+  background: radial-gradient(circle at 60% 40%, rgba(251, 191, 36, 0.11), transparent 60%);
+  animation: aurora-drift-b 36s ease-in-out infinite alternate;
+}
+.aurora-a3 {
+  bottom: -26%;
+  left: 6%;
+  width: 54vw;
+  height: 54vw;
+  background: radial-gradient(circle at 45% 55%, rgba(99, 102, 241, 0.08), transparent 60%);
+  animation: aurora-drift-c 50s ease-in-out infinite alternate;
+}
+
+@media (max-width: 640px) {
+  .aurora-a1 { width: 84vw; height: 84vw; }
+  .aurora-a2 { width: 74vw; height: 74vw; }
+  .aurora-a3 { width: 82vw; height: 82vw; }
+}
+
+@keyframes aurora-drift-a {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(10vw, 8vh, 0) scale(1.18); }
+}
+@keyframes aurora-drift-b {
+  from { transform: translate3d(0, 0, 0) scale(1.1); }
+  to { transform: translate3d(-8vw, 12vh, 0) scale(0.94); }
+}
+@keyframes aurora-drift-c {
+  from { transform: translate3d(0, 0, 0) scale(0.92); }
+  to { transform: translate3d(12vw, -10vh, 0) scale(1.14); }
+}
+
+/* film grain — premium texture, cheap and static */
+.grain {
+  position: absolute;
+  inset: -50%;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  opacity: 0.05;
+}
+.dark .grain {
+  opacity: 0.07;
+}
+
+/* vignette pulls focus to the centre of the glass stack (kept soft) */
+.app-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    130% 100% at 50% 38%,
+    transparent 52%,
+    rgba(0, 0, 0, 0.22) 100%
+  );
+}
+:root:not(.dark) .app-bg::after {
+  background: radial-gradient(
+    130% 100% at 50% 38%,
+    transparent 60%,
+    rgba(58, 72, 66, 0.09) 100%
+  );
+}
+
+.auth-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--auth-bg-image);
+  background-size: cover;
+  background-position: center;
+  opacity: 0.1;
+}
+
+.dark .auth-bg {
+  opacity: 0.14;
+}
+
+/* ============================================================================
+   GLASS MATERIALS — liquid_polish dense frost
+   Fills stay in the 78–93% density band (readable, blur clearly visible);
+   blur 22–30px + saturate ~155%. 1px hairline + inset top highlight +
+   inset bottom shade = thick glass.
+   ============================================================================ */
+
+.glass {
+  background-color: var(--glass-surface);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-glass),
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.06);
+}
+.dark .glass {
+  box-shadow: var(--shadow-glass),
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22);
+}
+
+.glass-strong {
+  background-color: var(--glass-surface-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong))
+    saturate(var(--glass-saturate-strong));
+  backdrop-filter: blur(var(--glass-blur-strong))
+    saturate(var(--glass-saturate-strong));
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: var(--shadow-glass-strong),
+    inset 0 1px 0 var(--glass-highlight-strong),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.08);
+}
+.dark .glass-strong {
+  box-shadow: var(--shadow-glass-strong),
+    inset 0 1px 0 var(--glass-highlight-strong),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+}
+
+/* Nested surfaces — NO backdrop-filter (never stack filters over filters) */
+.glass-inset {
+  background-color: var(--glass-inset-bg);
+  border: 1px solid var(--glass-inset-border);
+  box-shadow: inset 0 1px 2px rgba(18, 36, 30, 0.05);
+}
+
+.dark .glass-inset {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.24);
+}
+
+.glass-inset-strong {
+  background-color: var(--glass-inset-bg-strong);
+  border: 1px solid var(--glass-inset-border);
+}
+
+/* Soft glass — lighter density wash for large ambient panels */
+.glass-soft {
+  background-color: var(--glass-soft);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-glass),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+/* Persistent navigation surface (app bar / bottom nav / sidebar) */
+.glass-nav {
+  background-color: var(--glass-surface-nav);
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong))
+    saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-nav),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+/* Graceful degradation when backdrop-filter is unsupported */
+@supports not ((backdrop-filter: blur(24px)) or (-webkit-backdrop-filter: blur(24px))) {
+  .glass,
+  .glass-strong,
+  .glass-nav,
+  .glass-soft {
+    background-color: var(--glass-fallback);
+  }
+}
+
+/* ============================================================================
+   LIQUID EFFECTS
+   Shimmer skeletons, glow breathing, gradient text.
+   ============================================================================ */
+
+/* shimmer skeleton — a travelling highlight over a soft pulse */
+.glass-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in oklab, var(--foreground) 9%, transparent);
+}
+.glass-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--foreground) 7%, transparent),
+    transparent
+  );
+  animation: skeleton-sweep 1.9s ease-in-out infinite;
+}
+@keyframes skeleton-sweep {
+  0% { transform: translateX(-100%); }
+  60%, 100% { transform: translateX(100%); }
+}
+
+/* breathing glow — logo, active indicators */
+.glow-breathe {
+  animation: glow-breathe 3.4s ease-in-out infinite;
+}
+@keyframes glow-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 32%, transparent),
+      var(--shadow-primary-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 10px color-mix(in oklab, var(--primary) 0%, transparent),
+      0 14px 44px -8px color-mix(in oklab, var(--primary) 70%, transparent);
+  }
+}
+
+/* liquid gradient headline text */
+.text-liquid {
+  background-image: linear-gradient(
+    110deg,
+    #2dd4a0 0%,
+    #fbbf24 34%,
+    #fb7185 52%,
+    #2dd4a0 82%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: liquid-pan 8s ease-in-out infinite;
+}
+@keyframes liquid-pan {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* gentle infinite float (logos, hero ornaments) */
+.float-y {
+  animation: float-y 6s ease-in-out infinite;
+}
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}
+
+/* CSS entrance — rise + settle (usable server-side, no JS) */
+.anim-rise {
+  animation: rise-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* soft pulse dot (unread markers) */
+.pulse-dot {
+  animation: pulse-dot 2.4s ease-out infinite;
+}
+@keyframes pulse-dot {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 45%, transparent); }
+  70% { box-shadow: 0 0 0 7px color-mix(in oklab, currentColor 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 0%, transparent); }
+}
+
+/* ============================================================================
+   TYPOGRAPHY HELPERS
+   ============================================================================ */
+
+/* Numeric display — tabular lining figures, tight tracking */
+.kpi-num {
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+/* ============================================================================
+   LAYOUT HELPERS
+   ============================================================================ */
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.safe-b {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* edge fade for horizontally scrolling rows */
+.fade-x {
+  -webkit-mask-image: linear-gradient(90deg, transparent, black 16px, black calc(100% - 16px), transparent);
+  mask-image: linear-gradient(90deg, transparent, black 16px, black calc(100% - 16px), transparent);
+}
+
+/* ============================================================================
+   AUTO-FIT GRIDS (BoardOps pattern) — columns add/remove themselves based on
+   available width; cards stretch to fill rows evenly.
+   ============================================================================ */
+
+.grid-kpi {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+}
+.grid-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+}
+.grid-cards-sm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+
+/* ============================================================================
+   STATUS GLOWS — tinted ambient halo per semantic color (BoardOps pattern)
+   ============================================================================ */
+
+.glow-primary {
+  box-shadow: 0 0 20px color-mix(in oklab, var(--primary) 35%, transparent);
+}
+.glow-success {
+  box-shadow: 0 0 20px color-mix(in oklab, var(--success) 35%, transparent);
+}
+.glow-warning {
+  box-shadow: 0 0 20px color-mix(in oklab, var(--warning) 35%, transparent);
+}
+.glow-danger {
+  box-shadow: 0 0 20px color-mix(in oklab, var(--danger) 35%, transparent);
+}
+
+/* ============================================================================
+   SCROLLBARS — thin & translucent (webkit + firefox)
+   ============================================================================ */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 40, 34, 0.22) transparent;
+}
+.dark * {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(20, 40, 34, 0.22);
+  border-radius: 999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(20, 40, 34, 0.32);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* ============================================================================
+   SELECTION
+   ============================================================================ */
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 28%, transparent);
+}
+
+/* ============================================================================
+   REDUCED MOTION — freeze aurora drift, sheens and CSS animations
+   (framer-motion components additionally check useReducedMotion)
+   ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .aurora,
+  .float-y,
+  .glow-breathe,
+  .text-liquid {
+    animation: none !important;
+  }
+}

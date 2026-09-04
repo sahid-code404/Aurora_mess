@@ -1,0 +1,300 @@
+Task ID: 13
+Agent: Main Orchestrator (Z.ai Code)
+Task: "Now polish this frontend" — full BoardOps-Fresh composition pass across every remaining page, on the Aurora liquid-glass theme.
+
+Work Log:
+- 13-a (orchestrator): NEW src/components/glass/PickerCapsule.tsx (CircleArrow + centered capsule extracted from the Meals gold-standard pattern; pill click = reset-to-current with RotateCcw hint). TabRow + admin _shared/chrome FilterChips upgraded to SOLID primary active pills (BoardOps filter style, layoutId slide kept). KpiGrid passes tone/glow/onClick/navLabel/index through to KpiCard. NEW SearchInput in resident/_shared/ui.tsx. Deleted dead PageHeader.tsx + stub-view.tsx after confirming zero importers. Fixed the 5 pre-existing tsc 'never' errors in admin/_shared/api.ts (ResponseBody<T> type alias — type-level only).
+- 13-b (money): admin/payments, resident/payments, admin/funds → headerless, KpiGrid/raw KPI cards with tone+glow, method-tinted row tiles, pending quick-approve row buttons (same mutation flow), SearchField + FilterChips (resident got client-side SearchInput + TabRow w/ pending count), gradient-avatar resident fund rows. pay-dialog untouched (already on-theme).
+- 13-c (billing): admin/expenses gained PickerCapsule month picker (API natively supported ?month=); admin/billing KPIs + FilterChips w/ counts + gradient-avatar billed-panel rows (fixed pre-existing tsc error at billing.tsx:529); resident/billing KPI trio + centered Pay Bill action bar + reference bill rows. Readiness/closing/adjustment dialogs byte-identical.
+- 13-d (ops): admin+resident/tasks 4-KPI grids (Open/In Progress/Done/Overdue) + status-tinted tiles + right-aligned Assign/Submit action bars; announcements 4 KPIs + Publish bar + type-tinted board rows (pinned ring, urgent glow-danger); notifications (both roles) FilterChips w/ unread counts + tone orbs + unread rings, day-grouped feeds.
+- 13-e (people): residents directory gradient-avatar rows (fixed all 5 pre-existing OverflowAction tsc errors); resident360 profile hero + funds KPIs + SectionCard expanders per tab; audit severity-tinted rows + entity FilterChips + JSON diff expander; formulas meal-configuration-style config card (accent bar, Chip badges, mono expression box, mt-auto estimate).
+- 13-f (settings): settings-hub GroupCards w/ tinted tiles + dirty dots; calendar rebuilt on PickerCapsule + Sun-first house grid (today ring, past dimmed, token-tone dots, legend); resident/profile gradient-avatar hero + grouped cards; MINIMAL: PageHeader stripped from both dashboards + meal-configuration (New Meal → top-right action bar), roots → space-y-4.
+- Post-merge fixes: resident/payments + resident/billing KPI grids changed grid-cols-3 → grid-cols-2 sm:grid-cols-3 (VLM + DOM measurement caught label/value truncation at 390px — money values need ≥143px card content; KpiGridSkeleton override matched).
+- Verification: bun run lint clean; tsc --noEmit zero errors in ALL of src/components (first time); dev server crashed twice during the session — root cause: kernel OOM-killer (Chromium + Turbopack full recompile spiked past 4GB) — resolved by killing the stale browser daemon, rm -rf .next, detached restart via setsid; server then stable (955MB–1.7GB RSS, 200s throughout). agent-browser E2E: resident login → dashboard/payments(KPIs+rows)/billing(KPIs+estimate+bill history)/tasks(4 KPIs+rows)/notifications(tabs+day groups)/profile(hero+sign-out works); admin login → dashboard, payments (Pending→All filter swap renders rows), funds (search/chips/5 resident rows), expenses (PickerCapsule next-month → "Oct 2026" KPI subs + reset back), billing (Aug period → SNAPSHOT panel w/ RESIDENTS 5, MEALS 352, GUESTS 6), residents → 360° view (hero + tabs + detail actions), tasks, announcements, notifications, calendar (picker + 30 day cells + event counts), formulas, settings, audit, meal-configuration; ZERO page/console errors across every page; 390px automated clip-scan + VLM reviews of res-payments mobile (truncation found → fixed → re-measured clean), res-payments desktop 9/10, admin-expenses mobile PASS, admin-tasks desktop clean.
+- Merged worklog-entry-13-{b..f}.md files into this worklog; removed the temp entry files.
+
+Stage Summary:
+- Every page in the app (admin 15 + resident 7) now follows the BoardOps-Fresh composition — headerless (TopBar carries titles), space-y-4 roots, BoardOps action bars, tone/glow KPI cards, solid-primary filter pills, PickerCapsule month/date navigation (expenses, calendar), reference-anatomy rows (tinted tiles, gradient avatars, rotating chevron expanders) — all on the untouched Aurora liquid-glass theme with domain logic byte-identical.
+- New/changed shared primitives: PickerCapsule (new), TabRow + FilterChips (solid primary active), KpiGrid (tone/glow passthrough), resident SearchInput (new). PageHeader and stub-view are GONE (zero importers).
+- src/components is now 100% tsc-clean (api.ts never-errors, billing 529, residents OverflowAction errors all fixed).
+- Ops note for future agents: the sandbox OOM-kills next-server when a headless Chromium is resident during a full Turbopack recompile — close the browser before mass edits/recompiles, restart detached with setsid, and warm the compile with curl before opening the browser.
+
+---
+Task ID: 14
+Agent: Main Orchestrator (Z.ai Code)
+Task: "make dashboard and day section like this also" — replicate the two uploaded BoardOps screenshots: (1) the dashboard TODAY'S MEALS section with interactive toggle cards, (2) the collapsible agenda day sections with circular gradient date discs + card-style meal rows.
+
+Work Log:
+- VLM-analyzed both screenshots: dashboard = TODAY'S MEALS header + 3 stacked cards (circular icon, name+time, toggle right, "Cutoff passed · Locked" / "Change until X · Nh Nm left" footer, amber Admin-override badge); day section = circular gradient date disc (green for today, grey inset otherwise), "Today"/long-date title, ✓N ON / ×N OFF / 🔒N chips, expanded meal cards with circular gradient icons (amber breakfast / emerald lunch / teal dinner) + toggle switches.
+- Backend: GET /api/v1/me/dashboard now selects definition.colorToken + residentMeal.version and exposes colorToken/myVersion in todayMeals DTO (additive only; no other endpoint touched). DashboardTodayMeal type extended to match.
+- NEW src/components/glass/MealOrb.tsx — BoardOps circular 135°-gradient meal disc per colorToken (amber/emerald/sky/frost/rose/violet) with dark-tinted glyph, top inner highlight + coloured glow; sizes sm(36)/md(48)/lg(56); + mealOrbToken() helper.
+- resident/dashboard.tsx TodayMealCard rebuilt: MealOrb + text-base name + kpi-num time row; interactive GlassToggle when (myVersion && !locked && !override && state∈{ON,OFF}) else status badges (ADMIN_OVERRIDE/state/LOCKED); amber "Admin override" chip (ShieldCheck) in footer row; flash FormNotice slot with AnimatePresence. New optimistic toggle handler: patches ["api","/api/v1/me/dashboard",{}] cache (myState flip + mealsToday KPI recount), POSTs /api/v1/meals/{id}/toggle with expectedVersion, applies authoritative response, invalidates RESIDENT_KEYS.meals, rolls back + flashes on error (cutoff/changed/generic), flash auto-clears in 6s (cleanup on unmount).
+- resident/meals.tsx agenda redesign: AgendaDayRow date badge → size-14 rounded-full (today: from-primary/75→primary gradient + primary-foreground text, else glass-inset), title → text-base font-semibold, header p-4, meal list px-4 pb-4 space-y-2.5; AgendaMealRow → glass-inset rounded-2xl p-3 with MealOrb + text-[15px] font-semibold name; DayMealCard icon tile → MealOrb. mealTint import dropped (unused).
+- admin/meals.tsx: per-meal count-card icon tile → MealOrb size lg; resident expander today-meal rows → MealOrb size sm + rounded-2xl p-3 + text-[15px] font-semibold (mealHex import kept for card gradients).
+- Verification: bun run lint → clean; bunx tsc --noEmit → zero errors in every touched file (remaining repo errors pre-existing in examples/scripts/skills/other routes). agent-browser E2E: resident login → dashboard (VLM: orbs + toggles + footer countdown + amber Admin override badge + 4 KPIs all present, no defects); cleared the admin override on Dinner via a prisma one-off to make it toggleable, then clicked the dashboard toggle → "Dinner today: On", KPI "Meals Today 1", API persisted (version 5→7), no console/page errors; meals agenda (VLM: circular teal-gradient today disc, inset Fri disc, ✓1 ON ×2 OFF 🔒2 chips, expanded cards with amber/emerald/teal orbs + green dinner toggle, no defects); agenda toggle click flips On→Off; Day view cards show orbs + footer states; 390px mobile clip-scan of dashboard+agenda → no truncation/overlap, date disc fully round; admin login → #/admin/meals count cards show amber/emerald/teal circular orbs, expanded resident row (Sahid Haque) shows small orbs + toggles, no defects. dev.log's "Module not found @components/glass/MealOrb" entries are stale (transient typo fixed minutes into the session; file now imports @/components/glass/MealOrb and E2E after the fix ran clean with 200s).
+- Restored Dinner to ON after testing (final state matches resident's own selection).
+
+Stage Summary:
+- Screenshot parity achieved on the liquid-glass theme: dashboard TODAY'S MEALS cards are now INTERACTIVE (optimistic GlassToggle with rollback, spec §114) instead of read-only status badges; agenda day sections use BoardOps circular gradient date discs (today pops in primary gradient) and card-style meal rows with per-meal gradient orbs.
+- New shared primitive MealOrb (glass library) reusable anywhere meal icons appear; dashboard API now carries colorToken + myVersion (additive, backward compatible).
+- Domain logic untouched: same /toggle endpoint, same version guard, same error codes/copy, same invalidation strategy; admin authority rules preserved (overridden/locked meals render badges, not switches).
+
+---
+Task ID: 15
+Agent: Main Orchestrator (Z.ai Code)
+Task: "make same agenda current day view in dashboard and the day view" — replace the resident dashboard's TODAY'S MEALS card grid AND the meals page Day view with the exact agenda day-section design (BoardOps screenshots: circular gradient date disc, "Today"/long-date title, status chips, collapsible glass-inset meal rows with orbs + toggles).
+
+Work Log:
+- Analyzed the 3 pasted BoardOps screenshots with VLM: (1) dashboard TODAY'S MEALS stacked toggle cards, (2)+(3) the agenda day-section style (gradient date disc "THU 3", "Today" title, ✓1 ON ×2 OFF 🔒2 chips, inset meal rows with gradient orbs + countdown + toggles). User wants style (2)/(3) everywhere the current day is shown.
+- NEW src/components/app/resident/_shared/agenda-day.tsx — the single source of the agenda day look: AgendaDaySection (GlassCard + circular gradient date disc w/ weekday+day, "Today"/longDayLabel title, on/off/leave/locked/admin MiniChips, rotating chevron, collapsible space-y-2.5 px-4 pb-4 body), AgendaMealRow (glass-inset rounded-2xl p-3, MealOrb, name + window/countdown/lock/admin/leave/reason/guests subtitle, GlassToggle or badges, flash FormNotice), AgendaMealRowVm view-model + adapters agendaRowFromInstance (MealInstanceDto) and agendaRowFromDashboard (DashboardTodayMeal), plus relocated shared helpers (Flash, NOT_AVAILABLE_REASONS, stateLabel, MiniChip, parseKey/weekdayShort/dayNum/longDayLabel).
+- resident/meals.tsx: local AgendaDayRow/AgendaMealRow/DayMealCard/MiniChip/stateLabel/NOT_AVAILABLE_REASONS/date-helpers deleted (all now imported from agenda-day); agenda view renders AgendaDaySection per grouped day; DAY VIEW REBUILT — DayMealCard 2-col grid replaced by ONE AgendaDaySection for the picked dayKey (popLayout motion keyed by dayKey, collapsible via dayExpanded state that auto-resets to expanded on day change using the render-time "adjust state" pattern — lint-safe, no setState-in-effect); onToggleMeal looks the instance up in dayMeals/meals and reuses the existing optimistic handleToggle.
+- resident/dashboard.tsx: TodayMealCard (grid of GlassCards) DELETED — the TODAY'S MEALS section now renders one AgendaDaySection for today (dateKey=todayKeyInTz(tz), isToday, rows via agendaRowFromDashboard with the existing 10s useNow clock), collapsible via todayExpanded state; existing optimistic toggle handler/KPI recount/flash rollback wired through onToggleMeal; SectionHeading + "Manage meals" link kept; unused imports (AnimatePresence/Lock/Clock/ShieldCheck/MealOrb/GlassToggle/FormNotice/MealIcon/countdownLabel/formatWindowInTz) pruned.
+- Admin side intentionally untouched: admin/meals is an operations day view (per-meal count cards + resident expanders, already BoardOps-styled in Task 14) — the agenda "my meals" rows are a resident concept.
+- Verification: bun run lint CLEAN; bunx tsc --noEmit zero errors in all touched files (remaining repo errors pre-existing elsewhere). agent-browser E2E as resident: dashboard shows the day section (disc THU/3, "Today", chips "1 ON 2 OFF 2", Breakfast/Lunch Locked rows, Dinner toggle) — clicked Dinner toggle → chips "3 OFF 2", KPI "Meals Today 0", API persisted, restored back to ON; collapse/expand works; meals agenda unchanged (TUE 1…SAT 5 sections, Today auto-expanded); DAY VIEW: picker + KPIs + switcher + single agenda day section, next-day nav auto-expands (FRI 4 → collapse → SAT 5 re-expands), day-view Breakfast toggle flips chips 3 ON → 2 ON 1 OFF → back, persisted; DOM clip-scans at 390px: zero out-of-bounds elements, disc exactly 56×56 round, switch right edge 348<391; VLM confirmed all BoardOps elements present on dashboard + day view (desktop & mobile); the VLM's small-scale "clipped/squashed" claims disproven by DOM measurement; the 30>27 kpi-num line-box metric is pre-existing (also on untouched payments page). No console/page errors; dev.log clean.
+
+Stage Summary:
+- One shared AgendaDaySection now renders the current day in ALL THREE resident surfaces — dashboard TODAY'S MEALS, meals agenda, meals Day view — pixel-identical (disc, title, chips, inset rows, orbs, toggles, flashes).
+- Toggle logic is unchanged and centralized per page: same /toggle endpoint, same version guard, same optimistic patches (dashboard patches /me/dashboard cache + KPI recount; meals patches /meals cache), same error-code copy.
+- Day view upgrades: picked-day navigation animates via popLayout, auto re-expands on day change, guest counts + leave/admin/reason chips now visible in day rows (DayMealCard never showed them).
+- New reusable module: src/components/app/resident/_shared/agenda-day.tsx (section + row + VM + adapters + date helpers).
+
+---
+Task ID: 16
+Agent: Main Orchestrator (Z.ai Code)
+Task: "In users meal sections show guest meals in top of the views; guest meal on/off not needed admin permission — remove that, users can simply turn/add guest meals like normal meals under cutoff; show those guest meals with the normal meals view like today guest meal 2 then breakfast, lunch, dinner; remove the meal OFF KPI and replace with total guest meals; don't count guest meals as normal locked meals."
+
+Work Log:
+- Backend (self-service guest meals — "no admin permission, under cutoff like normal meals"):
+  • NEW POST /api/v1/guest-meals/[id]/cancel (RESIDENT): host-ownership check, status guards (CANCELLED→409, CONSUMED→409), cutoff guard (MEAL_CUTOFF_PASSED 409), tx update + audit (GUEST_MEAL_CANCELLED, selfService:true) + GUEST_MEAL_CANCELLED notification + sweep.
+  • NEW PATCH /api/v1/guest-meals/[id] (RESIDENT): sets quantity 1–10 with expectedQuantity optimistic-concurrency guard (RESOURCE_CHANGED 409 on mismatch), same ownership/status/cutoff guards, recompute totalPriceMinor = unit×qty, audit GUEST_MEAL_ADJUSTED + notification; idempotent no-op when unchanged.
+  • GET /api/v1/guest-meals now returns cutoffAt per row (additive) — the client renders the "under cutoff" state.
+  • GET /api/v1/me/dashboard now returns todayGuests[] (id, mealInstanceId, mealName, quantity, unit/totalPriceMinor, note, status, cutoffAt — non-cancelled) via an added Promise.all branch (additive).
+- Frontend shared:
+  • NEW src/components/app/resident/_shared/guest-step.ts: pickGuestStepTarget (changeable request with the LATEST cutoff; − uses [0], + skips requests at the 10 cap) + stepGuestMeals (− decrements, cancels at 0; + quick-adds onto an existing request, else returns {kind:"dialog"}); ApiClientError → {kind:"error"}.
+  • agenda-day.tsx: NEW AgendaGuestRow (glass-inset rounded-2xl: frost/primary Users MealOrb, "Guest meals" title, "N guests · Lunch ×2 · ₹110.00 · cutoff passed" subtitle — plain text, NEVER a lock badge, and a compact glass-strong ± stepper [− | animated count | +] or a secondary "+ Add" pill when count is 0; flash slot identical to AgendaMealRow). AgendaGuestMealVm + agendaGuestRows() adapter. AgendaDaySection gains guests/guestAddable/guestFlash/onAddGuests/onGuestStep — the guest row renders as the FIRST body row (above breakfast/lunch/dinner) when guests exist or the day is addable; the header gains a primary "N guests" MiniChip; ON/OFF/leave/locked/admin chips still count ONLY meal rows (guests never counted as normal/locked meals).
+  • GuestMealDialog gains initialDate (opens pre-set to a day's date); NOTIFICATION_ICONS + GUEST_MEAL_ADJUSTED/CANCELLED.
+- meals.tsx: guestQuery switched to useEnvelopeQuery with the month range (from,to — the old default ±7d hid far-month guests); activeGuests/guestsByDate/monthGuestTotal; dayGuestAddable (any instance cutoff-future + not NOT_AVAILABLE/ON_LEAVE); handleGuestStep = optimistic patch of every cached guest list copy (− → decrement or mark CANCELLED; + → increment) with snapshot rollback + flash keyed `guest-${date}` (cutoff/RESOURCE_CHANGED/other copy) + invalidations [guestMeals, dashboard, billing, notifications]; "dialog" result → openGuestDialog(date). KPI row: "Meals OFF" REMOVED → "Guest Meals" (Users icon, primary tone/glow, sub mirrors scope: month or day pill); agenda + day views pass all guest props; calendar cells gain a primary guest dot + "Guests" legend entry; bottom "Upcoming guest meals" section REMOVED (guests are now first-class rows in every day section); toolbar Guest meal button → openGuestDialog().
+- dashboard.tsx: today's section renders the guest row (todayGuests via agendaGuestRows); handleGuestStep patches the dashboard cache (todayGuests only — Meals Today KPI untouched, guests never counted as meals) with rollback + "guest-today" flash; GuestMealDialog rendered (billingQuery added for guestPriceMinor); billing/guestMeals/notifications invalidated on success.
+- types.ts: GuestMealDto + cutoffAt; NEW DashboardTodayGuest + DashboardData.todayGuests; GuestMealPatchResponse/GuestMealCancelResponse.
+- Verification: bun run lint CLEAN; bunx tsc --noEmit zero errors in every touched file (remaining repo errors pre-existing in examples/scripts/skills/other routes). curl E2E: PATCH 2→1→2 with expectedQuantity (stale→RESOURCE_CHANGED ✓), past-cutoff PATCH → MEAL_CUTOFF_PASSED ✓, POST add + self-cancel + double-cancel 409 ✓, dashboard todayGuests ✓. agent-browser E2E (resident): dashboard guest row "1 guest · Dinner ×1 · ₹55.00" with working stepper (one − = cancel latest-cutoff request, one + = PATCH increment — verified per-click against the DB); clean dialog flow (Add → Dinner → submit) creates EXACTLY ONE request (an earlier double-request was diagnosed as agent-browser stale-ref flakiness after mid-command re-renders, not an app bug — app guards: disabled-while-loading submit, idempotency key, expectedQuantity); Meals agenda shows guests chip on today + FRI 4, guest row at top of expanded days; KPI "Guest Meals 3" month / "2" day scope (not in Meals ON 81 / Locked 8); Day view: next-day nav + day-scoped guest KPI + stepper −/+ with DB persistence; Calendar: primary guest dots on days 3+4 + legend; past-day (WED 2) guest row shows "cutoff passed" plain text + disabled stepper while the header locked chip stays 3 (meals only) — guests never counted as locked; dialog initialDate opens pre-set to the picked day (2026-09-05 verified) + Cancel closes. VLM reviews: dashboard PASS (guest row above meal rows, no defects), agenda+day PASS (all elements verified; the flagged "nav overlap" disproven by DOM measurement — main pb-28 112px > nav 84px, standard floating nav), mobile 390px PASS with zero real overflows (only decorative aurora blobs). Zero console/page errors. Dev server OOM-killed once during the session (Chromium + recompile) — restarted detached; all routes 200 after restart.
+- Final data state: sahid has Dinner Sep 3 ×1 (added via the E2E dialog) + the seeded Lunch Sep 4 ×2 — both visible in their day sections; the past-day lock-test row and curl-test rows were cleaned up.
+
+Stage Summary:
+- Guest meals are now a FIRST-CLASS row at the TOP of every agenda day section, the Day view, and the dashboard today card — "today: Guest meals N, then breakfast, lunch, dinner" — with a ± stepper for direct self-service adjustment under cutoff (no admin permission anywhere in the resident flow).
+- New resident endpoints: POST /api/v1/guest-meals/[id]/cancel + PATCH /api/v1/guest-meals/[id] (ownership + cutoff + concurrency guarded, audited, notified).
+- KPI change: Meals OFF → "Guest Meals" (view-scoped: month or picked day); guests are excluded from Meals ON, Locked, and Meals Today by construction.
+- Guest rows never render lock badges or count into locked chips — past-cutoff shows plain "cutoff passed" text; the calendar adds a separate primary guest dot + legend entry.
+
+---
+Task ID: 10
+Agent: Main Orchestrator (Z.ai Code)
+Task: Restyle the notifications feed (user screenshot: "it feels disconnected below make it like apple notifications stack")
+
+Work Log:
+- Analyzed the uploaded screenshot (VLM): resident notifications page — separate floating glass cards with gaps = "disconnected".
+- NEW src/components/glass/NotifStack.tsx — Apple/iOS-style grouped notification stack:
+  • One CONTINUOUS glass container per day-group; rows connected by hairline dividers (border-foreground/10), never floating apart.
+  • Groups > collapseThreshold (default 3) render COLLAPSED as a physical stack: newest card in front + up to 3 peek layers behind (glass shells, height calc(100% - (peekCount-layer)*12px), progressive opacity 1-0.22*layer, aria-hidden, pointer-events-none).
+  • Front card shows a "+N" pill (glass-inset, ChevronDown) next to the time; tap → setExpanded(true).
+  • Expanded: rows unfurl with staggered height:auto+opacity springs (SPRING_SNAPPY + staggerDelay); quiet "Show less" fold strip (ChevronUp) at bottom collapses back; peek layers + outer paddingBottom animate away.
+  • Row anatomy: tone orb → title + time (right) + unread dot on line 1, message below; unread rows are motion.buttons (hover:bg-foreground/5, inset focus ring) that call onMarkRead; read rows are inert divs.
+  • Icon resolved by parent and passed as prop (icon: LucideIcon destructure) — satisfies react-hooks/static-components (same pattern as ActivityItem).
+  • useReducedMotion → instant swaps; aria-expanded/labels on collapsed stack.
+- Rewrote feed in src/components/app/resident/notifications.tsx (NotifStack per day group, group count in SectionHeading action, staggered group entrances; removed per-row motion/cn imports; dropped "tap to mark read" text hint).
+- Rewrote feed in src/components/app/admin/notifications.tsx (same NotifStack; markRead now takes id; dropped GlassCard/Chip/motion/fmtDateTime/cn imports; kept FilterChips + mark-all-read + scroll container).
+- FIXED PRE-EXISTING BUG found during E2E: resident markRead's optimistic setQueriesData with prefix ["api","/api/v1/notifications"] also matched the AppRoot TopBar bell query (useApiQuery<unknown> → cache is the RAW unwrapped ARRAY, not an envelope) → updater crashed with "Cannot read properties of undefined (reading 'map')" → row taps never POSTed / never flipped read. Fix: setQueriesData<unknown> with a defensive guard (only transform caches where Array.isArray(env.data)); bell refreshes via the existing post-POST invalidateQueries.
+- E2E (agent-browser, iPhone 14 + 1280x800): resident login → #/app/notifications: collapsed stack renders (VLM confirmed: front card + 3 peeking edges + "+24" pill, no defects); expand → continuous hairline-connected rows; fold strip collapses back; row tap → POST /api/v1/notifications/{id}/read 200 + optimistic flip + Unread count 18→0; Mark-all-read POST 200; admin login → #/admin/notifications renders + row mark-read POST 200; sticky footer verified (pushed naturally, no floating gap); no console/page errors; bun run lint clean; tsc clean for touched files.
+
+Stage Summary:
+- Notifications feed (resident + admin) is now an Apple notification stack: continuous grouped glass container + physical depth peeks + spring unfurl/fold, replacing the disconnected floating cards.
+- Bonus fix: latent markRead crash (query-shape mismatch between envelope list queries and the raw-array bell query) that had silently broken tap-to-mark-read on both old and new UI.
+- Files: NEW src/components/glass/NotifStack.tsx; EDIT src/components/app/resident/notifications.tsx, src/components/app/admin/notifications.tsx.
+
+---
+Task ID: 17
+Agent: Main Orchestrator (Z.ai Code)
+Task: "Make dashboard activity also [an Apple notifications stack] — show at least 5 messages then stack; same for notifications; stack opens in animation; when scrolling show like stack sliding; in the greeting remove the Today's meals button."
+
+Work Log:
+- NotifStack v2 (src/components/glass/NotifStack.tsx) — behavior rework, same file/API surface:
+  • collapseThreshold (collapse-to-1-front-card) REPLACED by visibleRows=5: the first 5 rows ALWAYS render in the one continuous glass container; anything beyond folds into the physical stack (up to 3 peek layers, 12px slivers each, progressive opacity) behind the container's bottom edge.
+  • Front-card "+N" pill removed; the fold strip at the container bottom is now the affordance — "+N more" (ChevronDown) when folded, "Show less" (ChevronUp) when expanded; real button + aria-expanded.
+  • "Stack opens in animation" kept/sharpened: folded rows unfurl with staggered height:auto+opacity springs (SPRING_SNAPPY + staggerDelay(…, .05, .35)); peek layers fade out; wrapper paddingBottom springs 36↔0; fold exits animate height→0.
+  • NEW scroll-velocity "stack sliding": useScroll/useVelocity/useSpring → fan MotionValue (clamp: scroll-down drags rear cards up to +18px extra, scroll-up tucks them in); per-layer useTransform lives in a child PeekLayer component (hooks-safe mount/unmount); reduced-motion gets a constant zero fan. Measured in-browser: deepest layer y 36 (rest) → 54 (scroll down) → 26 (scroll up) → settles exactly 36.
+  • NEW onRowTap prop — makes every row tappable regardless of read state (used for admin audit toasts); onMarkRead behavior unchanged for notifications pages.
+- resident/dashboard.tsx: hero greeting "Today's meals" GlassButton REMOVED (hero is now pure text; GlassButton + Bell imports pruned); Recent activity switched from the max-h-96 scroll list of ActivityItem cards to one NotifStack (notificationIcon + local activityTone + formatTimeInTz, entranceDelay ACTIVITY_OFFSET; rows non-tappable — View all link remains); duplicated activityTone from a partially-applied earlier batch de-duplicated.
+- admin/dashboard.tsx: Recent activity switched from the inner-scroll glass-inset rows to one NotifStack via activityStackItems() mapper (audit event → row shape, readAt seeded to suppress unread dots); onRowTap re-implements the old row toast (title + copy · actor · fmtDateTime); activityTone keyed off audit action keywords.
+- admin/notifications.tsx: inner max-h-[calc(100vh-22rem)] overflow-y-auto container REMOVED — the page scrolls the window now, which is what drives the stack sliding (resident notifications page already flowed).
+- Verification: bun run lint CLEAN; bunx tsc --noEmit zero errors in every touched file. agent-browser E2E (resident sahid + admin): dashboard greeting has NO button (VLM confirmed text-only hero); activity stack = exactly 5 rows + 3 peek layers + "+3 more" strip (DOM: container 6 children; 3 peek layers with computed transforms 12/24/36px); expand → 9 children (8 rows + strip) with unfurl animation, fold back works (both pages, repeated cycles); notifications page Today group 25 items → 5 visible + "Show 20 more" → expands to 26 children → folds back; injected a test notification → row tap POSTed /read 200 and flipped the row read, test row then deleted from the DB; admin dashboard 12 items → "Show 7 more" → 13 children expanded; admin row tap fires the detail toast (verified in a11y tree); scroll-sliding measured programmatically (36↔54↔26↔36); mobile 390px: stack 366px wide fits viewport, strip bottom 575 < nav top 760 at page bottom (floating BottomNav clearance works; mid-scroll pass-under is standard floating-nav behavior); zero console/page errors, dev.log clean.
+- Note: agent-browser clicks on the fold strip fail its actionability check whenever the strip happens to sit mid-scroll behind the floating BottomNav — NOT an app bug (scrollintoview + click succeeds every time; a real user scrolls what they tap).
+
+Stage Summary:
+- Every "recent activity / notifications" surface is now the SAME Apple notification stack: ≥5 rows always visible, the rest physically stacked behind with 12px peek slivers, "+N more"/"Show less" strip, spring unfurl open, and velocity-driven stack sliding while scrolling (fans out down-scroll, tucks in up-scroll, springs to rest).
+- Resident dashboard hero is now pure greeting text (Today's meals button removed); the section-level "Manage meals"/KPI navigation to meals remains.
+- Files: src/components/glass/NotifStack.tsx (rework), src/components/app/resident/dashboard.tsx, src/components/app/admin/dashboard.tsx, src/components/app/admin/notifications.tsx. No backend/API changes.
+
+---
+Task ID: 2-b
+Agent: frontend-styling-expert
+Task: BoardOps pass over the 13 admin pages — StaggerGroup/StaggerItem page entrances + VLM-flagged parity fixes (audit rows, formulas estimate, calendar cells) on the untouched Aurora liquid-glass theme.
+
+Work Log:
+- Read worklog tail (Task 13 composition system, Tasks 14–17 gold standards), the new src/components/glass/Stagger.tsx primitive (StaggerGroup 45ms stagger / StaggerItem y:8 scale:0.99 springs, reduced-motion safe), and the BoardOps reference page-transition + audit/calendar views.
+- Presentation-only surgical wrap on all 13 in-scope files: root `<div className="space-y-4">` → `<StaggerGroup className="space-y-4">`, each top-level section (action bar, KPI grid, filter/search, picker capsule, each list/section/tab block) → `<StaggerItem>`. Dialogs left unwrapped (never animated); loading/error branches left as plain divs; row-level y:6 staggers inside lists kept untouched (they use explicit initial/animate props, so variant propagation doesn't affect them).
+  • payments.tsx: KPIs / search+chips / list (3 items). funds.tsx: KPIs / per-resident section / ledger section / exemptions (4). expenses.tsx: picker / KPIs / chips / action bar / list (5). billing.tsx: KPIs / chips / tab content (3). residents.tsx: KPIs / search+chips / list (3). resident360.tsx: hero / KPIs / TabRow + EACH of the 7 tab blocks as its own item (tab switches get the subtle rise) (10). tasks.tsx: action bar / KPIs / chips / review queue / task list (5). announcements.tsx: action bar / KPIs / board-or-empty (3). calendar.tsx: action bar / picker / month grid / events list (4). formulas.tsx: action bar / KPIs / config card-or-empty / variables CollapseRow (4). settings.tsx: each of the 6 GroupCards (institution, policy, billing, security, policies, appearance) (6). audit.tsx: KPIs / filters / list / load-more (4). meal-configuration.tsx: action bar / KPIs / config-card grid as ONE item (cards keep their own entrance) (3).
+- B-fixes (verified in code first):
+  • audit.tsx row normalization: list gap space-y-2→space-y-3, row header button p-3→p-4, expander content p-3.5→p-4 — rows now match the GlassCard p-4 family used by payments/expenses/tasks; severity tiles and the JSON diff expander kept exactly as-is (functionally untouched).
+  • formulas.tsx estimate breathing room: inset `space-y-3 rounded-md p-4` → `space-y-4 rounded-lg p-4 sm:p-5`; variables grid `grid-cols-2 gap-x-4 gap-y-1.5 min-[420px]:grid-cols-3` → `grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3` (3-col only from sm, so mid-width columns are ≥~150px instead of ~100px — the "cramped" fix). Data untouched.
+  • calendar.tsx cell unification: non-today cells (empty AND with events) now one consistent `glass-inset` style (hover ring); selected non-today = glass-inset + ring-2 ring-primary/50 (translucent outline, no solid fill); today keeps its primary fill + ring pop (ring-2 when also selected); past-day dim, day-dot legend, Sun-first grid, PickerCapsule, click-to-select logic all unchanged.
+  • settings.tsx: verified nothing escapes the shell main's pb-28 (only relative dirty-dots with -1 offsets inside cards; no page-level absolute/negative-margin footers) → "cramped near nav" was mid-scroll floating-nav pass-under (standard per Task 17); no layout change needed. Additionally removed GroupCard's entrance/entranceDelay props (and the 6 call-site values) so the new StaggerItem is the single entrance — no double animation.
+  • funds.tsx: verified NO unstyled bottom total/legend exists (bottom = styled exemptions GlassCards; per-resident "Amount to Pay" strips are already glass-inset) → skipped per instructions, nothing invented.
+  • payments/expenses/billing/residents/resident360/tasks/announcements/meal-configuration: verified rows are already GlassCard p-4 with icon tiles/gradient avatars (Task 13 anatomy) — no off-pattern outliers found; stagger-only.
+- Verification: `bun run lint` → CLEAN (zero output). `bunx tsc --noEmit` → ZERO errors in src/components (all 13 touched files clean; the 19 remaining repo errors are pre-existing in examples/, scripts/seed.ts, skills/, and two api/v1 routes — untouched). Dev server note: localhost:3000 was not accepting connections at check time (no next/bun process running; dev.log's last entries were successful 200s) — per instructions I did not (re)start it; lint+tsc are my gates, E2E belongs to the orchestrator.
+- Domain-logic deviations: NONE — queries, mutations, handlers, dialogs, validation, toasts, types, error copy byte-identical in all 13 files; only presentational JSX/containers/spacing changed. 'use client' kept; no PageHeader; no new color utilities; no inline hex colors introduced.
+
+Stage Summary:
+- All 13 admin pages (payments, funds, expenses, billing, residents, resident360, tasks, announcements, calendar, formulas, settings, audit, meal-configuration) now have the BoardOps-Fresh signature page entrance: sections rise in sequence via StaggerGroup/StaggerItem (45ms stagger, subtle springs, reduced-motion safe), on the untouched Aurora liquid-glass theme.
+- Parity fixes landed: audit rows join the GlassCard p-4 family (tiles + JSON expander preserved), formulas current-period estimate breathes (padding/gaps/wider min columns), calendar date-cells are one consistent glass-inset family with today keeping the primary pop, settings entrance unified under StaggerItem.
+- gold standards (dashboard/notifications/meals) and resident pages untouched; lint clean, tsc clean for all touched files.
+
+---
+Task ID: 2-a
+Agent: frontend-styling-expert
+Task: Resident pages BoardOps pass — StaggerGroup/StaggerItem page entrances + per-page
+parity fixes (billing/payments/tasks/profile) on the untouched Aurora theme.
+
+Work Log:
+- Read worklog Tasks 13-17 (BoardOps composition pass + gold standards) and the new
+  src/components/glass/Stagger.tsx primitive; studied the reference (profile-view hero
+  anatomy + grid-cards, tasks-view KPI/filter/row pattern, payments-view/billing-view
+  section stagger).
+- resident/billing.tsx: wrapped the 5 top-level sections (Pay Bill action bar, 3-KPI
+  grid, Amount-to-Pay section, estimate section, Bill history) in StaggerGroup +
+  StaggerItem (dialog sheets stay outside the group — never animated); settled-state
+  card downgraded GlassCard strong → default so summary + history read as one family
+  (unsettled Amount-to-Pay hero keeps `strong`); history scroll list gained no-scrollbar
+  + pb-2 so the last card's glow isn't clipped at the 28rem cut (cramped-bottom fix —
+  verified nothing else follows the section: both dialogs are Radix portals).
+- resident/payments.tsx: StaggerGroup over action bar → KPI grid → SearchInput+TabRow →
+  list; payment rows converted from `glass-inset rounded-lg p-4` motion divs to the
+  reference row pattern motion.div > GlassCard p-4 (method-tinted icon tiles, amounts,
+  badges, pending/rejected/proof footers kept byte-identical); Submit Payment flow
+  untouched.
+- resident/tasks.tsx: success branch now StaggerGroup (KPI grid item + list item,
+  EmptyState item); task cards normalized `p-4 sm:p-5` → `p-4` (matches the KPI/admin
+  glass family — the "multi-toned gradient overlay" VLM saw is the animated aurora
+  canopy reading through the translucent standard glass; no non-standard gradient
+  surface exists in the component tree, so the weight normalization is the fix);
+  status tiles/actions/state footers byte-identical; re-indented the card block to the
+  new nesting depth.
+- resident/profile.tsx: hero restructured to the reference anatomy on our theme —
+  default GlassCard p-6 relative overflow-hidden + ambient blur blobs (size-40
+  bg-primary/30 top-right, size-32 bg-success/25 bottom-left, aria-hidden
+  pointer-events-none), existing gradient avatar + halo, centered name/email, badge row
+  (role pill, StatusBadge, mess pill), Edit-details button; hero + InfoCards lost their
+  per-card `entrance` animations (StaggerItem owns the entrance now); grouped cards
+  moved into grid gap-3 sm:grid-cols-2 (Contact spans 2 cols while its edit form is
+  open; Membership cell; Session full-width) with h-full stretch; Session card given
+  the same GroupCard anatomy (LogOut tinted tile header + glass-inset row holding the
+  exact original copy + destructive Sign-out GlassButton, mutation untouched).
+  INTENTIONAL SKIP: "Member since" badge — neither /api/v1/me/profile nor /auth/me
+  returns any createdAt/joined date (verified in the route + SessionUser type), and the
+  brief forbids backend changes/fabricated data; kept the existing 3-badge row.
+- Verified: `bun run lint` clean; `bunx tsc --noEmit` → zero errors in src/components
+  (19 pre-existing errors remain in examples/scripts/skills/api routes, untouched).
+  curl localhost:3000 refused — next-server child is down (known sandbox OOM pattern;
+  two `bun run dev` parents remain) — orchestrator should restart detached before E2E.
+  No dev server started, no agent-browser used, gold standards (meals/dashboard/
+  notifications) + admin pages + globals.css untouched.
+
+Stage Summary:
+- All 4 resident pages now have the BoardOps signature page entrance
+  (StaggerGroup/StaggerItem, 45ms stagger, reduced-motion safe) with sections as
+  items; dialogs never animate.
+- billing: one-family glass cards (default variant everywhere except the
+  Amount-to-Pay hero), breathing room at the history list bottom; payments:
+  reference-anatomy GlassCard rows; tasks: card weight matched to the KPI family;
+  profile: reference hero anatomy + 2-up GroupCard grid with a consistent Session
+  card — every query, mutation, handler, field and error copy byte-identical.
+
+---
+Task ID: 18
+Agent: Main Orchestrator (Z.ai Code)
+Task: "make the all pages design like boardops" — bring EVERY page to the BoardOps-Fresh design language (composition + polish + the reference's signature page rhythm) while keeping the Aurora liquid-glass theme and all domain logic byte-identical.
+
+Work Log:
+- Studied the reference LIVE: cloned repo was at /tmp/BoardOps-Fresh; fixed its framer-motion/motion-dom version mismatch (pinned 12.23.x), ran its web app (vite :5173) + API (hono/CF vite :8787), applied D1 migrations + seeds, logged in as admin@boardops.local, captured all reference pages (dashboard, meals, kitchen, payments, expenses, funds, billing, monthly-closing, formula-engine, users, notifications, settings, system) for ground-truth comparison.
+- Audited our app: every page already had the Task-13 BoardOps composition (headerless, KPI grids, pills, GlassCard rows); VLM comparisons vs the live reference found the remaining gaps: (1) the reference's SIGNATURE StaggerGroup/StaggerItem section entrance existed only on dashboards/notifications; (2) page-local card-weight inconsistencies (billing summary vs history, tasks card weight, profile Session card, audit rows); (3) profile lacked the reference hero anatomy; (4) calendar cell styles mixed; (5) formulas estimate grid cramped.
+- NEW src/components/glass/Stagger.tsx — BoardOps page-transition primitives on our tokens: StaggerGroup (45ms stagger, 30ms delay) + StaggerItem (y:8 scale:0.99 → SPRING_SNAPPY settle; useReducedMotion → instant render, no variants).
+- Delegated Task 2-a (frontend-styling-expert): resident billing/payments/tasks/profile — stagger wraps; billing summary card normalized strong→default + history list no-scrollbar/pb-2; payments rows glass-inset→GlassCard p-4 reference anatomy; tasks cards p-4 family normalization; profile hero REBUILT to reference anatomy (GlassCard p-6 relative overflow-hidden + two ambient blur blobs + centered name/email + badge row + Edit button, per-card entrances removed) with Contact/Membership/Session cards in a grid and Session given the GroupCard anatomy (member-since badge intentionally skipped — API has no createdAt; no fabricated data).
+- Delegated Task 2-b (frontend-styling-expert): all 13 admin pages stagger-wrapped; calendar non-today cells unified to glass-inset (+ ring states for selected, today keeps primary pop); formulas estimate grid breathing room (p-4 sm:p-5, gap-x-6, 3-col from sm); audit rows p-4 family + space-y-3; settings GroupCard double-entrance removed; funds footer claim disproven in code (nothing unstyled — nothing invented).
+- Gold standards untouched: meals (both roles), meal-configuration, dashboards, notifications, AuthScreen.
+- Verification: bun run lint CLEAN; bunx tsc --noEmit zero errors in src/components. agent-browser E2E (resident + admin, 1280×800 + 390×844): all 17 changed pages render with ZERO console/page errors (a transient tasks.tsx parse error was a stale mid-edit Turbopack artifact — cleared after reload, page compiles+renders clean). Stagger verified programmatically via rAF sampler (4 sections rising simultaneously on route change). VLM reviews: profile PASS (ambient blobs + centered hero + badge row + grid cards), billing/payments/tasks PASS, admin pages PASS. Every VLM "clipped/overlap" claim was disproven by DOM measurement: bottom clearance 41-42px desktop / 37px mobile on ALL pages (floating nav pass-under at mid-scroll is by design); horizontal overflow 0 everywhere except intentionally scrollable filter-chip/tab rows (overflow-x-auto) and decorative pointer-events-none blobs clipped by card overflow-hidden. Bill-detail dialog opens/closes correctly after the stagger wraps (interactivity intact). Calendar cell consistency confirmed by zoomed VLM re-review (non-today cells identical glass-inset; only today pops in primary). Mobile 390px: 0 real overflows on profile/billing/tasks/payments.
+- Ops: dev server was OOM-killed twice during the session (Chromium + vite reference app co-resident) — restarted detached each time; BoardOps reference servers (5173/8787) stopped after the design study to free memory; reference repo + captured screenshots left at /tmp/BoardOps-Fresh and /tmp/boardops-compare for future agents.
+
+Stage Summary:
+- EVERY page now moves with the BoardOps rhythm: StaggerGroup/StaggerItem section entrances on all resident + admin pages (reduced-motion safe), on top of the existing BoardOps composition (headerless, action bars, KPI tone/glow grids, solid-primary pills, GlassCard p-4 reference rows).
+- Resident profile now has the reference hero anatomy (ambient glow blobs + centered identity + badge row + grouped card grid) on the Aurora theme; billing/payments/tasks card families unified; admin calendar cells consistent; formulas estimate grid de-cramped; audit rows normalized.
+- Domain logic byte-identical everywhere — presentation-only pass; gold-standard pages (meals, dashboards, notifications, meal-configuration) untouched.
+- Files: NEW src/components/glass/Stagger.tsx; EDIT resident/{billing,payments,tasks,profile}.tsx + admin/{payments,funds,expenses,billing,residents,resident360,tasks,announcements,calendar,formulas,settings,audit,meal-configuration}.tsx.
+
+---
+Task ID: 19
+Agent: Main Orchestrator (Z.ai Code)
+Task: "every page should follow same design language like boardops force redesign" — close the last gap in the
+BoardOps-Fresh design-language enforcement: the 7 pages still on hand-rolled entrance rhythms (both dashboards,
+both meals pages, both notifications pages; AuthScreen deliberately kept) migrated onto the shared
+StaggerGroup/StaggerItem primitive so EVERY in-app page moves with the identical BoardOps signature rhythm.
+
+Work Log:
+- Read worklog Tasks 13-18 + audited all 23 in-app pages: 17 pages already used the shared Stagger entrance
+  (Task 18), but 6 pages still used per-card hand-rolled mechanisms (GlassCard entrance/entranceDelay,
+  KpiCard index delays with hand offsets, motion.div MEALS/ANNOUNCE/ACTIVITY/ATTENTION offset wrappers,
+  NotifStack entranceDelay stagger) — a different rhythm from the reference signature cascade. AuthScreen
+  (pre-app, cinematic split-screen entrance on the same glass language) intentionally left as-is.
+- resident/dashboard.tsx: root div → StaggerGroup space-y-4; 5 sections (hero, KPI grid, today's meals, pinned
+  announcements, recent activity) → StaggerItems; removed entrance/entranceDelay props + the 3 hand offset
+  constants + the MEALS_OFFSET motion.div wrapper; NotifStack entranceDelay removed (masked by parent opacity);
+  GuestMealDialog stays OUTSIDE the group (dialogs never animate); KpiCard index stagger kept (established
+  Task-18 pattern).
+- admin/dashboard.tsx: same migration (hero, KPI grid, needs-attention, recent activity); attention card
+  motion.div offset wrappers unwrapped to plain GlassCard interactive cards (hover/press stays on GlassCard);
+  ATTENTION/ACTIVITY offsets + SPRING_SOFT/staggerDelay imports removed.
+- resident/meals.tsx: picker → KPI grid → view-switch+actions → content (agenda/calendar/day share ONE item;
+  AnimatePresence keyed transitions untouched — they are change-transitions, initial={false}) → leave section;
+  dialogs outside the group.
+- admin/meals.tsx: date capsule → KPI grid → per-meal count cards → resident-meal-status section; override
+  ConfirmDialog outside the group.
+- resident/notifications.tsx + admin/notifications.tsx: action bar + tabs/FilterChips + each day-group feed
+  section → StaggerItems; EmptyState branch wrapped as an item (loading/error stay plain, tasks.tsx pattern);
+  dropped the staggerDelay(gi) NotifStack offsets and the space-y-5 feed wrapper (page rhythm space-y-4 now).
+- REAL DEFECT FOUND & FIXED (pre-existing, exposed by 390px DOM scan): both dashboard hero cards lacked
+  overflow-hidden, so the -right-10 ambient glow blob created 27px scrollable horizontal overflow at 390px
+  (blob right edge 417px vs 390 viewport). Added overflow-hidden to both heroes — matches the Task-2-a
+  profile reference hero anatomy. NOTE: measuring "#/app/*" routes while logged in as ADMIN silently falls
+  back to the admin dashboard (route resolver) — the earlier "resident 27px" readings were all the admin hero;
+  re-measured as resident after re-login: all 0.
+- Verification: bun run lint CLEAN; bunx tsc --noEmit ZERO errors in src/components (remaining repo errors
+  pre-existing in examples/scripts/skills/api routes — untouched). agent-browser E2E (resident sahid@ + admin
+  admin@, 1280×800 + 390×844): all 6 changed pages render with ZERO page/console errors (a transient parse
+  error in the console was a stale mid-edit Fast Refresh artifact — cleared on reload, files on disk balanced
+  + tsc-clean). Stagger verified via rAF sampler: at t=3ms all sections y=8, at 158ms rising in sequence
+  (0.3/1.5/4.1/7.3/8.0), settled by 423ms — the exact 45ms cascade. Interactivity intact: meals
+  agenda→calendar(30 day buttons)→day→agenda round-trip, admin "Needs attention" card navigates to its
+  target route, notifications day-groups + counts render. Horizontal overflow 0 on all 6 pages at 390px
+  after the hero fix. Scroll-end clearance 148-149px below the floating nav on dashboards/meals (nav
+  pass-under at mid-scroll is by design — VLM "overlap" claims again disproven by DOM measurement).
+  Full 22-route sweep (7 resident + 15 admin): every route renders content, zero page errors.
+  VLM reviews: design language consistent on all 6 pages (glass cards, icon orbs, KPI anatomy, typography);
+  hero glow contained post-fix; no clipped text or broken layouts.
+
+Stage Summary:
+- EVERY in-app page (23/23) now moves with the identical BoardOps-Fresh signature entrance:
+  StaggerGroup/StaggerItem sections rising 45ms apart (reduced-motion safe), on top of the existing
+  BoardOps composition (headerless, action bars, KPI tone/glow grids, solid-primary pills, GlassCard rows)
+  on the untouched Aurora liquid-glass theme. No page has a private entrance rhythm anymore.
+- Bonus fix: dashboard hero ambient blobs now clipped (overflow-hidden) — 390px scrollable overflow
+  eliminated on both dashboards.
+- Domain logic byte-identical everywhere — presentation-only pass. AuthScreen untouched (pre-app
+  cinematic entrance, same glass design language).
+- Files: resident/{dashboard,meals,notifications}.tsx, admin/{dashboard,meals,notifications}.tsx.

@@ -1,0 +1,2002 @@
+     1→# =====================================================================
+     2→# BOARDOPS NEXT — COMPLETE PRODUCTION REBUILD MASTER PROMPT
+     3→# BOARDOPS-FRESH INFORMATION ARCHITECTURE
+     4→# + LIQUID_POLISH VISUAL MATERIAL LANGUAGE
+     5→# + NEW SECURE DATABASE/BACKEND ARCHITECTURE
+     6→# =====================================================================
+     7→
+     8→You are responsible for building this application FROM SCRATCH as a
+     9→production-quality system.
+    10→
+    11→Act simultaneously as:
+    12→
+    13→- Principal Software Architect
+    14→- Staff Backend Engineer
+    15→- PostgreSQL Database Architect
+    16→- Financial Systems Engineer
+    17→- Application Security Engineer
+    18→- Staff Frontend Engineer
+    19→- Senior Product Designer
+    20→- Senior Interaction/Motion Designer
+    21→- Accessibility Engineer
+    22→- Performance Engineer
+    23→- DevOps/SRE Engineer
+    24→- QA Architect
+    25→- Release Engineer
+    26→
+    27→This is NOT a prototype.
+    28→
+    29→This is NOT a demo.
+    30→
+    31→This is NOT a simple CRUD dashboard.
+    32→
+    33→This is NOT a visual-only reconstruction.
+    34→
+    35→This is a real operational and financial system where incorrect business
+    36→logic could produce incorrect meals, incorrect balances or incorrect bills.
+    37→
+    38→The finished application must combine:
+    39→
+    40→BOARDOPS-FRESH'S:
+    41→- information architecture
+    42→- straightforward page hierarchy
+    43→- mobile navigation approach
+    44→- desktop sidebar approach
+    45→- compact operational screens
+    46→- page-flow simplicity
+    47→- understandable cards/rows
+    48→- role-specific experiences
+    49→
+    50→WITH LIQUID_POLISH'S:
+    51→- frosted material language
+    52→- real backdrop blur
+    53→- OKLCH-based palette
+    54→- rounded geometry
+    55→- premium light/dark modes
+    56→- liquid controls
+    57→- spring animations
+    58→- specular glass highlights
+    59→- floating navigation material
+    60→- tactile interaction
+    61→
+    62→BUT:
+    63→
+    64→DO NOT copy either project's old architecture blindly.
+    65→
+    66→DO NOT merge either repository into this project.
+    67→
+    68→DO NOT copy old bugs.
+    69→
+    70→DO NOT preserve obsolete role models.
+    71→
+    72→DO NOT preserve oversized components.
+    73→
+    74→DO NOT preserve old single-route SPA architecture.
+    75→
+    76→DO NOT preserve old technology simply because the reference used it.
+    77→
+    78→REBUILD FROM SCRATCH.
+    79→
+    80→The repositories are DESIGN/BEHAVIOR REFERENCES ONLY:
+    81→
+    82→REFERENCE A:
+    83→sahid-code404/BoardOps-Fresh
+    84→
+    85→Use primarily for:
+    86→- page composition
+    87→- navigation
+    88→- layout
+    89→- information hierarchy
+    90→- interaction patterns
+    91→- workflow references
+    92→
+    93→REFERENCE B:
+    94→sahid-code404/liquid_polish
+    95→
+    96→Use primarily for:
+    97→- color/material direction
+    98→- glass primitives
+    99→- blur
+   100→- transparency
+   101→- lighting
+   102→- motion
+   103→- rounded geometry
+   104→- premium visual personality
+   105→
+   106→=====================================================================
+   107→PART 1 — FIRST THING YOU MUST DO
+   108→=====================================================================
+   109→
+   110→DO NOT immediately write code.
+   111→
+   112→Before implementation:
+   113→
+   114→1. Read this complete specification word-by-word.
+   115→2. Inspect BOTH reference repositories deeply.
+   116→3. Do not inspect only README files.
+   117→4. Use repository search and inspect actual implementation.
+   118→5. Run the reference frontends if practical.
+   119→6. Capture screenshots at mobile, tablet and desktop if possible.
+   120→7. Understand the existing UX before designing the replacement.
+   121→8. Produce a requirement matrix.
+   122→9. Produce a complete hierarchical TODO tree.
+   123→10. Produce the final architecture.
+   124→11. Produce the PostgreSQL ERD.
+   125→12. Produce domain state machines.
+   126→13. Produce the authorization matrix.
+   127→14. Produce critical transaction definitions.
+   128→15. Produce API contracts.
+   129→16. Produce the final page map.
+   130→17. Produce mobile/tablet/desktop wireframes.
+   131→18. Produce the design-token system.
+   132→19. Produce the motion system.
+   133→20. Produce the test plan.
+   134→21. Only then begin implementation.
+   135→
+   136→Inspect at minimum from BoardOps-Fresh:
+   137→
+   138→apps/web/src/components/layout/
+   139→- top-bar
+   140→- desktop-sidebar
+   141→- mobile-sidebar
+   142→- mobile-bottom-nav
+   143→- nav-config
+   144→- nav-groups
+   145→- app-shell/lazy-view-router where applicable
+   146→
+   147→Inspect feature implementations including:
+   148→
+   149→- dashboard
+   150→- meal counts/kitchen
+   151→- resident meals
+   152→- payments
+   153→- users
+   154→- funds
+   155→- expenses
+   156→- billing
+   157→- meal configuration
+   158→- formula/monthly closing
+   159→- notifications
+   160→- settings/profile
+   161→
+   162→Inspect BoardOps-Fresh's source-audit documentation too.
+   163→
+   164→Inspect at minimum from liquid_polish:
+   165→
+   166→src/app/globals.css
+   167→
+   168→components/glass/*
+   169→
+   170→and relevant implementations/documentation covering:
+   171→
+   172→- GlassCard
+   173→- GlassButton
+   174→- LiquidToggle
+   175→- AnimatedNumber
+   176→- BottomNav
+   177→- TopBar
+   178→- PageMotion
+   179→- StaggerGroup
+   180→- theme/accent handling
+   181→- information architecture
+   182→- frontend specification
+   183→
+   184→Extract the GOOD concepts.
+   185→
+   186→Reimplement cleanly.
+   187→
+   188→=====================================================================
+   189→PART 2 — ABSOLUTE PRIORITY
+   190→=====================================================================
+   191→
+   192→When priorities conflict, preserve them in this exact order:
+   193→
+   194→1. Database integrity
+   195→2. Financial correctness
+   196→3. Security
+   197→4. Historical correctness
+   198→5. Deterministic business rules
+   199→6. Reliability
+   200→7. Auditability
+   201→8. Maintainability
+   202→9. User comprehension
+   203→10. Accessibility
+   204→11. Performance
+   205→12. Responsive quality
+   206→13. Visual polish
+   207→14. Motion polish
+   208→
+   209→Never trade financial/database correctness for animation.
+   210→
+   211→Never make database integrity depend on the frontend.
+   212→
+   213→Never make security depend on hidden UI.
+   214→
+   215→=====================================================================
+   216→PART 3 — ONLY TWO ROLES
+   217→=====================================================================
+   218→
+   219→THE ENTIRE NEW PRODUCT HAS EXACTLY:
+   220→
+   221→ADMIN
+   222→RESIDENT
+   223→
+   224→Nothing else.
+   225→
+   226→DO NOT create:
+   227→
+   228→SUPER_ADMIN
+   229→MANAGER
+   230→ACCOUNTANT
+   231→STAFF
+   232→MODERATOR
+   233→EDITOR
+   234→OPERATOR
+   235→
+   236→even if old reference code contains those concepts.
+   237→
+   238→Any old BoardOps reference to USER means RESIDENT in the new product.
+   239→
+   240→Authentication determines role.
+   241→
+   242→Never provide a "Choose Admin" login toggle that grants Admin privileges.
+   243→
+   244→=====================================================================
+   245→PART 4 — CURRENT TECHNOLOGY BASELINE
+   246→=====================================================================
+   247→
+   248→Use currently supported STABLE releases.
+   249→
+   250→Baseline as of September 2026:
+   251→
+   252→Runtime:
+   253→- Node.js 24.20.x LTS
+   254→
+   255→Frontend:
+   256→- Next.js 16.3.3 Active LTS or latest security-patched 16.x
+   257→- React 19.2.x
+   258→- TypeScript latest stable compatible release
+   259→- Tailwind CSS 4.3.x
+   260→- latest stable Motion for React
+   261→- TanStack Query
+   262→- React Hook Form
+   263→- Zod / Standard-Schema-compatible validation
+   264→- Radix/headless accessible primitives
+   265→- Lucide or equivalent consistent icon family
+   266→- next-themes or equivalent robust theme handling
+   267→
+   268→Backend:
+   269→- NestJS 12
+   270→- Fastify adapter
+   271→- TypeScript
+   272→- Pino
+   273→- OpenTelemetry
+   274→- OpenAPI
+   275→
+   276→Database:
+   277→- PostgreSQL 18.6 or latest supported PostgreSQL 18 patch
+   278→- Prisma ORM 8, if compatibility verification passes
+   279→- native PostgreSQL SQL migrations/features whenever Prisma is insufficient
+   280→
+   281→Infrastructure:
+   282→- Redis 8.8 or latest security-patched compatible Redis 8
+   283→- BullMQ or equivalent Redis-backed worker
+   284→- private S3-compatible object storage
+   285→- MinIO for local development
+   286→- reverse proxy / ingress with TLS
+   287→
+   288→Testing:
+   289→- Vitest
+   290→- Playwright
+   291→- Testcontainers
+   292→- fast-check
+   293→- axe-core or equivalent accessibility tests
+   294→
+   295→BEFORE INSTALLING ANY PACKAGE:
+   296→
+   297→verify its current official stable/security-patched version.
+   298→
+   299→DO NOT use:
+   300→- alpha
+   301→- beta
+   302→- RC
+   303→- canary
+   304→
+   305→unless explicitly unavoidable and documented.
+   306→
+   307→"Latest" means latest SAFE production release,
+   308→not newest experimental release.
+   309→
+   310→=====================================================================
+   311→PART 5 — MONOREPO
+   312→=====================================================================
+   313→
+   314→Use pnpm workspaces + Turborepo.
+   315→
+   316→Suggested structure:
+   317→
+   318→/
+   319→├── apps/
+   320→│   ├── web/
+   321→│   ├── api/
+   322→│   └── worker/
+   323→│
+   324→├── packages/
+   325→│   ├── database/
+   326→│   ├── contracts/
+   327→│   ├── validation/
+   328→│   ├── design-system/
+   329→│   ├── config/
+   330→│   ├── observability/
+   331→│   └── shared/
+   332→│
+   333→├── infrastructure/
+   334→│   ├── docker/
+   335→│   └── reverse-proxy/
+   336→│
+   337→├── docs/
+   338→│   ├── architecture/
+   339→│   ├── adr/
+   340→│   ├── database/
+   341→│   ├── security/
+   342→│   └── product/
+   343→│
+   344→├── tests/
+   345→├── scripts/
+   346→├── pnpm-workspace.yaml
+   347→├── turbo.json
+   348→└── package.json
+   349→
+   350→DO NOT over-split packages.
+   351→
+   352→Each package must have a real boundary.
+   353→
+   354→=====================================================================
+   355→PART 6 — ARCHITECTURE
+   356→=====================================================================
+   357→
+   358→Build a MODULAR MONOLITH.
+   359→
+   360→Architecture:
+   361→
+   362→Browser / Installable PWA
+   363→          │
+   364→          ▼
+   365→Next.js Web
+   366→          │
+   367→          │ /api/v1
+   368→          ▼
+   369→NestJS API
+   370→          │
+   371→     ┌────┼───────────────┐
+   372→     │    │               │
+   373→     ▼    ▼               ▼
+   374→Postgres Redis        Object Storage
+   375→     │    │
+   376→     │    └──── Worker / BullMQ
+   377→     │
+   378→     └──── Transactional Outbox
+   379→
+   380→DO NOT introduce:
+   381→
+   382→- microservices
+   383→- Kafka
+   384→- Kubernetes
+   385→- event sourcing everywhere
+   386→- GraphQL
+   387→- multiple operational databases
+   388→- Elasticsearch
+   389→
+   390→without a real measured reason.
+   391→
+   392→Keep deployment straightforward.
+   393→
+   394→=====================================================================
+   395→PART 7 — REAL URL ROUTES
+   396→=====================================================================
+   397→
+   398→Do NOT reproduce liquid_polish's old single-route Zustand tab architecture.
+   399→
+   400→Use real Next.js App Router routes.
+   401→
+   402→Suggested route groups:
+   403→
+   404→/login
+   405→/register
+   406→/register/pending
+   407→/register/changes-requested
+   408→
+   409→/admin/dashboard
+   410→/admin/meal-count
+   411→/admin/payments
+   412→/admin/residents
+   413→/admin/residents/[residentId]
+   414→/admin/funds
+   415→/admin/expenses
+   416→/admin/meal-configuration
+   417→/admin/meal-configuration/new
+   418→/admin/meal-configuration/[mealId]
+   419→/admin/formula-engine
+   420→/admin/billing
+   421→/admin/billing/[periodId]
+   422→/admin/notifications
+   423→/admin/announcements
+   424→/admin/tasks
+   425→/admin/tasks/[taskId]
+   426→/admin/calendar
+   427→/admin/settings
+   428→/admin/audit
+   429→
+   430→/app/dashboard
+   431→/app/meals
+   432→/app/billing
+   433→/app/billing/[billId]
+   434→/app/payments
+   435→/app/tasks
+   436→/app/tasks/[taskId]
+   437→/app/notifications
+   438→/app/profile
+   439→
+   440→A mobile-only "More" hub may exist as navigation presentation,
+   441→but actual modules still have real URLs.
+   442→
+   443→Deep-linking must work.
+   444→
+   445→Browser back/forward must work.
+   446→
+   447→Refreshing the page must preserve the same route.
+   448→
+   449→=====================================================================
+   450→PART 8 — AUTHENTICATION
+   451→=====================================================================
+   452→
+   453→For this browser application prefer secure opaque server sessions.
+   454→
+   455→Do NOT store authorization tokens in localStorage.
+   456→
+   457→Recommended:
+   458→
+   459→Secure
+   460→HttpOnly
+   461→SameSite cookie
+   462→__Host- prefix where deployment permits.
+   463→
+   464→Store only hashed session-token material server-side.
+   465→
+   466→Password storage:
+   467→
+   468→Argon2id.
+   469→
+   470→Admin MFA:
+   471→
+   472→prefer WebAuthn/passkeys.
+   473→
+   474→Allow TOTP fallback where necessary.
+   475→
+   476→Support:
+   477→
+   478→- login throttling
+   479→- logout
+   480→- logout all sessions
+   481→- session rotation
+   482→- session revocation
+   483→- password reset
+   484→- account deactivation invalidation
+   485→- recent-authentication checks for critical Admin actions
+   486→
+   487→Critical Admin operations requiring recent auth include:
+   488→
+   489→- billing generation
+   490→- billing reopen
+   491→- formula activation
+   492→- refund
+   493→- full data export
+   494→- security settings
+   495→
+   496→=====================================================================
+   497→PART 9 — POSTGRESQL IS AUTHORITATIVE
+   498→=====================================================================
+   499→
+   500→PostgreSQL is the source of truth.
+   501→
+   502→Not React state.
+   503→
+   504→Not Zustand.
+   505→
+   506→Not TanStack Query cache.
+   507→
+   508→Not Redis.
+   509→
+   510→Not localStorage.
+   511→
+   512→Redis is disposable infrastructure.
+   513→
+   514→Losing Redis must NOT lose:
+   515→
+   516→payments
+   517→expenses
+   518→bills
+   519→meals
+   520→balances
+   521→audit history
+   522→formula versions
+   523→user records.
+   524→
+   525→=====================================================================
+   526→PART 10 — MONEY
+   527→=====================================================================
+   528→
+   529→NEVER use floating-point numbers as authoritative money.
+   530→
+   531→Use integer minor units.
+   532→
+   533→Example:
+   534→
+   535→₹2,500.75
+   536→=
+   537→250075 paise.
+   538→
+   539→Fields should clearly use names such as:
+   540→
+   541→amount_minor
+   542→price_minor
+   543→total_minor
+   544→balance_minor.
+   545→
+   546→Frontend can display formatted rupees.
+   547→
+   548→Backend calculates official numbers.
+   549→
+   550→Centralize currency and rounding.
+   551→
+   552→Initial currency:
+   553→
+   554→INR
+   555→
+   556→Minor digits:
+   557→
+   558→2
+   559→
+   560→=====================================================================
+   561→PART 11 — IMMUTABLE FINANCIAL LEDGER
+   562→=====================================================================
+   563→
+   564→Implement an internal double-entry financial ledger.
+   565→
+   566→Core:
+   567→
+   568→ledger_accounts
+   569→ledger_journals
+   570→ledger_entries
+   571→
+   572→A posted journal must satisfy:
+   573→
+   574→sum(debits) == sum(credits)
+   575→
+   576→Posted transactions are immutable.
+   577→
+   578→Wrong transaction:
+   579→
+   580→create reversal/correction.
+   581→
+   582→Never change ₹2,000 into ₹1,500 by editing the old record.
+   583→
+   584→Preserve:
+   585→
+   586→who
+   587→when
+   588→why
+   589→original value
+   590→correction.
+   591→
+   592→=====================================================================
+   593→PART 12 — CORE DATABASE ENTITIES
+   594→=====================================================================
+   595→
+   596→Design normalized tables around these concepts.
+   597→
+   598→AUTH/INSTITUTION:
+   599→
+   600→institutions
+   601→institution_settings
+   602→users
+   603→user_profiles
+   604→user_status_history
+   605→sessions
+   606→mfa_credentials
+   607→policy_versions
+   608→policy_acceptances
+   609→
+   610→MEALS:
+   611→
+   612→meal_definitions
+   613→meal_definition_versions
+   614→meal_instances
+   615→resident_meals
+   616→guest_meals
+   617→leave_requests
+   618→calendar_events
+   619→
+   620→FINANCE:
+   621→
+   622→ledger_accounts
+   623→ledger_journals
+   624→ledger_entries
+   625→
+   626→payments
+   627→payment_proofs
+   628→refunds
+   629→
+   630→expense_categories
+   631→expenses
+   632→expense_items
+   633→expense_proofs
+   634→
+   635→financial_policies
+   636→policy_exemptions
+   637→
+   638→FORMULAS/BILLING:
+   639→
+   640→formula_definitions
+   641→formula_versions
+   642→
+   643→billing_periods
+   644→billing_snapshots
+   645→billing_snapshot_items
+   646→
+   647→bills
+   648→bill_lines
+   649→bill_adjustments
+   650→
+   651→TASKS:
+   652→
+   653→tasks
+   654→task_items
+   655→task_assignments
+   656→task_submissions
+   657→task_submission_items
+   658→task_submission_proofs
+   659→
+   660→COMMUNICATION:
+   661→
+   662→notifications
+   663→announcements
+   664→announcement_targets
+   665→
+   666→SYSTEM:
+   667→
+   668→stored_files
+   669→audit_events
+   670→outbox_events
+   671→idempotency_records
+   672→deletion_requests
+   673→
+   674→=====================================================================
+   675→PART 13 — DATABASE CONSTRAINTS
+   676→=====================================================================
+   677→
+   678→Database must enforce important invariants.
+   679→
+   680→Examples:
+   681→
+   682→payment.amount_minor > 0
+   683→
+   684→refund.amount_minor > 0
+   685→
+   686→guest_meal.quantity >= 1
+   687→
+   688→expense_item.quantity > 0
+   689→
+   690→expense_item.unit_price_minor >= 0
+   691→
+   692→UNIQUE(
+   693→ resident_id,
+   694→ meal_instance_id
+   695→)
+   696→
+   697→UNIQUE(
+   698→ meal_definition_id,
+   699→ service occurrence
+   700→)
+   701→
+   702→UNIQUE(
+   703→ resident_id,
+   704→ billing_period_id,
+   705→ revision
+   706→)
+   707→
+   708→UNIQUE(
+   709→ source_task_submission_id
+   710→)
+   711→
+   712→Foreign keys must be explicit.
+   713→
+   714→Avoid destructive ON DELETE CASCADE for historical financial records.
+   715→
+   716→Use database constraints even if backend already validates.
+   717→
+   718→=====================================================================
+   719→PART 14 — TRANSACTIONS AND CONCURRENCY
+   720→=====================================================================
+   721→
+   722→Critical business operations must be transactional.
+   723→
+   724→Payment approval:
+   725→
+   726→BEGIN
+   727→lock payment
+   728→validate state
+   729→mark approved
+   730→create balanced ledger journal
+   731→create audit event
+   732→create outbox event
+   733→COMMIT
+   734→
+   735→Task purchase approval:
+   736→
+   737→BEGIN
+   738→lock task submission
+   739→verify not already converted
+   740→create official expense
+   741→create items
+   742→create relationship
+   743→create financial posting as applicable
+   744→audit
+   745→outbox
+   746→COMMIT
+   747→
+   748→Billing:
+   749→
+   750→lock billing period
+   751→perform readiness
+   752→take snapshot
+   753→generate deterministic bills
+   754→post required entries
+   755→close period
+   756→audit
+   757→outbox
+   758→commit/recover safely.
+   759→
+   760→Protect against:
+   761→
+   762→- double clicks
+   763→- browser retries
+   764→- network retries
+   765→- two Admins
+   766→- two tabs
+   767→- duplicate worker execution
+   768→
+   769→Use:
+   770→
+   771→- idempotency keys
+   772→- row locks
+   773→- optimistic versions
+   774→- unique constraints
+   775→- advisory locks where appropriate
+   776→
+   777→=====================================================================
+   778→PART 15 — MEAL DATA MODEL
+   779→=====================================================================
+   780→
+   781→DO NOT store historical meals directly against mutable configuration.
+   782→
+   783→Use:
+   784→
+   785→MealDefinition
+   786→        │
+   787→        ▼
+   788→MealDefinitionVersion
+   789→        │
+   790→        ▼
+   791→MealInstance
+   792→        │
+   793→        ▼
+   794→ResidentMeal
+   795→
+   796→Example:
+   797→
+   798→MealDefinition:
+   799→Lunch
+   800→
+   801→Version 1:
+   802→service 12:30
+   803→cutoff 09:00
+   804→
+   805→Version 2:
+   806→service 12:30
+   807→cutoff 10:00
+   808→
+   809→Yesterday's instance remains linked to Version 1.
+   810→
+   811→Future instances use Version 2.
+   812→
+   813→Historical behavior must NEVER change because Admin edited configuration.
+   814→
+   815→=====================================================================
+   816→PART 16 — RESIDENT MEAL RESOLUTION
+   817→=====================================================================
+   818→
+   819→One deterministic backend resolver calculates effective state.
+   820→
+   821→Conceptual inputs:
+   822→
+   823→baseline/default
+   824→membership eligibility
+   825→calendar event
+   826→approved leave
+   827→financial policy
+   828→resident selection
+   829→cutoff
+   830→lock
+   831→Admin override
+   832→closed billing state.
+   833→
+   834→Output:
+   835→
+   836→effective_state
+   837→effective_reason.
+   838→
+   839→Never let multiple frontend components independently invent state.
+   840→
+   841→=====================================================================
+   842→PART 17 — OVERRIDE BEHAVIOR
+   843→=====================================================================
+   844→
+   845→Requirement:
+   846→
+   847→Default Lunch = ON
+   848→
+   849→Admin overrides:
+   850→
+   851→ON → OFF
+   852→
+   853→Display:
+   854→
+   855→OFF
+   856→ADMIN OVERRIDE
+   857→
+   858→If Admin later changes:
+   859→
+   860→OFF → ON
+   861→
+   862→and ON matches normal baseline:
+   863→
+   864→do not show current override label anymore.
+   865→
+   866→BUT:
+   867→
+   868→audit history keeps both changes.
+   869→
+   870→Override visibility is derived from difference against effective baseline,
+   871→not simply "an override happened sometime in history."
+   872→
+   873→=====================================================================
+   874→PART 18 — MID-MONTH RESIDENT
+   875→=====================================================================
+   876→
+   877→Resident membership has:
+   878→
+   879→membership_effective_from.
+   880→
+   881→Example:
+   882→
+   883→Resident activated at 3:30 PM.
+   884→
+   885→Lunch cutoff:
+   886→9:00 AM
+   887→
+   888→→ no automatic Lunch.
+   889→
+   890→Dinner cutoff:
+   891→5:00 PM
+   892→
+   893→→ Dinner may receive normal configured default.
+   894→
+   895→Never automatically turn past meals ON.
+   896→
+   897→If Admin later records a meal they actually consumed:
+   898→
+   899→explicit historical override
+   900→+
+   901→reason
+   902→+
+   903→audit.
+   904→
+   905→=====================================================================
+   906→PART 19 — PERIOD IMMUTABILITY
+   907→=====================================================================
+   908→
+   909→Once billing for August is closed:
+   910→
+   911→September settings cannot change August.
+   912→
+   913→Changing:
+   914→
+   915→meal
+   916→formula
+   917→policy
+   918→resident details
+   919→pricing
+   920→
+   921→must not rewrite historical billing.
+   922→
+   923→Use immutable snapshots/version references.
+   924→
+   925→=====================================================================
+   926→PART 20 — FORMULA ENGINE
+   927→=====================================================================
+   928→
+   929→This is security-critical.
+   930→
+   931→Support two Admin input modes:
+   932→
+   933→1. Natural Language
+   934→2. Formula / Excel-like
+   935→
+   936→Both compile to ONE validated internal AST.
+   937→
+   938→NEVER:
+   939→
+   940→eval()
+   941→Function()
+   942→execute user JavaScript
+   943→execute raw user SQL
+   944→execute shell commands.
+   945→
+   946→Whitelist variables.
+   947→
+   948→Examples:
+   949→
+   950→total_market_cost
+   951→total_guest_income
+   952→total_consumed_resident_meals
+   953→total_guest_meals
+   954→total_approved_expenses.
+   955→
+   956→Safe operators initially:
+   957→
+   958→+
+   959→-
+   960→*
+   961→/
+   962→()
+   963→SUM
+   964→MIN
+   965→MAX
+   966→ROUND
+   967→IF
+   968→
+   969→Do not implement a full spreadsheet application.
+   970→
+   971→=====================================================================
+   972→PART 21 — NATURAL LANGUAGE FORMULA UX
+   973→=====================================================================
+   974→
+   975→Admin writes:
+   976→
+   977→"Subtract guest income from market cost and divide by resident consumed meals."
+   978→
+   979→System produces:
+   980→
+   981→I understood this as:
+   982→
+   983→(Total Market Cost - Guest Income)
+   984→÷ Resident Consumed Meals
+   985→
+   986→Current example:
+   987→
+   988→Market cost         ₹42,000
+   989→Guest income        -₹2,000
+   990→                    --------
+   991→Resident cost       ₹40,000
+   992→
+   993→Resident meals       1,000
+   994→
+   995→Meal charge         ₹40.00
+   996→
+   997→Admin sees:
+   998→
+   999→Cancel
+  1000→Save Formula
+  1001→
+  1002→Natural-language output is NEVER directly executed.
+  1003→
+  1004→It is compiled, validated, previewed and explicitly saved.
+  1005→
+  1006→=====================================================================
+  1007→PART 22 — FORMULA VERSIONS
+  1008→=====================================================================
+  1009→
+  1010→Never overwrite formula history.
+  1011→
+  1012→Store:
+  1013→
+  1014→version
+  1015→source expression
+  1016→compiled AST
+  1017→created_by
+  1018→created_at
+  1019→effective_from
+  1020→effective_until
+  1021→reason
+  1022→checksum.
+  1023→
+  1024→A historical bill references the exact formula version used.
+  1025→
+  1026→=====================================================================
+  1027→PART 23 — BILLING SNAPSHOT
+  1028→=====================================================================
+  1029→
+  1030→Generating a bill period must capture an immutable snapshot containing
+  1031→the relevant resolved information for:
+  1032→
+  1033→residents
+  1034→resident meals
+  1035→guest meals
+  1036→expenses
+  1037→payments
+  1038→refunds
+  1039→formula
+  1040→pricing
+  1041→policies
+  1042→adjustments.
+  1043→
+  1044→Later configuration changes do not modify the snapshot.
+  1045→
+  1046→=====================================================================
+  1047→PART 24 — DESIGN PRINCIPLE
+  1048→=====================================================================
+  1049→
+  1050→DESIGN THE NEW FRONTEND AS:
+  1051→
+  1052→BoardOps-Fresh structural DNA
+  1053→+
+  1054→liquid_polish material DNA.
+  1055→
+  1056→BoardOps-Fresh contributes:
+  1057→
+  1058→- recognizable app shell
+  1059→- concise top bar
+  1060→- mobile bottom navigation
+  1061→- More navigation for secondary areas
+  1062→- grouped desktop navigation
+  1063→- card/list based mobile workflows
+  1064→- restrained dashboard
+  1065→- straightforward operational pages
+  1066→
+  1067→liquid_polish contributes:
+  1068→
+  1069→- actual frosted blur
+  1070→- OKLCH color system
+  1071→- translucent surfaces
+  1072→- glass sheen
+  1073→- liquid toggles
+  1074→- spring movement
+  1075→- rounded containers
+  1076→- floating glass controls
+  1077→- rich dark mode
+  1078→- material layering
+  1079→
+  1080→DO NOT reproduce old HTML blindly.
+  1081→
+  1082→Create a much more polished generation.
+  1083→
+  1084→=====================================================================
+  1085→PART 25 — PRIMARY VISUAL GOAL
+  1086→=====================================================================
+  1087→
+  1088→The UI must look like a multi-million-dollar premium consumer application.
+  1089→
+  1090→NOT like:
+  1091→
+  1092→- default shadcn
+  1093→- Material UI
+  1094→- Bootstrap
+  1095→- admin template
+  1096→- generic SaaS dashboard
+  1097→- crypto dashboard
+  1098→- bank enterprise portal
+  1099→- ERP software
+  1100→- AI-generated purple gradient UI
+  1101→
+  1102→Keywords:
+  1103→
+  1104→quiet
+  1105→premium
+  1106→soft
+  1107→precise
+  1108→tactile
+  1109→rounded
+  1110→frosted
+  1111→confident
+  1112→spacious
+  1113→clean
+  1114→fast
+  1115→understandable.
+  1116→
+  1117→=====================================================================
+  1118→PART 26 — GLASS OPACITY
+  1119→=====================================================================
+  1120→
+  1121→IMPORTANT:
+  1122→
+  1123→liquid_polish's visual character is the reference,
+  1124→BUT the new version must be LESS TRANSPARENT.
+  1125→
+  1126→Do not make text float over an unreadable background.
+  1127→
+  1128→Starting design targets:
+  1129→
+  1130→LIGHT / NORMAL GLASS:
+  1131→
+  1132→background approximately:
+  1133→oklch(1 0 0 / 78% to 86%)
+  1134→
+  1135→backdrop-filter:
+  1136→blur(20px–26px)
+  1137→saturate(145%–165%)
+  1138→
+  1139→LIGHT / STRONG GLASS:
+  1140→
+  1141→background approximately:
+  1142→oklch(1 0 0 / 86% to 93%)
+  1143→
+  1144→backdrop-filter:
+  1145→blur(26px–34px)
+  1146→saturate(150%–175%)
+  1147→
+  1148→DARK / NORMAL GLASS:
+  1149→
+  1150→background approximately:
+  1151→oklch(0.19–0.23 ... / 78%–88%)
+  1152→
+  1153→DARK / STRONG GLASS:
+  1154→
+  1155→background approximately:
+  1156→oklch(0.20–0.25 ... / 86%–93%)
+  1157→
+  1158→Exact final values must be tuned from actual screenshots.
+  1159→
+  1160→The objective:
+  1161→
+  1162→actual blur is CLEARLY visible
+  1163→
+  1164→BUT
+  1165→
+  1166→content remains solid and immediately readable.
+  1167→
+  1168→=====================================================================
+  1169→PART 27 — GLASS MATERIAL ANATOMY
+  1170→=====================================================================
+  1171→
+  1172→Major glass surfaces should combine:
+  1173→
+  1174→1. dense translucent base
+  1175→2. real backdrop blur
+  1176→3. mild saturation
+  1177→4. 1px material border
+  1178→5. top/upper-left specular sheen
+  1179→6. subtle inner highlight
+  1180→7. low-amplitude ambient shadow
+  1181→8. optional tiny accent reflection
+  1182→
+  1183→Never combine:
+  1184→
+  1185→- giant glow
+  1186→- giant shadow
+  1187→- 30% unreadable opacity
+  1188→- rainbow border
+  1189→- neon outline.
+  1190→
+  1191→=====================================================================
+  1192→PART 28 — GLASS PERFORMANCE
+  1193→=====================================================================
+  1194→
+  1195→Do not nest backdrop filters everywhere.
+  1196→
+  1197→BAD:
+  1198→
+  1199→GlassCard
+  1200→  └ GlassSection
+  1201→      └ GlassButton
+  1202→          └ GlassBadge
+  1203→
+  1204→all using backdrop-filter.
+  1205→
+  1206→Use true backdrop blur for:
+  1207→
+  1208→- main nav
+  1209→- top bar
+  1210→- major card/panel
+  1211→- dialogs
+  1212→- sheets
+  1213→- important floating control
+  1214→
+  1215→Use semi-opaque material fills for nested controls.
+  1216→
+  1217→Avoid repeatedly animating `backdrop-filter`.
+  1218→
+  1219→Animate transform/opacity instead.
+  1220→
+  1221→=====================================================================
+  1222→PART 29 — BACKGROUND
+  1223→=====================================================================
+  1224→
+  1225→Create a subtle ambient background similar in spirit to liquid_polish.
+  1226→
+  1227→Use:
+  1228→
+  1229→- neutral cloudy base
+  1230→- 2–3 extremely soft accent fields
+  1231→- very low visual contrast
+  1232→- optional slow ambient positional drift
+  1233→
+  1234→The content must remain the star.
+  1235→
+  1236→NO:
+  1237→
+  1238→bright aurora wallpaper
+  1239→neon blobs
+  1240→busy gradients
+  1241→large distracting mesh.
+  1242→
+  1243→Dark mode can use deep graphite/navy-neutral material with subdued
+  1244→emerald/blue/violet atmospheric tint.
+  1245→
+  1246→=====================================================================
+  1247→PART 30 — COLORS
+  1248→=====================================================================
+  1249→
+  1250→Use perceptually consistent OKLCH tokens.
+  1251→
+  1252→Create semantic tokens:
+  1253→
+  1254→--background
+  1255→--foreground
+  1256→
+  1257→--surface
+  1258→--surface-raised
+  1259→
+  1260→--glass
+  1261→--glass-strong
+  1262→--glass-soft
+  1263→
+  1264→--glass-border
+  1265→--glass-highlight
+  1266→
+  1267→--primary
+  1268→--primary-foreground
+  1269→
+  1270→--secondary
+  1271→--muted
+  1272→--muted-foreground
+  1273→
+  1274→--success
+  1275→--warning
+  1276→--danger
+  1277→--info
+  1278→
+  1279→Retain liquid_polish's tasteful emerald-ish premium direction unless
+  1280→actual visual testing reveals another accent works better.
+  1281→
+  1282→Do not use five strong accent colors simultaneously.
+  1283→
+  1284→=====================================================================
+  1285→PART 31 — RADIUS
+  1286→=====================================================================
+  1287→
+  1288→Use large but systematic roundness.
+  1289→
+  1290→Example:
+  1291→
+  1292→control-sm       12px
+  1293→control          16px
+  1294→card-sm          18px
+  1295→card             22px
+  1296→card-lg          26px
+  1297→navigation       28px
+  1298→sheet            30px
+  1299→large-panel      32px
+  1300→pill             999px
+  1301→
+  1302→Do not assign random border-radius values per component.
+  1303→
+  1304→=====================================================================
+  1305→PART 32 — SPACING
+  1306→=====================================================================
+  1307→
+  1308→Use 4px-derived scale:
+  1309→
+  1310→4
+  1311→8
+  1312→12
+  1313→16
+  1314→20
+  1315→24
+  1316→32
+  1317→40
+  1318→48
+  1319→64.
+  1320→
+  1321→Typical mobile page gutter:
+  1322→
+  1323→16px.
+  1324→
+  1325→Small phone:
+  1326→
+  1327→14–16px.
+  1328→
+  1329→Tablet:
+  1330→
+  1331→20–24px.
+  1332→
+  1333→Desktop:
+  1334→
+  1335→24–32px.
+  1336→
+  1337→Keep consistent vertical rhythm.
+  1338→
+  1339→=====================================================================
+  1340→PART 33 — TYPOGRAPHY
+  1341→=====================================================================
+  1342→
+  1343→Use system-first premium typography.
+  1344→
+  1345→Do not distribute proprietary Apple font files.
+  1346→
+  1347→Use platform system font stack.
+  1348→
+  1349→Optionally use a high-quality open variable fallback such as Inter
+  1350→where platform consistency is needed.
+  1351→
+  1352→Semantic scale:
+  1353→
+  1354→Display
+  1355→Page Title
+  1356→Section Title
+  1357→Card Title
+  1358→Body
+  1359→Body Strong
+  1360→Label
+  1361→Caption
+  1362→Financial Numeric
+  1363→Micro Status.
+  1364→
+  1365→Financial numerals:
+  1366→
+  1367→tabular numerals.
+  1368→
+  1369→Avoid giant marketing-style headings inside operational pages.
+  1370→
+  1371→=====================================================================
+  1372→PART 34 — ICONOGRAPHY
+  1373→=====================================================================
+  1374→
+  1375→Use one consistent icon family.
+  1376→
+  1377→Lucide is acceptable if visually tuned.
+  1378→
+  1379→Keep:
+  1380→
+  1381→stroke width
+  1382→optical size
+  1383→container geometry
+  1384→selected state
+  1385→
+  1386→consistent.
+  1387→
+  1388→Do not mix:
+  1389→
+  1390→filled emoji icons
+  1391→outline Lucide
+  1392→Material icons
+  1393→random SVG libraries
+  1394→
+  1395→without deliberate reason.
+  1396→
+  1397→Meal icon itself may use a curated food-symbol system where configured.
+  1398→
+  1399→=====================================================================
+  1400→PART 35 — MOTION PHILOSOPHY
+  1401→=====================================================================
+  1402→
+  1403→EVERY CLICKABLE/TAPPABLE INTERACTION MUST RESPOND.
+  1404→
+  1405→But:
+  1406→
+  1407→not every element should constantly move.
+  1408→
+  1409→Motion communicates:
+  1410→
+  1411→press
+  1412→selection
+  1413→navigation
+  1414→success
+  1415→state change
+  1416→hierarchy
+  1417→continuity.
+  1418→
+  1419→No decorative bouncing.
+  1420→
+  1421→=====================================================================
+  1422→PART 36 — BUTTON MOTION
+  1423→=====================================================================
+  1424→
+  1425→Pointer down / touch down:
+  1426→
+  1427→scale roughly:
+  1428→0.97–0.985
+  1429→
+  1430→Shadow compresses slightly.
+  1431→
+  1432→Highlight shifts subtly.
+  1433→
+  1434→Release:
+  1435→
+  1436→spring back immediately.
+  1437→
+  1438→Hover:
+  1439→
+  1440→1–2px perceived elevation
+  1441→or very subtle luminance change.
+  1442→
+  1443→Never wait for animation before performing action.
+  1444→
+  1445→=====================================================================
+  1446→PART 37 — ACTIVE NAV ANIMATION
+  1447→=====================================================================
+  1448→
+  1449→Take inspiration from liquid_polish / BoardOps.
+  1450→
+  1451→Use one shared-layout active material indicator.
+  1452→
+  1453→When changing navigation:
+  1454→
+  1455→active background glides between destinations.
+  1456→
+  1457→Icon:
+  1458→
+  1459→small spring response.
+  1460→
+  1461→Label:
+  1462→
+  1463→color/weight transition.
+  1464→
+  1465→No exaggerated bouncing.
+  1466→
+  1467→=====================================================================
+  1468→PART 38 — PAGE TRANSITIONS
+  1469→=====================================================================
+  1470→
+  1471→Route change:
+  1472→
+  1473→quick opacity
+  1474→+
+  1475→~6px directional/vertical translation.
+  1476→
+  1477→Rough visual duration:
+  1478→
+  1479→180–240ms.
+  1480→
+  1481→Deep navigation may use subtle directional transition.
+  1482→
+  1483→Back navigation can reverse direction where technically reliable.
+  1484→
+  1485→Do NOT delay actual route navigation.
+  1486→
+  1487→=====================================================================
+  1488→PART 39 — LIST MOTION
+  1489→=====================================================================
+  1490→
+  1491→Approval/rejection/status changes:
+  1492→
+  1493→item settles into new state.
+  1494→
+  1495→Removal from current filter:
+  1496→
+  1497→brief status transition
+  1498→then layout closes smoothly.
+  1499→
+  1500→Use shared-layout animation where valuable.
+  1501→
+  1502→Do not animate 200 list rows at once.
+  1503→
+  1504→=====================================================================
+  1505→PART 40 — LIQUID TOGGLE
+  1506→=====================================================================
+  1507→
+  1508→Meal ON/OFF is a signature interaction.
+  1509→
+  1510→Build a premium `LiquidToggle`.
+  1511→
+  1512→Behavior:
+  1513→
+  1514→- spring thumb
+  1515→- soft track tint
+  1516→- small internal highlight
+  1517→- slight press compression
+  1518→- immediate visual state
+  1519→- server confirmation
+  1520→- rollback if rejected
+  1521→
+  1522→If cutoff passed:
+  1523→
+  1524→toggle springs back.
+  1525→
+  1526→Inline message:
+  1527→
+  1528→"Changes closed at 9:00 AM."
+  1529→
+  1530→Do not show a generic error toast only.
+  1531→
+  1532→=====================================================================
+  1533→PART 41 — INPUTS
+  1534→=====================================================================
+  1535→
+  1536→Inputs should use dense frosted material.
+  1537→
+  1538→Use:
+  1539→
+  1540→- proper label
+  1541→- high contrast
+  1542→- subtle inset
+  1543→- clear focus ring
+  1544→- animated border/material transition
+  1545→- generous touch height
+  1546→
+  1547→Never rely on placeholder as label.
+  1548→
+  1549→=====================================================================
+  1550→PART 42 — SHEETS
+  1551→=====================================================================
+  1552→
+  1553→Mobile secondary workflows:
+  1554→
+  1555→bottom sheet.
+  1556→
+  1557→Examples:
+  1558→
+  1559→filters
+  1560→resident action menu
+  1561→payment review summary
+  1562→date choices
+  1563→quick override
+  1564→more navigation.
+  1565→
+  1566→Glass sheet:
+  1567→
+  1568→dense enough to read.
+  1569→
+  1570→Rounded top corners.
+  1571→
+  1572→Spring entrance.
+  1573→
+  1574→Drag handle only if dismissible by drag.
+  1575→
+  1576→=====================================================================
+  1577→PART 43 — DIALOGS
+  1578→=====================================================================
+  1579→
+  1580→Use dialog only for:
+  1581→
+  1582→confirmation
+  1583→danger
+  1584→small decision.
+  1585→
+  1586→Do not put giant creation forms into tiny modals.
+  1587→
+  1588→Long forms:
+  1589→
+  1590→dedicated route or full-height sheet.
+  1591→
+  1592→=====================================================================
+  1593→PART 44 — TOASTS
+  1594→=====================================================================
+  1595→
+  1596→Use compact high-quality glass toast.
+  1597→
+  1598→Examples:
+  1599→
+  1600→Payment approved
+  1601→Meal updated
+  1602→Expense added
+  1603→Announcement published.
+  1604→
+  1605→Toast must never be the only place an important error appears.
+  1606→
+  1607→=====================================================================
+  1608→PART 45 — RESPONSIVE BREAKPOINT PHILOSOPHY
+  1609→=====================================================================
+  1610→
+  1611→DESIGN MOBILE FIRST.
+  1612→
+  1613→But:
+  1614→
+  1615→mobile does not mean "desktop squeezed smaller."
+  1616→
+  1617→And:
+  1618→
+  1619→desktop does not mean "mobile stretched wider."
+  1620→
+  1621→Use container queries and fluid CSS.
+  1622→
+  1623→Approximate behavior:
+  1624→
+  1625→PHONE:
+  1626→< 768px
+  1627→
+  1628→TABLET:
+  1629→768–1199px
+  1630→
+  1631→DESKTOP:
+  1632→>= 1200px
+  1633→
+  1634→LARGE:
+  1635→>= 1600px
+  1636→
+  1637→Do not build entirely separate application implementations.
+  1638→
+  1639→=====================================================================
+  1640→PART 46 — "DO NOT COLLAPSE PAGES"
+  1641→=====================================================================
+  1642→
+  1643→This requirement is NON-NEGOTIABLE.
+  1644→
+  1645→Do NOT hide functionality because viewport is small.
+  1646→
+  1647→Do NOT turn an entire page into accordion after accordion.
+  1648→
+  1649→Do NOT remove:
+  1650→
+  1651→fields
+  1652→filters
+  1653→actions
+  1654→totals
+  1655→records
+  1656→important details.
+  1657→
+  1658→Instead:
+  1659→
+  1660→REFLOW.
+  1661→
+  1662→Examples:
+  1663→
+  1664→desktop table
+  1665→→ mobile structured rows
+  1666→
+  1667→desktop side-by-side
+  1668→→ mobile vertical sequence
+  1669→
+  1670→desktop detail pane
+  1671→→ mobile detail route/sheet
+  1672→
+  1673→desktop inline filters
+  1674→→ mobile Filter sheet.
+  1675→
+  1676→All capabilities remain accessible.
+  1677→
+  1678→=====================================================================
+  1679→PART 47 — MOBILE APP SHELL
+  1680→=====================================================================
+  1681→
+  1682→Take strong structural inspiration from BoardOps-Fresh.
+  1683→
+  1684→Mobile shell:
+  1685→
+  1686→┌───────────────────────────┐
+  1687→│ Frosted Sticky Top Bar    │
+  1688→├───────────────────────────┤
+  1689→│                           │
+  1690→│ Page Content              │
+  1691→│                           │
+  1692→│                           │
+  1693→│ bottom safe padding       │
+  1694→├───────────────────────────┤
+  1695→│ Floating Liquid BottomNav │
+  1696→└───────────────────────────┘
+  1697→
+  1698→Top bar:
+  1699→
+  1700→left:
+  1701→page context/back where necessary
+  1702→
+  1703→middle:
+  1704→page title
+  1705→
+  1706→right:
+  1707→search where appropriate
+  1708→notification
+  1709→avatar/profile.
+  1710→
+  1711→Do not expose five unrelated utility buttons in the mobile top bar.
+  1712→
+  1713→=====================================================================
+  1714→PART 48 — MOBILE ADMIN NAVIGATION
+  1715→=====================================================================
+  1716→
+  1717→Use maximum five bottom destinations.
+  1718→
+  1719→Recommended:
+  1720→
+  1721→Home
+  1722→Meals
+  1723→Money
+  1724→Residents
+  1725→More
+  1726→
+  1727→"Money" is a navigation hub/group, not a new business domain.
+  1728→
+  1729→Money opens/accesses:
+  1730→
+  1731→Payments
+  1732→Funds
+  1733→Expenses
+  1734→Billing
+  1735→
+  1736→More:
+  1737→
+  1738→Meal Configuration
+  1739→Formula Engine
+  1740→Tasks
+  1741→Calendar
+  1742→Announcements
+  1743→Notifications
+  1744→Settings
+  1745→Audit where authorized.
+  1746→
+  1747→If actual UX testing shows another grouping is clearer,
+  1748→adjust labels without changing underlying features.
+  1749→
+  1750→=====================================================================
+  1751→PART 49 — MOBILE RESIDENT NAVIGATION
+  1752→=====================================================================
+  1753→
+  1754→Recommended:
+  1755→
+  1756→Home
+  1757→Meals
+  1758→Billing
+  1759→Payments
+  1760→Tasks
+  1761→
+  1762→Notifications/profile accessed from top bar.
+  1763→
+  1764→Keep Resident navigation extremely simple.
+  1765→
+  1766→=====================================================================
+  1767→PART 50 — TABLET SHELL
+  1768→=====================================================================
+  1769→
+  1770→Do NOT simply keep phone navigation forever.
+  1771→
+  1772→At tablet width:
+  1773→
+  1774→use compact navigation rail when it improves space.
+  1775→
+  1776→Concept:
+  1777→
+  1778→┌──────┬──────────────────────┐
+  1779→│ Rail │ Top Bar              │
+  1780→│      ├──────────────────────┤
+  1781→│      │ Content              │
+  1782→│      │                      │
+  1783→└──────┴──────────────────────┘
+  1784→
+  1785→Rail:
+  1786→
+  1787→~72–84px.
+  1788→
+  1789→Icons + short labels where room allows.
+  1790→
+  1791→Active item uses liquid material pill.
+  1792→
+  1793→=====================================================================
+  1794→PART 51 — DESKTOP SHELL
+  1795→=====================================================================
+  1796→
+  1797→Take inspiration from BoardOps-Fresh's grouped glass sidebar.
+  1798→
+  1799→Desktop:
+  1800→
+  1801→┌──────────────┬──────────────────────────────────┐
+  1802→│ Glass        │ Top Bar                          │
+  1803→│ Sidebar      ├──────────────────────────────────┤
+  1804→│              │                                  │
+  1805→│ Overview     │ Main Content                     │
+  1806→│ Meals        │                                  │
+  1807→│ Finance      │ Optional context pane            │
+  1808→│ Operations   │                                  │
+  1809→│ Comms        │                                  │
+  1810→│ System       │                                  │
+  1811→│              │                                  │
+  1812→│ User/Profile │                                  │
+  1813→└──────────────┴──────────────────────────────────┘
+  1814→
+  1815→Sidebar approximately:
+  1816→
+  1817→256–280px.
+  1818→
+  1819→Do not use excessive width.
+  1820→
+  1821→Group navigation clearly.
+  1822→
+  1823→=====================================================================
+  1824→PART 52 — DESKTOP NAV GROUPS
+  1825→=====================================================================
+  1826→
+  1827→Suggested:
+  1828→
+  1829→OVERVIEW
+  1830→- Dashboard
+  1831→
+  1832→MEALS
+  1833→- Meal Count
+  1834→- Meal Configuration
+  1835→
+  1836→FINANCE
+  1837→- Payments
+  1838→- Funds
+  1839→- Expenses
+  1840→- Billing
+  1841→- Formula Engine
+  1842→
+  1843→PEOPLE
+  1844→- Residents
+  1845→
+  1846→OPERATIONS
+  1847→- Tasks
+  1848→- Calendar
+  1849→
+  1850→COMMUNICATION
+  1851→- Notifications
+  1852→- Announcements
+  1853→
+  1854→SYSTEM
+  1855→- Settings
+  1856→- Audit
+  1857→
+  1858→Only show destinations available to the role.
+  1859→
+  1860→=====================================================================
+  1861→PART 53 — TOP BAR
+  1862→=====================================================================
+  1863→
+  1864→BoardOps-Fresh's sticky glass top-bar concept is a strong reference.
+  1865→
+  1866→New top bar should include only useful affordances.
+  1867→
+  1868→Desktop:
+  1869→
+  1870→page title/context
+  1871→
+  1872→optional:
+  1873→global search
+  1874→
+  1875→then:
+  1876→
+  1877→notifications
+  1878→theme/appearance quick control if useful
+  1879→profile/avatar.
+  1880→
+  1881→Mobile:
+  1882→
+  1883→back/menu context only where required
+  1884→page title
+  1885→notifications
+  1886→profile.
+  1887→
+  1888→Do not repeat sidebar branding unnecessarily in top bar.
+  1889→
+  1890→=====================================================================
+  1891→PART 54 — GLOBAL SEARCH
+  1892→=====================================================================
+  1893→
+  1894→Use Command-K / Ctrl-K on desktop.
+  1895→
+  1896→Search button on mobile/tablet.
+  1897→
+  1898→Search:
+  1899→
+  1900→Residents
+  1901→Payments
+  1902→Bills
+  1903→Expenses
+  1904→Tasks.
+  1905→
+  1906→Result grouping:
+  1907→
+  1908→Residents
+  1909→─────────
+  1910→Sahid Haque
+  1911→Active
+  1912→
+  1913→Payments
+  1914→────────
+  1915→PAY-202609-0042
+  1916→₹2,000 • Approved
+  1917→
+  1918→Bills
+  1919→─────
+  1920→BILL-202608-0127
+  1921→₹1,761 • Paid
+  1922→
+  1923→Search authorization must be enforced on backend.
+  1924→
+  1925→Resident global search should be heavily scoped to their own records
+  1926→or omitted if it provides little value.
+  1927→
+  1928→=====================================================================
+  1929→PART 55 — SHARED AUTH: LOGIN PAGE
+  1930→=====================================================================
+  1931→
+  1932→DESIGN:
+  1933→
+  1934→minimal and premium.
+  1935→
+  1936→Do not create a giant marketing landing page.
+  1937→
+  1938→Mobile:
+  1939→
+  1940→centered vertically within safe area.
+  1941→
+  1942→One strong frosted auth panel.
+  1943→
+  1944→Brand mark
+  1945→Product name
+  1946→Short useful sentence
+  1947→Email/identifier
+  1948→Password
+  1949→Sign In
+  1950→Forgot password
+  1951→
+  1952→Below:
+  1953→
+  1954→New resident?
+  1955→Create account.
+  1956→
+  1957→DO NOT show:
+  1958→
+  1959→"Admin / Resident" role selector for authentication authority.
+  1960→
+  1961→Role comes from account.
+  1962→
+  1963→Desktop:
+  1964→
+  1965→same auth panel with subtle ambient backdrop.
+  1966→
+  1967→Do not add irrelevant illustration unless it materially improves design.
+  1968→
+  1969→=====================================================================
+  1970→PART 56 — RESIDENT REGISTRATION
+  1971→=====================================================================
+  1972→
+  1973→Registration should be easy for non-technical residents.
+  1974→
+  1975→Use one route with clear grouped steps.
+  1976→
+  1977→Suggested:
+  1978→
+  1979→1. Account
+  1980→2. Personal details
+  1981→3. Membership details if required
+  1982→4. Policies
+  1983→5. Review
+  1984→
+  1985→Show progress subtly.
+  1986→
+  1987→Do not create six giant independent cards.
+  1988→
+  1989→Policy acceptance:
+  1990→
+  1991→specific version.
+  1992→
+  1993→Submit:
+  1994→
+  1995→"Send for approval"
+  1996→
+  1997→After submit:
+  1998→
+  1999→redirect to Pending Approval page.
+  2000→
+
+[showing lines 1-2000 of 5821; use offset=2001 with limit to continue reading]

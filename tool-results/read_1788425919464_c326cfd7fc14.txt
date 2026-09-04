@@ -1,0 +1,1546 @@
+     1→"use client";
+     2→
+     3→import { useState, useRef, useEffect } from "react";
+     4→import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+     5→import { motion, AnimatePresence } from "framer-motion";
+     6→import { format, formatDistanceToNow } from "date-fns";
+     7→import {
+     8→  Mail,
+     9→  Phone,
+    10→  DoorOpen,
+    11→  ShieldCheck,
+    12→  CalendarDays,
+    13→  Clock,
+    14→  Globe,
+    15→  Palette,
+    16→  Languages,
+    17→  Activity,
+    18→  Pencil,
+    19→  User,
+    20→  Sparkles,
+    21→  CheckCircle2,
+    22→  Camera,
+    23→  KeyRound,
+    24→  Smartphone,
+    25→  Monitor,
+    26→  Tablet,
+    27→  X,
+    28→  Download,
+    29→  Copy,
+    30→  RefreshCw,
+    31→  Lock,
+    32→  Eye,
+    33→  EyeOff,
+    34→  ShieldAlert,
+    35→  QrCode,
+    36→  Loader2,
+    37→  Trash2,
+    38→  LogOut,
+    39→  Sun,
+    40→  Moon,
+    41→  Check,
+    42→} from "lucide-react";
+    43→import { api } from "@/lib/api-client";
+    44→import { GlassCard } from "@/components/glass/glass-card";
+    45→import { GlassButton } from "@/components/glass/glass-button";
+    46→import { GlassInput } from "@/components/glass/glass-input";
+    47→import { StaggerGroup, StaggerItem } from "@/components/glass/page-transition";
+    48→import { ShimmerSkeleton } from "@/components/glass/shimmer-skeleton";
+    49→import { Badge } from "@/components/ui/badge";
+    50→import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+    51→import {
+    52→  Dialog,
+    53→  DialogContent,
+    54→  DialogHeader,
+    55→  DialogTitle,
+    56→  DialogDescription,
+    57→} from "@/components/ui/dialog";
+    58→import {
+    59→  Sheet,
+    60→  SheetContent,
+    61→  SheetHeader,
+    62→  SheetTitle,
+    63→  SheetDescription,
+    64→} from "@/components/ui/sheet";
+    65→import {
+    66→  Select,
+    67→  SelectContent,
+    68→  SelectItem,
+    69→  SelectTrigger,
+    70→  SelectValue,
+    71→} from "@/components/ui/select";
+    72→import { Switch } from "@/components/ui/switch";
+    73→import { useAuthStore, type Role, type CurrentUser } from "@/stores/use-auth-store";
+    74→import { useTheme } from "next-themes";
+    75→import { toast } from "sonner";
+    76→import { cn } from "@/lib/utils";
+    77→import { useIsMobile } from "@/hooks/use-mobile";
+    78→import { TWO_FACTOR_AUTH_ENABLED } from "@/lib/feature-flags";
+    79→
+    80→type UserStatus = "ACTIVE" | "PENDING" | "SUSPENDED" | "ARCHIVED" | "INACTIVE";
+    81→
+    82→const STATUS_META: Record<string, { label: string; className: string }> = {
+    83→  ACTIVE: { label: "Active", className: "bg-success/15 text-success" },
+    84→  PENDING: { label: "Pending", className: "bg-warning/15 text-warning" },
+    85→  SUSPENDED: { label: "Suspended", className: "bg-destructive/15 text-destructive" },
+    86→  ARCHIVED: { label: "Archived", className: "bg-muted text-muted-foreground" },
+    87→  INACTIVE: { label: "Inactive", className: "bg-muted text-muted-foreground" },
+    88→};
+    89→
+    90→const ROLE_META: Record<Role, { label: string; className: string }> = {
+    91→  SUPER_ADMIN: { label: "Super Admin", className: "bg-destructive/15 text-destructive" },
+    92→  ADMIN: { label: "Admin", className: "bg-primary/15 text-primary" },
+    93→  MANAGER: { label: "Manager", className: "bg-info/15 text-info" },
+    94→  USER: { label: "Resident", className: "bg-muted text-muted-foreground" },
+    95→};
+    96→
+    97→const AVATAR_GRADIENTS = [
+    98→  "from-violet-500 to-fuchsia-500",
+    99→  "from-emerald-500 to-teal-500",
+   100→  "from-amber-500 to-orange-500",
+   101→  "from-rose-500 to-pink-500",
+   102→  "from-cyan-500 to-blue-500",
+   103→  "from-indigo-500 to-purple-500",
+   104→];
+   105→
+   106→function gradientFor(name: string) {
+   107→  const idx = name.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % AVATAR_GRADIENTS.length;
+   108→  return AVATAR_GRADIENTS[idx];
+   109→}
+   110→
+   111→function initials(name: string) {
+   112→  return name
+   113→    .split(" ")
+   114→    .filter(Boolean)
+   115→    .slice(0, 2)
+   116→    .map((p) => p[0]?.toUpperCase() ?? "")
+   117→    .join("");
+   118→}
+   119→
+   120→async function unwrap<T>(promise: Promise<unknown>): Promise<T> {
+   121→  const res = await promise;
+   122→  if (res && typeof res === "object" && "success" in res && "data" in (res as Record<string, unknown>)) {
+   123→    return (res as unknown as { data: T }).data;
+   124→  }
+   125→  return res as T;
+   126→}
+   127→
+   128→type MeUser = CurrentUser & {
+   129→  status: UserStatus;
+   130→  createdAt?: string;
+   131→  lastLoginAt?: string | null;
+   132→  theme?: string | null;
+   133→  gender?: string | null;
+   134→  emergencyContact?: string | null;
+   135→  twoFactorEnabled?: boolean;
+   136→};
+   137→
+   138→type SessionInfo = {
+   139→  id: string;
+   140→  current: boolean;
+   141→  device: string;
+   142→  browser: string;
+   143→  os: string;
+   144→  ipAddress: string;
+   145→  createdAt: string;
+   146→  expiresAt: string;
+   147→};
+   148→
+   149→const TIMEZONES = [
+   150→  "UTC",
+   151→  "Asia/Kolkata",
+   152→  "Asia/Dubai",
+   153→  "Asia/Singapore",
+   154→  "Asia/Tokyo",
+   155→  "Europe/London",
+   156→  "Europe/Paris",
+   157→  "America/New_York",
+   158→  "America/Chicago",
+   159→  "America/Los_Angeles",
+   160→  "Australia/Sydney",
+   161→];
+   162→
+   163→const LANGUAGES = [
+   164→  { value: "en", label: "English" },
+   165→  { value: "hi", label: "हिन्दी (Hindi)" },
+   166→  { value: "ta", label: "தமிழ் (Tamil)" },
+   167→  { value: "te", label: "తెలుగు (Telugu)" },
+   168→  { value: "bn", label: "বাংলা (Bengali)" },
+   169→  { value: "mr", label: "मराठी (Marathi)" },
+   170→  { value: "es", label: "Español" },
+   171→  { value: "fr", label: "Français" },
+   172→  { value: "de", label: "Deutsch" },
+   173→];
+   174→
+   175→export function ProfileView() {
+   176→  const stored = useAuthStore((s) => s.user);
+   177→  const setUser = useAuthStore((s) => s.setUser);
+   178→  const setToken = useAuthStore((s) => s.setToken);
+   179→  const logout = useAuthStore((s) => s.logout);
+   180→  const qc = useQueryClient();
+   181→  const { theme: resolvedTheme, setTheme } = useTheme();
+   182→  const isMobile = useIsMobile();
+   183→
+   184→  const [editOpen, setEditOpen] = useState(false);
+   185→  const [passwordOpen, setPasswordOpen] = useState(false);
+   186→  const [twoFactorOpen, setTwoFactorOpen] = useState(false);
+   187→  const [sessionsOpen, setSessionsOpen] = useState(false);
+   188→
+   189→  const { data: me, isLoading } = useQuery({
+   190→    queryKey: ["auth", "me"],
+   191→    queryFn: () => unwrap<MeUser>(api.get("/auth/me")),
+   192→    initialData: stored as MeUser | undefined,
+   193→  });
+   194→
+   195→  const { data: sessions = [] } = useQuery<SessionInfo[]>({
+   196→    queryKey: ["auth", "sessions"],
+   197→    queryFn: () => unwrap<SessionInfo[]>(api.get("/auth/sessions")),
+   198→    enabled: sessionsOpen,
+   199→  });
+   200→
+   201→  // Avatar upload mutation
+   202→  const avatarMutation = useMutation({
+   203→    mutationFn: async (file: File) => {
+   204→      const formData = new FormData();
+   205→      formData.append("avatar", file);
+   206→      const res = await api.postForm<{ success: boolean; data: { avatarUrl: string } }>(
+   207→        "/auth/avatar",
+   208→        formData,
+   209→      );
+   210→      return res.data;
+   211→    },
+   212→    onSuccess: (data) => {
+   213→      if (me) {
+   214→        setUser({ ...me, avatarUrl: data.avatarUrl });
+   215→      }
+   216→      qc.invalidateQueries({ queryKey: ["auth", "me"] });
+   217→      toast.success("Avatar updated successfully");
+   218→    },
+   219→    onError: (e: Error) => toast.error(e.message || "Failed to upload avatar"),
+   220→  });
+   221→
+   222→  if (isLoading || !me) {
+   223→    return (
+   224→      <div className="space-y-4">
+   225→        <ShimmerSkeleton className="h-44" />
+   226→        <div className="grid-cards gap-4">
+   227→          <ShimmerSkeleton className="h-48" />
+   228→          <ShimmerSkeleton className="h-48" />
+   229→        </div>
+   230→      </div>
+   231→    );
+   232→  }
+   233→
+   234→  const sMeta = STATUS_META[me.status] ?? STATUS_META.ACTIVE;
+   235→  const rMeta = ROLE_META[me.role];
+   236→  const joined = me.createdAt ? format(new Date(me.createdAt), "MMM d, yyyy 'at' h:mm a") : "—";
+   237→  const lastLogin = me.lastLoginAt
+   238→    ? formatDistanceToNow(new Date(me.lastLoginAt), { addSuffix: true })
+   239→    : "First login";
+   240→
+   241→  return (
+   242→    <StaggerGroup className="space-y-4 pb-6">
+   243→      {/* Profile Header with avatar upload */}
+   244→      <StaggerItem>
+   245→        <GlassCard className="p-6 relative overflow-hidden" hover={false} glow="primary">
+   246→          <div className="absolute inset-0 -z-10 opacity-30 pointer-events-none">
+   247→            <div className="absolute top-0 right-0 h-40 w-40 rounded-full bg-primary/40 blur-3xl" />
+   248→            <div className="absolute bottom-0 left-0 h-32 w-32 rounded-full bg-success/30 blur-3xl" />
+   249→          </div>
+   250→          <div className="flex flex-col gap-5">
+   251→            <AvatarUpload
+   252→              avatarUrl={me.avatarUrl}
+   253→              name={me.name}
+   254→              onUpload={(file) => avatarMutation.mutate(file)}
+   255→              loading={avatarMutation.isPending}
+   256→            />
+   257→            <div className="flex-1 min-w-0 text-center">
+   258→              <motion.div
+   259→                initial={{ opacity: 0, y: 8 }}
+   260→                animate={{ opacity: 1, y: 0 }}
+   261→                transition={{ delay: 0.05 }}
+   262→              >
+   263→                <h2 className="text-2xl font-bold truncate">{me.name}</h2>
+   264→                <p className="text-sm text-muted-foreground mt-0.5 truncate">{me.email}</p>
+   265→                <div className="flex items-center gap-2 mt-3 flex-wrap justify-center">
+   266→                  <Badge variant="outline" className={cn("text-xs", rMeta.className)}>
+   267→                    <ShieldCheck className="h-3 w-3" />
+   268→                    {rMeta.label}
+   269→                  </Badge>
+   270→                  <Badge variant="outline" className={cn("text-xs", sMeta.className)}>
+   271→                    {sMeta.label}
+   272→                  </Badge>
+   273→                  {TWO_FACTOR_AUTH_ENABLED && me.twoFactorEnabled && (
+   274→                    <Badge variant="outline" className="text-xs bg-success/15 text-success">
+   275→                      <Lock className="h-3 w-3" />
+   276→                      2FA On
+   277→                    </Badge>
+   278→                  )}
+   279→                  <Badge variant="outline" className="text-xs bg-muted/60 text-muted-foreground">
+   280→                    <CalendarDays className="h-3 w-3" />
+   281→                    Member since {joined}
+   282→                  </Badge>
+   283→                </div>
+   284→              </motion.div>
+   285→            </div>
+   286→            <div className="shrink-0 flex gap-2">
+   287→              <GlassButton variant="secondary" size="md" onClick={() => setEditOpen(true)}>
+   288→                <Pencil className="h-4 w-4" />
+   289→                Edit Profile
+   290→              </GlassButton>
+   291→            </div>
+   292→          </div>
+   293→        </GlassCard>
+   294→      </StaggerItem>
+   295→
+   296→      {/* Quick action cards */}
+   297→      <StaggerItem>
+   298→        <div className="grid-cards gap-3">
+   299→          <QuickActionCard
+   300→            icon={KeyRound}
+   301→            title="Change Password"
+   302→            description="Update your account password"
+   303→            color="primary"
+   304→            onClick={() => setPasswordOpen(true)}
+   305→          />
+   306→          {TWO_FACTOR_AUTH_ENABLED && (
+   307→            <QuickActionCard
+   308→              icon={me.twoFactorEnabled ? ShieldCheck : ShieldAlert}
+   309→              title={me.twoFactorEnabled ? "Two-Factor Auth" : "Enable 2FA"}
+   310→              description={
+   311→                me.twoFactorEnabled
+   312→                  ? "Enabled — your account is protected"
+   313→                  : "Add an extra layer of security"
+   314→              }
+   315→              color={me.twoFactorEnabled ? "success" : "warning"}
+   316→              onClick={() => setTwoFactorOpen(true)}
+   317→              badge={me.twoFactorEnabled ? "Active" : "Recommended"}
+   318→            />
+   319→          )}
+   320→          <QuickActionCard
+   321→            icon={Smartphone}
+   322→            title="Active Sessions"
+   323→            description="Manage devices logged into your account"
+   324→            color="info"
+   325→            onClick={() => setSessionsOpen(true)}
+   326→          />
+   327→        </div>
+   328→      </StaggerItem>
+   329→
+   330→      {/* Info Cards */}
+   331→      <div className="grid-cards gap-4">
+   332→        <StaggerItem>
+   333→          <InfoCard
+   334→            title="Contact"
+   335→            icon={Mail}
+   336→            color="primary"
+   337→            rows={[
+   338→              { icon: Phone, label: "Phone", value: me.phone || "Not set" },
+   339→              { icon: DoorOpen, label: "Room", value: me.room || "Not set" },
+   340→              {
+   341→                icon: ShieldCheck,
+   342→                label: "Emergency",
+   343→                value: me.emergencyContact || "Not configured",
+   344→              },
+   345→            ]}
+   346→          />
+   347→        </StaggerItem>
+   348→
+   349→        <StaggerItem>
+   350→          <InfoCard
+   351→            title="Preferences"
+   352→            icon={Palette}
+   353→            color="success"
+   354→            rows={[
+   355→              { icon: Languages, label: "Language", value: LANGUAGES.find((l) => l.value === (me.language || "en"))?.label || "English" },
+   356→              { icon: Globe, label: "Timezone", value: me.timezone || "UTC" },
+   357→              { icon: Clock, label: "Last Login", value: lastLogin },
+   358→            ]}
+   359→          >
+   360→            {/* Theme selector — inside Preferences card */}
+   361→            <div className="py-3 border-t border-border/30">
+   362→              <div className="flex items-center gap-2 mb-2.5 text-sm text-muted-foreground">
+   363→                <Palette className="h-3.5 w-3.5" />
+   364→                <span>Theme</span>
+   365→              </div>
+   366→              <div className="grid grid-cols-3 gap-2">
+   367→                {[
+   368→                  { value: "light", label: "Light", icon: Sun },
+   369→                  { value: "dark", label: "Dark", icon: Moon },
+   370→                  { value: "system", label: "System", icon: Monitor },
+   371→                ].map((opt) => {
+   372→                  const currentTheme = stored?.theme || me.theme || "system";
+   373→                  const active = currentTheme === opt.value;
+   374→                  const Icon = opt.icon;
+   375→                  return (
+   376→                    <motion.button
+   377→                      key={opt.value}
+   378→                      whileTap={{ scale: 0.94 }}
+   379→                      whileHover={{ scale: 1.03 }}
+   380→                      onClick={async () => {
+   381→                        try {
+   382→                          const res = await api.put<{ success: boolean; data: Partial<MeUser> }>(
+   383→                            "/auth/profile",
+   384→                            { theme: opt.value },
+   385→                          );
+   386→                          const persistedTheme = res.data.theme || opt.value;
+   387→                          setTheme(persistedTheme);
+   388→                          if (me) setUser({ ...me, theme: persistedTheme });
+   389→                          await qc.invalidateQueries({ queryKey: ["auth", "me"] });
+   390→                        } catch (e: unknown) {
+   391→                          toast.error((e as Error).message || "Failed to update theme");
+   392→                        }
+   393→                      }}
+   394→                      className={cn(
+   395→                        "relative flex flex-col items-center gap-1.5 py-2.5 rounded-xl border-2 transition-all",
+   396→                        active
+   397→                          ? "border-primary bg-primary/15 shadow-md shadow-primary/20"
+   398→                          : "border-border/40 glass-soft"
+   399→                      )}
+   400→                    >
+   401→                      <motion.div
+   402→                        animate={{ scale: active ? 1.1 : 1, rotate: active ? 0 : 0 }}
+   403→                        transition={{ type: "spring", stiffness: 300, damping: 20 }}
+   404→                      >
+   405→                        <Icon className={cn("h-5 w-5", active ? "text-primary" : "text-muted-foreground")} />
+   406→                      </motion.div>
+   407→                      <span className={cn("text-[11px] font-medium", active ? "text-primary" : "text-muted-foreground")}>
+   408→                        {opt.label}
+   409→                      </span>
+   410→                      <AnimatePresence>
+   411→                        {active && (
+   412→                          <motion.div
+   413→                            initial={{ scale: 0, rotate: -180, opacity: 0 }}
+   414→                            animate={{ scale: 1, rotate: 0, opacity: 1 }}
+   415→                            exit={{ scale: 0, rotate: 180, opacity: 0 }}
+   416→                            transition={{ type: "spring", stiffness: 500, damping: 20 }}
+   417→                            className="absolute -top-1.5 -right-1.5 grid place-items-center h-5 w-5 rounded-full bg-primary shadow-md"
+   418→                          >
+   419→                            <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />
+   420→                          </motion.div>
+   421→                        )}
+   422→                      </AnimatePresence>
+   423→                    </motion.button>
+   424→                  );
+   425→                })}
+   426→              </div>
+   427→            </div>
+   428→          </InfoCard>
+   429→        </StaggerItem>
+   430→      </div>
+   431→
+   432→      {/* Sign out */}
+   433→      <StaggerItem>
+   434→        <GlassCard className="p-4" hover={false}>
+   435→          <div className="flex items-center justify-between gap-3">
+   436→            <div className="flex items-center gap-3 min-w-0">
+   437→              <div className="grid place-items-center h-10 w-10 rounded-2xl bg-destructive/15 text-destructive shrink-0">
+   438→                <LogOut className="h-5 w-5" />
+   439→              </div>
+   440→              <div className="min-w-0">
+   441→                <h3 className="font-semibold text-sm">Sign Out</h3>
+   442→                <p className="text-xs text-muted-foreground truncate">
+   443→                  End your session on this device
+   444→                </p>
+   445→              </div>
+   446→            </div>
+   447→            <GlassButton
+   448→              variant="danger"
+   449→              size="sm"
+   450→              onClick={() => {
+   451→                qc.clear();
+   452→                logout();
+   453→                toast.success("Signed out successfully");
+   454→              }}
+   455→            >
+   456→              <LogOut className="h-4 w-4" />
+   457→              Sign Out
+   458→            </GlassButton>
+   459→          </div>
+   460→        </GlassCard>
+   461→      </StaggerItem>
+   462→
+   463→      {/* Dialogs */}
+   464→      <EditProfileDialog
+   465→        open={editOpen}
+   466→        onOpenChange={setEditOpen}
+   467→        user={me}
+   468→        setTheme={setTheme}
+   469→        onUpdated={(updated) => {
+   470→          setUser({ ...me, ...updated });
+   471→          qc.invalidateQueries({ queryKey: ["auth", "me"] });
+   472→        }}
+   473→      />
+   474→      <ChangePasswordDialog
+   475→        open={passwordOpen}
+   476→        onOpenChange={setPasswordOpen}
+   477→        onSuccess={() => {
+   478→          setPasswordOpen(false);
+   479→          qc.invalidateQueries({ queryKey: ["auth", "sessions"] });
+   480→        }}
+   481→      />
+   482→      {TWO_FACTOR_AUTH_ENABLED && (
+   483→        <TwoFactorDialog
+   484→          open={twoFactorOpen}
+   485→          onOpenChange={setTwoFactorOpen}
+   486→          enabled={!!me.twoFactorEnabled}
+   487→          onUpdated={(enabled) => {
+   488→            setUser({ ...me, twoFactorEnabled: enabled });
+   489→            qc.invalidateQueries({ queryKey: ["auth", "me"] });
+   490→          }}
+   491→        />
+   492→      )}
+   493→
+   494→      {/* Sessions Sheet */}
+   495→      <SessionsSheet
+   496→        open={sessionsOpen}
+   497→        onOpenChange={setSessionsOpen}
+   498→        sessions={sessions}
+   499→        onRevoked={() => qc.invalidateQueries({ queryKey: ["auth", "sessions"] })}
+   500→        onRevokeAll={() => {
+   501→          qc.invalidateQueries({ queryKey: ["auth", "sessions"] });
+   502→        }}
+   503→      />
+   504→    </StaggerGroup>
+   505→  );
+   506→}
+   507→
+   508→// ─────────────────────────────────────────────────────────────
+   509→// Avatar Upload Component
+   510→// ─────────────────────────────────────────────────────────────
+   511→function AvatarUpload({
+   512→  avatarUrl,
+   513→  name,
+   514→  onUpload,
+   515→  loading,
+   516→}: {
+   517→  avatarUrl?: string;
+   518→  name: string;
+   519→  onUpload: (file: File) => void;
+   520→  loading: boolean;
+   521→}) {
+   522→  const inputRef = useRef<HTMLInputElement>(null);
+   523→
+   524→  const handleFile = (file: File) => {
+   525→    if (!file.type.startsWith("image/")) {
+   526→      toast.error("Please select an image file");
+   527→      return;
+   528→    }
+   529→    if (file.size > 4 * 1024 * 1024) {
+   530→      toast.error("Image must be under 4 MB");
+   531→      return;
+   532→    }
+   533→    onUpload(file);
+   534→  };
+   535→
+   536→  return (
+   537→    <motion.div
+   538→      initial={{ scale: 0.85, opacity: 0 }}
+   539→      animate={{ scale: 1, opacity: 1 }}
+   540→      transition={{ type: "spring", stiffness: 220, damping: 18 }}
+   541→      className="relative shrink-0 mx-auto"
+   542→    >
+   543→      <div className="absolute -inset-1 rounded-3xl bg-gradient-to-br from-primary/40 to-success/40 blur-md" />
+   544→      <Avatar className="relative h-24 w-24 rounded-3xl">
+   545→        {avatarUrl && <AvatarImage src={avatarUrl} alt={name} />}
+   546→        <AvatarFallback
+   547→          className={cn(
+   548→            "rounded-3xl bg-gradient-to-br text-white font-bold text-2xl",
+   549→            gradientFor(name)
+   550→          )}
+   551→        >
+   552→          {initials(name) || "U"}
+   553→        </AvatarFallback>
+   554→      </Avatar>
+   555→      <input
+   556→        ref={inputRef}
+   557→        type="file"
+   558→        accept="image/jpeg,image/png,image/webp,image/gif"
+   559→        className="hidden"
+   560→        onChange={(e) => {
+   561→          const file = e.target.files?.[0];
+   562→          if (file) handleFile(file);
+   563→          e.target.value = "";
+   564→        }}
+   565→      />
+   566→      <button
+   567→        onClick={() => inputRef.current?.click()}
+   568→        disabled={loading}
+   569→        className="absolute -bottom-1 -right-1 h-9 w-9 rounded-full glass-strong grid place-items-center ring-2 ring-background hover:scale-110 transition-transform disabled:opacity-50"
+   570→        aria-label="Upload avatar"
+   571→      >
+   572→        {loading ? (
+   573→          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+   574→        ) : (
+   575→          <Camera className="h-4 w-4 text-primary" />
+   576→        )}
+   577→      </button>
+   578→    </motion.div>
+   579→  );
+   580→}
+   581→
+   582→// ─────────────────────────────────────────────────────────────
+   583→// Quick Action Card
+   584→// ─────────────────────────────────────────────────────────────
+   585→function QuickActionCard({
+   586→  icon: Icon,
+   587→  title,
+   588→  description,
+   589→  color,
+   590→  onClick,
+   591→  badge,
+   592→}: {
+   593→  icon: typeof Mail;
+   594→  title: string;
+   595→  description: string;
+   596→  color: "primary" | "success" | "warning" | "info";
+   597→  onClick: () => void;
+   598→  badge?: string;
+   599→}) {
+   600→  const colorClass = {
+   601→    primary: "bg-primary/15 text-primary",
+   602→    success: "bg-success/15 text-success",
+   603→    warning: "bg-warning/15 text-warning",
+   604→    info: "bg-info/15 text-info",
+   605→  }[color];
+   606→  return (
+   607→    <motion.button
+   608→      whileHover={{ scale: 1.02, y: -2 }}
+   609→      whileTap={{ scale: 0.98 }}
+   610→      onClick={onClick}
+   611→      className="text-left w-full"
+   612→    >
+   613→      <GlassCard className="p-4 h-full" hover>
+   614→        <div className="flex items-start gap-3">
+   615→          <div className={cn("grid place-items-center h-10 w-10 rounded-2xl shrink-0", colorClass)}>
+   616→            <Icon className="h-5 w-5" />
+   617→          </div>
+   618→          <div className="flex-1 min-w-0">
+   619→            <div className="flex items-center gap-2">
+   620→              <h3 className="font-semibold text-sm">{title}</h3>
+   621→              {badge && (
+   622→                <Badge variant="outline" className={cn("text-[10px] py-0", colorClass)}>
+   623→                  {badge}
+   624→                </Badge>
+   625→              )}
+   626→            </div>
+   627→            <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+   628→          </div>
+   629→        </div>
+   630→      </GlassCard>
+   631→    </motion.button>
+   632→  );
+   633→}
+   634→
+   635→// ─────────────────────────────────────────────────────────────
+   636→// Info Card (shared)
+   637→// ─────────────────────────────────────────────────────────────
+   638→function InfoCard({
+   639→  title,
+   640→  icon: Icon,
+   641→  color,
+   642→  rows,
+   643→  children,
+   644→}: {
+   645→  title: string;
+   646→  icon: typeof Mail;
+   647→  color: "primary" | "success" | "warning";
+   648→  rows: { icon: typeof Mail; label: string; value: string }[];
+   649→  children?: React.ReactNode;
+   650→}) {
+   651→  const colorClass = {
+   652→    primary: "bg-primary/15 text-primary",
+   653→    success: "bg-success/15 text-success",
+   654→    warning: "bg-warning/15 text-warning",
+   655→  }[color];
+   656→  return (
+   657→    <GlassCard className="p-4" hover={false}>
+   658→      <div className="flex items-center gap-3 mb-4">
+   659→        <div className={cn("grid place-items-center h-9 w-9 rounded-xl", colorClass)}>
+   660→          <Icon className="h-4 w-4" />
+   661→        </div>
+   662→        <h3 className="font-semibold text-sm">{title}</h3>
+   663→      </div>
+   664→      <div className="space-y-2.5">
+   665→        {rows.map((row) => {
+   666→          const RowIcon = row.icon;
+   667→          return (
+   668→            <div
+   669→              key={row.label}
+   670→              className="flex items-center justify-between gap-3 py-2 border-b border-border/30 last:border-0"
+   671→            >
+   672→              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+   673→                <RowIcon className="h-3.5 w-3.5" />
+   674→                {row.label}
+   675→              </span>
+   676→              <span className="text-sm font-medium text-right truncate max-w-[60%]">{row.value}</span>
+   677→            </div>
+   678→          );
+   679→        })}
+   680→        {children}
+   681→      </div>
+   682→    </GlassCard>
+   683→  );
+   684→}
+   685→
+   686→// ─────────────────────────────────────────────────────────────
+   687→// Edit Profile Dialog
+   688→// ─────────────────────────────────────────────────────────────
+   689→function EditProfileDialog({
+   690→  open,
+   691→  onOpenChange,
+   692→  user,
+   693→  onUpdated,
+   694→  setTheme,
+   695→}: {
+   696→  open: boolean;
+   697→  onOpenChange: (v: boolean) => void;
+   698→  user: MeUser;
+   699→  onUpdated: (u: Partial<MeUser>) => void;
+   700→  setTheme: (t: string) => void;
+   701→}) {
+   702→  const qc = useQueryClient();
+   703→  const isMobile = useIsMobile();
+   704→  const [form, setForm] = useState({
+   705→    name: user.name,
+   706→    phone: user.phone || "",
+   707→    room: user.room || "",
+   708→    gender: user.gender || "",
+   709→    emergencyContact: user.emergencyContact || "",
+   710→    theme: user.theme || "system",
+   711→    language: user.language || "en",
+   712→    timezone: user.timezone || "UTC",
+   713→  });
+   714→  const [loading, setLoading] = useState(false);
+   715→
+   716→  useEffect(() => {
+   717→    if (open) {
+   718→      // Dialog state must be refreshed from the latest user whenever it opens.
+   719→      // eslint-disable-next-line react-hooks/set-state-in-effect
+   720→      setForm({
+   721→        name: user.name,
+   722→        phone: user.phone || "",
+   723→        room: user.room || "",
+   724→        gender: user.gender || "",
+   725→        emergencyContact: user.emergencyContact || "",
+   726→        theme: user.theme || "system",
+   727→        language: user.language || "en",
+   728→        timezone: user.timezone || "UTC",
+   729→      });
+   730→    }
+   731→  }, [open, user]);
+   732→
+   733→  const submit = async () => {
+   734→    if (form.name.trim().length < 2) {
+   735→      toast.error("Name must be at least 2 characters");
+   736→      return;
+   737→    }
+   738→    setLoading(true);
+   739→    try {
+   740→      const res = await api.put<{ success: boolean; data: Partial<MeUser> }>("/auth/profile", {
+   741→        name: form.name,
+   742→        phone: form.phone || undefined,
+   743→        room: form.room || null,
+   744→        gender: form.gender || null,
+   745→        emergencyContact: form.emergencyContact || null,
+   746→        theme: form.theme,
+   747→        language: form.language,
+   748→        timezone: form.timezone,
+   749→      });
+   750→      onUpdated(res.data);
+   751→      qc.invalidateQueries({ queryKey: ["auth", "me"] });
+   752→      // Apply theme change immediately
+   753→      if (form.theme) setTheme(form.theme);
+   754→      toast.success("Profile updated successfully");
+   755→      onOpenChange(false);
+   756→    } catch (e: unknown) {
+   757→      toast.error((e as Error).message || "Failed to update profile");
+   758→    } finally {
+   759→      setLoading(false);
+   760→    }
+   761→  };
+   762→
+   763→  const content = (
+   764→    <div className="space-y-4">
+   765→      <GlassInput
+   766→        label="Full Name"
+   767→        value={form.name}
+   768→        onChange={(e) => setForm({ ...form, name: e.target.value })}
+   769→        icon={<User />}
+   770→      />
+   771→      <div className="grid grid-cols-2 gap-3">
+   772→        <GlassInput
+   773→          label="Phone"
+   774→          value={form.phone}
+   775→          onChange={(e) => setForm({ ...form, phone: e.target.value })}
+   776→          icon={<Phone />}
+   777→        />
+   778→        <GlassInput
+   779→          label="Room"
+   780→          value={form.room}
+   781→          onChange={(e) => setForm({ ...form, room: e.target.value })}
+   782→          icon={<DoorOpen />}
+   783→        />
+   784→      </div>
+   785→      <div>
+   786→        <label className="mb-1.5 ml-1 block text-xs font-medium text-muted-foreground">Gender</label>
+   787→        <Select value={form.gender} onValueChange={(v) => setForm({ ...form, gender: v })}>
+   788→          <SelectTrigger className="glass-soft rounded-2xl h-12 border-0">
+   789→            <SelectValue placeholder="Select gender" />
+   790→          </SelectTrigger>
+   791→          <SelectContent>
+   792→            <SelectItem value="MALE">Male</SelectItem>
+   793→            <SelectItem value="FEMALE">Female</SelectItem>
+   794→            <SelectItem value="OTHER">Other</SelectItem>
+   795→          </SelectContent>
+   796→        </Select>
+   797→      </div>
+   798→      <GlassInput
+   799→        label="Emergency Contact"
+   800→        value={form.emergencyContact}
+   801→        onChange={(e) => setForm({ ...form, emergencyContact: e.target.value })}
+   802→        icon={<ShieldCheck />}
+   803→        placeholder="Phone number of emergency contact"
+   804→      />
+   805→      <div className="grid grid-cols-2 gap-3">
+   806→        <div>
+   807→          <label className="mb-1.5 ml-1 block text-xs font-medium text-muted-foreground">Theme</label>
+   808→          <Select value={form.theme} onValueChange={(v) => setForm({ ...form, theme: v })}>
+   809→            <SelectTrigger className="glass-soft rounded-2xl h-12 border-0">
+   810→              <SelectValue />
+   811→            </SelectTrigger>
+   812→            <SelectContent>
+   813→              <SelectItem value="system">System</SelectItem>
+   814→              <SelectItem value="light">Light</SelectItem>
+   815→              <SelectItem value="dark">Dark</SelectItem>
+   816→            </SelectContent>
+   817→          </Select>
+   818→        </div>
+   819→        <div>
+   820→          <label className="mb-1.5 ml-1 block text-xs font-medium text-muted-foreground">Language</label>
+   821→          <Select value={form.language} onValueChange={(v) => setForm({ ...form, language: v })}>
+   822→            <SelectTrigger className="glass-soft rounded-2xl h-12 border-0">
+   823→              <SelectValue />
+   824→            </SelectTrigger>
+   825→            <SelectContent>
+   826→              {LANGUAGES.map((l) => (
+   827→                <SelectItem key={l.value} value={l.value}>
+   828→                  {l.label}
+   829→                </SelectItem>
+   830→              ))}
+   831→            </SelectContent>
+   832→          </Select>
+   833→        </div>
+   834→      </div>
+   835→      <div>
+   836→        <label className="mb-1.5 ml-1 block text-xs font-medium text-muted-foreground">Timezone</label>
+   837→        <Select value={form.timezone} onValueChange={(v) => setForm({ ...form, timezone: v })}>
+   838→          <SelectTrigger className="glass-soft rounded-2xl h-12 border-0">
+   839→            <SelectValue />
+   840→          </SelectTrigger>
+   841→          <SelectContent>
+   842→            {TIMEZONES.map((tz) => (
+   843→              <SelectItem key={tz} value={tz}>
+   844→                {tz}
+   845→              </SelectItem>
+   846→            ))}
+   847→          </SelectContent>
+   848→        </Select>
+   849→      </div>
+   850→      <div className="flex gap-2 pt-2">
+   851→        <GlassButton variant="ghost" className="flex-1" onClick={() => onOpenChange(false)}>
+   852→          Cancel
+   853→        </GlassButton>
+   854→        <GlassButton className="flex-1" loading={loading} onClick={submit}>
+   855→          <CheckCircle2 className="h-4 w-4" />
+   856→          Save Changes
+   857→        </GlassButton>
+   858→      </div>
+   859→    </div>
+   860→  );
+   861→
+   862→  if (isMobile) {
+   863→    return (
+   864→      <Sheet open={open} onOpenChange={onOpenChange}>
+   865→        <SheetContent side="bottom" className="glass-strong border-0 max-h-[90vh] overflow-y-auto">
+   866→          <SheetHeader>
+   867→            <SheetTitle>Edit Profile</SheetTitle>
+   868→            <SheetDescription>Update your personal information and preferences</SheetDescription>
+   869→          </SheetHeader>
+   870→          <div className="mt-4">{content}</div>
+   871→        </SheetContent>
+   872→      </Sheet>
+   873→    );
+   874→  }
+   875→
+   876→  return (
+   877→    <Dialog open={open} onOpenChange={onOpenChange}>
+   878→      <DialogContent className="glass-strong border-0 max-w-lg">
+   879→        <DialogHeader>
+   880→          <DialogTitle>Edit Profile</DialogTitle>
+   881→          <DialogDescription>Update your personal information and preferences</DialogDescription>
+   882→        </DialogHeader>
+   883→        <div className="mt-2 max-h-[70vh] overflow-y-auto no-scrollbar">{content}</div>
+   884→      </DialogContent>
+   885→    </Dialog>
+   886→  );
+   887→}
+   888→
+   889→// ─────────────────────────────────────────────────────────────
+   890→// Change Password Dialog
+   891→// ─────────────────────────────────────────────────────────────
+   892→function ChangePasswordDialog({
+   893→  open,
+   894→  onOpenChange,
+   895→  onSuccess,
+   896→}: {
+   897→  open: boolean;
+   898→  onOpenChange: (v: boolean) => void;
+   899→  onSuccess: () => void;
+   900→}) {
+   901→  const isMobile = useIsMobile();
+   902→  const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+   903→  const [showCurrent, setShowCurrent] = useState(false);
+   904→  const [showNew, setShowNew] = useState(false);
+   905→  const [loading, setLoading] = useState(false);
+   906→
+   907→  const passwordStrength = (() => {
+   908→    const p = form.newPassword;
+   909→    if (!p) return { score: 0, label: "", color: "" };
+   910→    let score = 0;
+   911→    if (p.length >= 8) score++;
+   912→    if (/[A-Z]/.test(p)) score++;
+   913→    if (/[a-z]/.test(p)) score++;
+   914→    if (/[0-9]/.test(p)) score++;
+   915→    if (/[^A-Za-z0-9]/.test(p)) score++;
+   916→    const labels = ["", "Weak", "Fair", "Good", "Strong", "Excellent"];
+   917→    const colors = ["", "bg-destructive", "bg-warning", "bg-warning", "bg-success", "bg-success"];
+   918→    return { score, label: labels[score], color: colors[score] };
+   919→  })();
+   920→
+   921→  const submit = async () => {
+   922→    if (form.newPassword !== form.confirmPassword) {
+   923→      toast.error("Passwords don't match");
+   924→      return;
+   925→    }
+   926→    if (form.newPassword.length < 8) {
+   927→      toast.error("Password must be at least 8 characters");
+   928→      return;
+   929→    }
+   930→    setLoading(true);
+   931→    try {
+   932→      await api.post("/auth/change-password", {
+   933→        currentPassword: form.currentPassword,
+   934→        newPassword: form.newPassword,
+   935→      });
+   936→      toast.success("Password changed. Other sessions have been signed out.");
+   937→      setForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+   938→      onSuccess();
+   939→    } catch (e: unknown) {
+   940→      toast.error((e as Error).message || "Failed to change password");
+   941→    } finally {
+   942→      setLoading(false);
+   943→    }
+   944→  };
+   945→
+   946→  const content = (
+   947→    <div className="space-y-4">
+   948→      <GlassInput
+   949→        label="Current Password"
+   950→        type={showCurrent ? "text" : "password"}
+   951→        value={form.currentPassword}
+   952→        onChange={(e) => setForm({ ...form, currentPassword: e.target.value })}
+   953→        icon={<Lock />}
+   954→        trailing={
+   955→          <button type="button" onClick={() => setShowCurrent(!showCurrent)} className="text-muted-foreground hover:text-foreground">
+   956→            {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+   957→          </button>
+   958→        }
+   959→      />
+   960→      <GlassInput
+   961→        label="New Password"
+   962→        type={showNew ? "text" : "password"}
+   963→        value={form.newPassword}
+   964→        onChange={(e) => setForm({ ...form, newPassword: e.target.value })}
+   965→        icon={<KeyRound />}
+   966→        trailing={
+   967→          <button type="button" onClick={() => setShowNew(!showNew)} className="text-muted-foreground hover:text-foreground">
+   968→            {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+   969→          </button>
+   970→        }
+   971→        hint="Min 8 chars with uppercase, lowercase, and a number"
+   972→      />
+   973→      {form.newPassword && (
+   974→        <div className="flex items-center gap-2">
+   975→          <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+   976→            <motion.div
+   977→              className={cn("h-full", passwordStrength.color)}
+   978→              initial={{ width: 0 }}
+   979→              animate={{ width: `${(passwordStrength.score / 5) * 100}%` }}
+   980→            />
+   981→          </div>
+   982→          <span className="text-xs text-muted-foreground w-16">{passwordStrength.label}</span>
+   983→        </div>
+   984→      )}
+   985→      <GlassInput
+   986→        label="Confirm New Password"
+   987→        type={showNew ? "text" : "password"}
+   988→        value={form.confirmPassword}
+   989→        onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+   990→        icon={<CheckCircle2 />}
+   991→        error={
+   992→          form.confirmPassword && form.newPassword !== form.confirmPassword
+   993→            ? "Passwords don't match"
+   994→            : undefined
+   995→        }
+   996→      />
+   997→      <div className="glass-soft rounded-2xl p-3 flex items-start gap-2">
+   998→        <ShieldAlert className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+   999→        <p className="text-xs text-muted-foreground">
+  1000→          For your security, all other active sessions will be signed out after changing your password.
+  1001→        </p>
+  1002→      </div>
+  1003→      <div className="flex gap-2 pt-2">
+  1004→        <GlassButton variant="ghost" className="flex-1" onClick={() => onOpenChange(false)}>
+  1005→          Cancel
+  1006→        </GlassButton>
+  1007→        <GlassButton
+  1008→          className="flex-1"
+  1009→          loading={loading}
+  1010→          onClick={submit}
+  1011→          disabled={!form.currentPassword || !form.newPassword || !form.confirmPassword}
+  1012→        >
+  1013→          <Lock className="h-4 w-4" />
+  1014→          Change Password
+  1015→        </GlassButton>
+  1016→      </div>
+  1017→    </div>
+  1018→  );
+  1019→
+  1020→  if (isMobile) {
+  1021→    return (
+  1022→      <Sheet open={open} onOpenChange={onOpenChange}>
+  1023→        <SheetContent side="bottom" className="glass-strong border-0">
+  1024→          <SheetHeader>
+  1025→            <SheetTitle>Change Password</SheetTitle>
+  1026→            <SheetDescription>Choose a strong, unique password</SheetDescription>
+  1027→          </SheetHeader>
+  1028→          <div className="mt-4">{content}</div>
+  1029→        </SheetContent>
+  1030→      </Sheet>
+  1031→    );
+  1032→  }
+  1033→
+  1034→  return (
+  1035→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1036→      <DialogContent className="glass-strong border-0 max-w-md">
+  1037→        <DialogHeader>
+  1038→          <DialogTitle>Change Password</DialogTitle>
+  1039→          <DialogDescription>Choose a strong, unique password</DialogDescription>
+  1040→        </DialogHeader>
+  1041→        <div className="mt-2">{content}</div>
+  1042→      </DialogContent>
+  1043→    </Dialog>
+  1044→  );
+  1045→}
+  1046→
+  1047→// ─────────────────────────────────────────────────────────────
+  1048→// Two-Factor Auth Dialog
+  1049→// ─────────────────────────────────────────────────────────────
+  1050→function TwoFactorDialog({
+  1051→  open,
+  1052→  onOpenChange,
+  1053→  enabled,
+  1054→  onUpdated,
+  1055→}: {
+  1056→  open: boolean;
+  1057→  onOpenChange: (v: boolean) => void;
+  1058→  enabled: boolean;
+  1059→  onUpdated: (enabled: boolean) => void;
+  1060→}) {
+  1061→  const isMobile = useIsMobile();
+  1062→  const [step, setStep] = useState<"main" | "setup" | "verify" | "backup" | "disable">("main");
+  1063→  const [secret, setSecret] = useState("");
+  1064→  const [qrCode, setQrCode] = useState("");
+  1065→  const [code, setCode] = useState("");
+  1066→  const [backupCodes, setBackupCodes] = useState<string[]>([]);
+  1067→  const [disablePassword, setDisablePassword] = useState("");
+  1068→  const [loading, setLoading] = useState(false);
+  1069→
+  1070→  useEffect(() => {
+  1071→    if (open) {
+  1072→      // Reset the multi-step dialog each time a new interaction begins.
+  1073→      // eslint-disable-next-line react-hooks/set-state-in-effect
+  1074→      setStep("main");
+  1075→      setSecret("");
+  1076→      setQrCode("");
+  1077→      setCode("");
+  1078→      setBackupCodes([]);
+  1079→      setDisablePassword("");
+  1080→    }
+  1081→  }, [open]);
+  1082→
+  1083→  const startSetup = async () => {
+  1084→    setLoading(true);
+  1085→    try {
+  1086→      const res = await api.post<{ success: boolean; data: { secret: string; qrCode: string } }>("/auth/2fa/setup");
+  1087→      setSecret(res.data.secret);
+  1088→      setQrCode(res.data.qrCode);
+  1089→      setStep("setup");
+  1090→    } catch (e: unknown) {
+  1091→      toast.error((e as Error).message || "Failed to start 2FA setup");
+  1092→    } finally {
+  1093→      setLoading(false);
+  1094→    }
+  1095→  };
+  1096→
+  1097→  const verifyAndEnable = async () => {
+  1098→    if (!/^\d{6}$/.test(code)) {
+  1099→      toast.error("Enter the 6-digit code");
+  1100→      return;
+  1101→    }
+  1102→    setLoading(true);
+  1103→    try {
+  1104→      const res = await api.post<{ success: boolean; data: { backupCodes: string[] } }>("/auth/2fa/verify", {
+  1105→        secret,
+  1106→        code,
+  1107→      });
+  1108→      setBackupCodes(res.data.backupCodes);
+  1109→      setStep("backup");
+  1110→      toast.success("Two-factor authentication enabled!");
+  1111→    } catch (e: unknown) {
+  1112→      toast.error((e as Error).message || "Invalid code. Try again.");
+  1113→    } finally {
+  1114→      setLoading(false);
+  1115→    }
+  1116→  };
+  1117→
+  1118→  const disable2FA = async () => {
+  1119→    setLoading(true);
+  1120→    try {
+  1121→      await api.post("/auth/2fa/disable", { password: disablePassword });
+  1122→      onUpdated(false);
+  1123→      toast.success("Two-factor authentication disabled");
+  1124→      onOpenChange(false);
+  1125→    } catch (e: unknown) {
+  1126→      toast.error((e as Error).message || "Failed to disable 2FA");
+  1127→    } finally {
+  1128→      setLoading(false);
+  1129→    }
+  1130→  };
+  1131→
+  1132→  const copyCodes = () => {
+  1133→    navigator.clipboard.writeText(backupCodes.join("\n"));
+  1134→    toast.success("Backup codes copied to clipboard");
+  1135→  };
+  1136→
+  1137→  const downloadCodes = () => {
+  1138→    const blob = new Blob([`BoardOps Backup Codes\n\n${backupCodes.join("\n")}\n\nKeep these safe. Each code can only be used once.`], { type: "text/plain" });
+  1139→    const url = URL.createObjectURL(blob);
+  1140→    const a = document.createElement("a");
+  1141→    a.href = url;
+  1142→    a.download = "boardops-backup-codes.txt";
+  1143→    a.click();
+  1144→    URL.revokeObjectURL(url);
+  1145→    toast.success("Backup codes downloaded");
+  1146→  };
+  1147→
+  1148→  const content = (
+  1149→    <AnimatePresence mode="wait">
+  1150→      {step === "main" && (
+  1151→        <motion.div key="main" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+  1152→          <div className="flex items-center gap-3">
+  1153→            <div className={cn("grid place-items-center h-14 w-14 rounded-3xl shrink-0", enabled ? "bg-success/15 text-success" : "bg-warning/15 text-warning")}>
+  1154→              {enabled ? <ShieldCheck className="h-7 w-7" /> : <ShieldAlert className="h-7 w-7" />}
+  1155→            </div>
+  1156→            <div>
+  1157→              <p className="font-semibold">{enabled ? "2FA is Enabled" : "2FA is Disabled"}</p>
+  1158→              <p className="text-xs text-muted-foreground">
+  1159→                {enabled
+  1160→                  ? "Your account requires a verification code from your authenticator app."
+  1161→                  : "Protect your account with an extra layer of security."}
+  1162→              </p>
+  1163→            </div>
+  1164→          </div>
+  1165→          {enabled ? (
+  1166→            <>
+  1167→              <div className="glass-soft rounded-2xl p-4 space-y-2">
+  1168→                <p className="text-sm font-medium flex items-center gap-2">
+  1169→                  <QrCode className="h-4 w-4 text-primary" />
+  1170→                  Need new backup codes?
+  1171→                </p>
+  1172→                <p className="text-xs text-muted-foreground">
+  1173→                  Generate a fresh set of backup codes using your authenticator app.
+  1174→                </p>
+  1175→                <GlassButton variant="secondary" size="sm" className="mt-2" onClick={() => setStep("backup")} loading={loading}>
+  1176→                  <RefreshCw className="h-4 w-4" />
+  1177→                  Regenerate Backup Codes
+  1178→                </GlassButton>
+  1179→              </div>
+  1180→              <div className="glass-soft rounded-2xl p-4 border border-destructive/20">
+  1181→                <p className="text-sm font-medium text-destructive flex items-center gap-2">
+  1182→                  <Lock className="h-4 w-4" />
+  1183→                  Disable 2FA
+  1184→                </p>
+  1185→                <p className="text-xs text-muted-foreground mt-1 mb-3">
+  1186→                  Disabling 2FA makes your account less secure. This requires your password.
+  1187→                </p>
+  1188→                <GlassInput
+  1189→                  type="password"
+  1190→                  placeholder="Enter your password"
+  1191→                  value={disablePassword}
+  1192→                  onChange={(e) => setDisablePassword(e.target.value)}
+  1193→                  icon={<KeyRound />}
+  1194→                />
+  1195→                <GlassButton variant="danger" size="sm" className="mt-3 w-full" loading={loading} onClick={disable2FA} disabled={!disablePassword}>
+  1196→                  <ShieldAlert className="h-4 w-4" />
+  1197→                  Disable Two-Factor Authentication
+  1198→                </GlassButton>
+  1199→              </div>
+  1200→            </>
+  1201→          ) : (
+  1202→            <GlassButton className="w-full" loading={loading} onClick={startSetup}>
+  1203→              <ShieldCheck className="h-4 w-4" />
+  1204→              Set Up Two-Factor Authentication
+  1205→            </GlassButton>
+  1206→          )}
+  1207→          <GlassButton variant="ghost" className="w-full" onClick={() => onOpenChange(false)}>
+  1208→            Close
+  1209→          </GlassButton>
+  1210→        </motion.div>
+  1211→      )}
+  1212→
+  1213→      {step === "setup" && (
+  1214→        <motion.div key="setup" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
+  1215→          <div className="text-center">
+  1216→            <h3 className="font-semibold text-lg">Scan QR Code</h3>
+  1217→            <p className="text-xs text-muted-foreground mt-1">
+  1218→              Use Google Authenticator, Authy, or any TOTP app to scan this code.
+  1219→            </p>
+  1220→          </div>
+  1221→          <div className="flex justify-center">
+  1222→            {qrCode && (
+  1223→              <img src={qrCode} alt="2FA QR Code" className="h-48 w-48 rounded-2xl bg-white p-2" />
+  1224→            )}
+  1225→          </div>
+  1226→          <div className="glass-soft rounded-2xl p-3">
+  1227→            <p className="text-xs text-muted-foreground mb-1">Can't scan? Enter this secret manually:</p>
+  1228→            <div className="flex items-center gap-2">
+  1229→              <code className="flex-1 text-xs font-mono break-all">{secret}</code>
+  1230→              <button
+  1231→                onClick={() => {
+  1232→                  navigator.clipboard.writeText(secret);
+  1233→                  toast.success("Secret copied");
+  1234→                }}
+  1235→                className="text-muted-foreground hover:text-foreground shrink-0"
+  1236→              >
+  1237→                <Copy className="h-4 w-4" />
+  1238→              </button>
+  1239→            </div>
+  1240→          </div>
+  1241→          <GlassInput
+  1242→            label="Enter 6-digit code"
+  1243→            value={code}
+  1244→            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+  1245→            placeholder="000000"
+  1246→            icon={<KeyRound />}
+  1247→            className="text-center text-lg tracking-[0.5em] font-mono"
+  1248→          />
+  1249→          <div className="flex gap-2">
+  1250→            <GlassButton variant="ghost" className="flex-1" onClick={() => setStep("main")}>
+  1251→              Back
+  1252→            </GlassButton>
+  1253→            <GlassButton className="flex-1" loading={loading} onClick={verifyAndEnable} disabled={code.length !== 6}>
+  1254→              <CheckCircle2 className="h-4 w-4" />
+  1255→              Verify & Enable
+  1256→            </GlassButton>
+  1257→          </div>
+  1258→        </motion.div>
+  1259→      )}
+  1260→
+  1261→      {step === "backup" && (
+  1262→        <motion.div key="backup" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
+  1263→          <div className="text-center">
+  1264→            <div className="grid place-items-center h-14 w-14 rounded-3xl bg-success/15 text-success mx-auto mb-3">
+  1265→              <CheckCircle2 className="h-7 w-7" />
+  1266→            </div>
+  1267→            <h3 className="font-semibold text-lg">Save Your Backup Codes</h3>
+  1268→            <p className="text-xs text-muted-foreground mt-1">
+  1269→              Store these codes safely. Each can be used once if you lose access to your authenticator.
+  1270→            </p>
+  1271→          </div>
+  1272→          <div className="glass-soft rounded-2xl p-4">
+  1273→            <div className="grid grid-cols-2 gap-2">
+  1274→              {backupCodes.map((c, i) => (
+  1275→                <motion.div
+  1276→                  key={i}
+  1277→                  initial={{ opacity: 0, scale: 0.8 }}
+  1278→                  animate={{ opacity: 1, scale: 1 }}
+  1279→                  transition={{ delay: i * 0.05 }}
+  1280→                  className="text-center font-mono text-sm font-semibold py-2 px-3 rounded-xl bg-muted/40"
+  1281→                >
+  1282→                  {c}
+  1283→                </motion.div>
+  1284→              ))}
+  1285→            </div>
+  1286→          </div>
+  1287→          <div className="flex gap-2">
+  1288→            <GlassButton variant="secondary" className="flex-1" onClick={copyCodes}>
+  1289→              <Copy className="h-4 w-4" />
+  1290→              Copy
+  1291→            </GlassButton>
+  1292→            <GlassButton variant="secondary" className="flex-1" onClick={downloadCodes}>
+  1293→              <Download className="h-4 w-4" />
+  1294→              Download
+  1295→            </GlassButton>
+  1296→          </div>
+  1297→          <GlassButton
+  1298→            className="w-full"
+  1299→            onClick={() => {
+  1300→              onUpdated(true);
+  1301→              onOpenChange(false);
+  1302→            }}
+  1303→          >
+  1304→            <CheckCircle2 className="h-4 w-4" />
+  1305→            I've Saved My Codes
+  1306→          </GlassButton>
+  1307→        </motion.div>
+  1308→      )}
+  1309→    </AnimatePresence>
+  1310→  );
+  1311→
+  1312→  // For backup code regeneration (when already enabled)
+  1313→  const regenerateContent = (
+  1314→    <BackupRegenerator
+  1315→      onDone={(codes) => {
+  1316→        setBackupCodes(codes);
+  1317→        setStep("backup");
+  1318→      }}
+  1319→      onCancel={() => setStep("main")}
+  1320→    />
+  1321→  );
+  1322→
+  1323→  if (isMobile) {
+  1324→    return (
+  1325→      <Sheet open={open} onOpenChange={onOpenChange}>
+  1326→        <SheetContent side="bottom" className="glass-strong border-0 max-h-[90vh] overflow-y-auto">
+  1327→          <SheetHeader>
+  1328→            <SheetTitle>Two-Factor Authentication</SheetTitle>
+  1329→            <SheetDescription>
+  1330→              {enabled ? "Manage your 2FA settings" : "Secure your account with TOTP"}
+  1331→            </SheetDescription>
+  1332→          </SheetHeader>
+  1333→          <div className="mt-4">
+  1334→            {step === "backup" && enabled && backupCodes.length === 0 ? regenerateContent : content}
+  1335→          </div>
+  1336→        </SheetContent>
+  1337→      </Sheet>
+  1338→    );
+  1339→  }
+  1340→
+  1341→  return (
+  1342→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1343→      <DialogContent className="glass-strong border-0 max-w-md">
+  1344→        <DialogHeader>
+  1345→          <DialogTitle>Two-Factor Authentication</DialogTitle>
+  1346→          <DialogDescription>
+  1347→            {enabled ? "Manage your 2FA settings" : "Secure your account with TOTP"}
+  1348→          </DialogDescription>
+  1349→        </DialogHeader>
+  1350→        <div className="mt-2 max-h-[75vh] overflow-y-auto no-scrollbar">
+  1351→          {step === "backup" && enabled && backupCodes.length === 0 ? regenerateContent : content}
+  1352→        </div>
+  1353→      </DialogContent>
+  1354→    </Dialog>
+  1355→  );
+  1356→}
+  1357→
+  1358→function BackupRegenerator({
+  1359→  onDone,
+  1360→  onCancel,
+  1361→}: {
+  1362→  onDone: (codes: string[]) => void;
+  1363→  onCancel: () => void;
+  1364→}) {
+  1365→  const [code, setCode] = useState("");
+  1366→  const [loading, setLoading] = useState(false);
+  1367→
+  1368→  const regenerate = async () => {
+  1369→    if (!/^\d{6}$/.test(code)) {
+  1370→      toast.error("Enter the 6-digit code from your authenticator");
+  1371→      return;
+  1372→    }
+  1373→    setLoading(true);
+  1374→    try {
+  1375→      const res = await api.post<{ success: boolean; data: { backupCodes: string[] } }>("/auth/2fa/backup-codes", { code });
+  1376→      onDone(res.data.backupCodes);
+  1377→      toast.success("New backup codes generated");
+  1378→    } catch (e: unknown) {
+  1379→      toast.error((e as Error).message || "Invalid code");
+  1380→    } finally {
+  1381→      setLoading(false);
+  1382→    }
+  1383→  };
+  1384→
+  1385→  return (
+  1386→    <div className="space-y-4">
+  1387→      <div className="text-center">
+  1388→        <div className="grid place-items-center h-14 w-14 rounded-3xl bg-primary/15 text-primary mx-auto mb-3">
+  1389→          <RefreshCw className="h-7 w-7" />
+  1390→        </div>
+  1391→        <h3 className="font-semibold text-lg">Regenerate Backup Codes</h3>
+  1392→        <p className="text-xs text-muted-foreground mt-1">
+  1393→          Enter a code from your authenticator app to generate fresh backup codes.
+  1394→        </p>
+  1395→      </div>
+  1396→      <GlassInput
+  1397→        label="6-digit code"
+  1398→        value={code}
+  1399→        onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+  1400→        placeholder="000000"
+  1401→        icon={<KeyRound />}
+  1402→        className="text-center text-lg tracking-[0.5em] font-mono"
+  1403→      />
+  1404→      <div className="flex gap-2">
+  1405→        <GlassButton variant="ghost" className="flex-1" onClick={onCancel}>
+  1406→          Cancel
+  1407→        </GlassButton>
+  1408→        <GlassButton className="flex-1" loading={loading} onClick={regenerate} disabled={code.length !== 6}>
+  1409→          <RefreshCw className="h-4 w-4" />
+  1410→          Generate
+  1411→        </GlassButton>
+  1412→      </div>
+  1413→    </div>
+  1414→  );
+  1415→}
+  1416→
+  1417→// ─────────────────────────────────────────────────────────────
+  1418→// Sessions Sheet
+  1419→// ─────────────────────────────────────────────────────────────
+  1420→function SessionsSheet({
+  1421→  open,
+  1422→  onOpenChange,
+  1423→  sessions,
+  1424→  onRevoked,
+  1425→  onRevokeAll,
+  1426→}: {
+  1427→  open: boolean;
+  1428→  onOpenChange: (v: boolean) => void;
+  1429→  sessions: SessionInfo[];
+  1430→  onRevoked: () => void;
+  1431→  onRevokeAll: () => void;
+  1432→}) {
+  1433→  const [revokingId, setRevokingId] = useState<string | null>(null);
+  1434→  const [revokingAll, setRevokingAll] = useState(false);
+  1435→
+  1436→  const revokeSession = async (id: string) => {
+  1437→    setRevokingId(id);
+  1438→    try {
+  1439→      await api.delete(`/auth/sessions/${id}`);
+  1440→      toast.success("Session revoked");
+  1441→      onRevoked();
+  1442→    } catch (e: unknown) {
+  1443→      toast.error((e as Error).message || "Failed to revoke session");
+  1444→    } finally {
+  1445→      setRevokingId(null);
+  1446→    }
+  1447→  };
+  1448→
+  1449→  const revokeAll = async () => {
+  1450→    setRevokingAll(true);
+  1451→    try {
+  1452→      await api.delete("/auth/sessions");
+  1453→      toast.success("All other sessions revoked");
+  1454→      onRevokeAll();
+  1455→    } catch (e: unknown) {
+  1456→      toast.error((e as Error).message || "Failed to revoke sessions");
+  1457→    } finally {
+  1458→      setRevokingAll(false);
+  1459→    }
+  1460→  };
+  1461→
+  1462→  return (
+  1463→    <Sheet open={open} onOpenChange={onOpenChange}>
+  1464→      <SheetContent side="right" className="glass-strong border-0 w-full sm:max-w-md">
+  1465→        <SheetHeader>
+  1466→          <SheetTitle>Active Sessions</SheetTitle>
+  1467→          <SheetDescription>
+  1468→            {sessions.length} device{sessions.length !== 1 ? "s" : ""} currently signed in
+  1469→          </SheetDescription>
+  1470→        </SheetHeader>
+  1471→        <div className="mt-4 space-y-3 max-h-[70vh] overflow-y-auto no-scrollbar">
+  1472→          {sessions.length === 0 ? (
+  1473→            <div className="flex flex-col items-center justify-center py-12 text-center">
+  1474→              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-3" />
+  1475→              <p className="text-sm text-muted-foreground">Loading sessions…</p>
+  1476→            </div>
+  1477→          ) : (
+  1478→            sessions.map((s) => {
+  1479→              const DeviceIcon = s.device === "iPhone" || s.device === "iPad" || s.device === "Android"
+  1480→                ? Smartphone
+  1481→                : s.device === "Tablet"
+  1482→                  ? Tablet
+  1483→                  : Monitor;
+  1484→              return (
+  1485→                <motion.div
+  1486→                  key={s.id}
+  1487→                  initial={{ opacity: 0, y: 10 }}
+  1488→                  animate={{ opacity: 1, y: 0 }}
+  1489→                  exit={{ opacity: 0, x: -20 }}
+  1490→                  className={cn(
+  1491→                    "glass-soft rounded-2xl p-4 flex items-start gap-3",
+  1492→                    s.current && "ring-2 ring-primary/40"
+  1493→                  )}
+  1494→                >
+  1495→                  <div className={cn("grid place-items-center h-10 w-10 rounded-2xl shrink-0", s.current ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>
+  1496→                    <DeviceIcon className="h-5 w-5" />
+  1497→                  </div>
+  1498→                  <div className="flex-1 min-w-0">
+  1499→                    <div className="flex items-center gap-2">
+  1500→                      <p className="font-medium text-sm">
+  1501→                        {s.browser} on {s.os}
+  1502→                      </p>
+  1503→                      {s.current && (
+  1504→                        <Badge variant="outline" className="text-[10px] py-0 bg-primary/15 text-primary">
+  1505→                          This device
+  1506→                        </Badge>
+  1507→                      )}
+  1508→                    </div>
+  1509→                    <p className="text-xs text-muted-foreground mt-0.5">{s.ipAddress}</p>
+  1510→                    <p className="text-[10px] text-muted-foreground mt-1">
+  1511→                      Active since {format(new Date(s.createdAt), "MMM d, yyyy 'at' h:mm a")}
+  1512→                    </p>
+  1513→                  </div>
+  1514→                  {!s.current && (
+  1515→                    <GlassButton
+  1516→                      variant="ghost"
+  1517→                      size="icon"
+  1518→                      className="shrink-0 h-8 w-8 hover:text-destructive"
+  1519→                      onClick={() => revokeSession(s.id)}
+  1520→                      loading={revokingId === s.id}
+  1521→                      aria-label="Revoke session"
+  1522→                    >
+  1523→                      {!revokingId && <Trash2 className="h-4 w-4" />}
+  1524→                    </GlassButton>
+  1525→                  )}
+  1526→                </motion.div>
+  1527→              );
+  1528→            })
+  1529→          )}
+  1530→          {sessions.filter((s) => !s.current).length > 0 && (
+  1531→            <GlassButton
+  1532→              variant="danger"
+  1533→              className="w-full mt-2"
+  1534→              onClick={revokeAll}
+  1535→              loading={revokingAll}
+  1536→            >
+  1537→              <LogOut className="h-4 w-4" />
+  1538→              Sign Out All Other Devices
+  1539→            </GlassButton>
+  1540→          )}
+  1541→        </div>
+  1542→      </SheetContent>
+  1543→    </Sheet>
+  1544→  );
+  1545→}
+  1546→

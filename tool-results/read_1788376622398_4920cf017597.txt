@@ -1,0 +1,2002 @@
+     1→# MASTER IMPLEMENTATION PROMPT — SECURE, HIGH-PERFORMANCE RESIDENT MEAL, FINANCE & OPERATIONS PLATFORM
+     2→
+     3→You are the principal software architect, staff backend engineer, staff frontend engineer, database engineer, security engineer, product designer, QA engineer, and reliability engineer responsible for building this application from scratch.
+     4→
+     5→This is not a prototype.
+     6→
+     7→This is not a UI mockup.
+     8→
+     9→This is not a demo.
+    10→
+    11→Build it as a production-quality application whose priorities, in strict order, are:
+    12→
+    13→1. Data correctness
+    14→2. Financial correctness
+    15→3. Security
+    16→4. Reliability
+    17→5. Auditability
+    18→6. Maintainability
+    19→7. Ease of use for non-technical people
+    20→8. Performance
+    21→9. Accessibility
+    22→10. Visual quality
+    23→11. Animation quality
+    24→12. Developer experience
+    25→
+    26→Never sacrifice items 1–7 merely to make the UI look impressive.
+    27→
+    28→The finished product should feel like a multi-million-dollar modern Apple-inspired application with a carefully engineered Liquid Glass visual language, but its backend and database must behave like a serious financial/operations system.
+    29→
+    30→---
+    31→
+    32→# 0. FIRST RULE: DO NOT START CODING BLINDLY
+    33→
+    34→Before creating implementation code:
+    35→
+    36→1. Analyze this entire specification.
+    37→2. Produce the final module map.
+    38→3. Produce the dependency graph.
+    39→4. Produce the database schema.
+    40→5. Produce important state machines.
+    41→6. Produce database invariants.
+    42→7. Produce transaction boundaries.
+    43→8. Produce API contracts.
+    44→9. Produce responsive navigation architecture.
+    45→10. Produce design tokens.
+    46→11. Produce security threat assumptions.
+    47→12. Produce test strategy.
+    48→13. Produce migration strategy.
+    49→14. Verify currently supported stable dependency versions.
+    50→15. Only then begin implementation.
+    51→
+    52→Do not repeatedly stop for minor design questions.
+    53→
+    54→When a small ambiguity exists:
+    55→
+    56→* choose the safest behavior;
+    57→* choose the least destructive behavior;
+    58→* choose the least surprising behavior for a non-technical user;
+    59→* document the decision;
+    60→* preserve historical data.
+    61→
+    62→Never invent major new product modules that were not requested.
+    63→
+    64→---
+    65→
+    66→# 1. VERSION POLICY
+    67→
+    68→The technology baseline as of September 2026 is approximately:
+    69→
+    70→* Node.js 24 LTS
+    71→* Next.js 16.3.x Active LTS
+    72→* React 19.2
+    73→* NestJS 12
+    74→* PostgreSQL 18.x
+    75→* Prisma ORM 8
+    76→* Tailwind CSS 4.3
+    77→* Motion for React 13.x
+    78→* Redis 8.x
+    79→
+    80→However:
+    81→
+    82→DO NOT blindly install these exact versions months or years later.
+    83→
+    84→Immediately before dependency installation:
+    85→
+    86→1. verify the newest stable production release;
+    87→2. verify security advisories;
+    88→3. prefer Active LTS/LTS versions;
+    89→4. avoid beta/RC/canary releases;
+    90→5. pin exact resolved versions in the lockfile;
+    91→6. document intentional version choices;
+    92→7. never perform automatic breaking-major upgrades in production.
+    93→
+    94→For Next.js specifically, use the newest security-patched Active LTS release.
+    95→
+    96→For PostgreSQL, use the newest stable supported major, NOT an unreleased beta.
+    97→
+    98→---
+    99→
+   100→# 2. REQUIRED HIGH-LEVEL ARCHITECTURE
+   101→
+   102→Build a MODULAR MONOLITH.
+   103→
+   104→Do NOT start with microservices.
+   105→
+   106→Required logical structure:
+   107→
+   108→```text
+   109→Browser / PWA
+   110→      │
+   111→      ▼
+   112→Next.js Web Application
+   113→      │
+   114→      │ HTTPS / REST
+   115→      ▼
+   116→NestJS API
+   117→      │
+   118→      ├──────────── PostgreSQL
+   119→      │
+   120→      ├──────────── Redis
+   121→      │
+   122→      ├──────────── Private Object Storage
+   123→      │
+   124→      └──────────── Outbox
+   125→                         │
+   126→                         ▼
+   127→                     Worker
+   128→```
+   129→
+   130→Repository:
+   131→
+   132→```text
+   133→/
+   134→├── apps/
+   135→│   ├── web/
+   136→│   ├── api/
+   137→│   └── worker/
+   138→│
+   139→├── packages/
+   140→│   ├── contracts/
+   141→│   ├── database/
+   142→│   ├── config/
+   143→│   ├── validation/
+   144→│   ├── observability/
+   145→│   ├── design-system/
+   146→│   └── shared/
+   147→│
+   148→├── infrastructure/
+   149→├── scripts/
+   150→├── docs/
+   151→└── tests/
+   152→```
+   153→
+   154→Use:
+   155→
+   156→* pnpm workspaces
+   157→* Turborepo or equivalent lightweight monorepo orchestration
+   158→* strict TypeScript
+   159→* one dependency lockfile
+   160→* shared lint configuration
+   161→* shared tsconfig
+   162→* shared contracts
+   163→* reproducible builds
+   164→
+   165→Do not create arbitrary package fragmentation.
+   166→
+   167→Every package must have a clear reason to exist.
+   168→
+   169→---
+   170→
+   171→# 3. FRONTEND STACK
+   172→
+   173→Use:
+   174→
+   175→```text
+   176→Next.js
+   177→React
+   178→TypeScript strict mode
+   179→Tailwind CSS
+   180→Radix UI primitives
+   181→Motion for React
+   182→TanStack Query
+   183→React Hook Form
+   184→Zod / Standard Schema-compatible validation
+   185→Lucide icons or similarly consistent open icon set
+   186→```
+   187→
+   188→Do NOT build the application from stock component-library styling.
+   189→
+   190→Radix/shadcn-style primitives may be used for accessibility and behavior, but completely own the visual design.
+   191→
+   192→Never allow the result to look like:
+   193→
+   194→* default shadcn
+   195→* default Bootstrap
+   196→* default Material UI
+   197→* a generic admin dashboard
+   198→* a template marketplace dashboard
+   199→* AI-generated purple gradient SaaS
+   200→* giant chart-filled enterprise software
+   201→
+   202→Build a custom design system.
+   203→
+   204→---
+   205→
+   206→# 4. BACKEND STACK
+   207→
+   208→Use:
+   209→
+   210→```text
+   211→Node.js LTS
+   212→NestJS
+   213→Fastify adapter
+   214→TypeScript
+   215→Prisma ORM
+   216→PostgreSQL
+   217→Redis
+   218→BullMQ or equivalent mature Redis-backed job processing
+   219→Pino structured logging
+   220→OpenTelemetry
+   221→OpenAPI
+   222→```
+   223→
+   224→NestJS must run through Fastify rather than Express unless a verified compatibility reason prevents it.
+   225→
+   226→Use REST rather than GraphQL.
+   227→
+   228→Reason:
+   229→
+   230→* simpler authorization
+   231→* simpler auditing
+   232→* clearer mutation semantics
+   233→* easier caching
+   234→* easier testing
+   235→* predictable contracts
+   236→* easier support for non-realtime financial workflows
+   237→
+   238→Version APIs:
+   239→
+   240→```text
+   241→/api/v1/...
+   242→```
+   243→
+   244→---
+   245→
+   246→# 5. DATABASE
+   247→
+   248→Use PostgreSQL as the authoritative datastore.
+   249→
+   250→PostgreSQL is the source of truth.
+   251→
+   252→NOT:
+   253→
+   254→* Redis
+   255→* browser state
+   256→* React state
+   257→* cached API data
+   258→* localStorage
+   259→* generated frontend calculations
+   260→
+   261→Prisma is an access layer.
+   262→
+   263→Prisma must NOT dictate database architecture.
+   264→
+   265→Use raw SQL migrations where PostgreSQL features are necessary for:
+   266→
+   267→* advanced constraints
+   268→* partial indexes
+   269→* exclusion constraints
+   270→* specialized indexes
+   271→* security permissions
+   272→* immutable tables
+   273→* triggers where truly justified
+   274→
+   275→---
+   276→
+   277→# 6. REDIS RESPONSIBILITY
+   278→
+   279→Redis is EPHEMERAL INFRASTRUCTURE.
+   280→
+   281→Use it only for:
+   282→
+   283→* rate limiting
+   284→* distributed locks where appropriate
+   285→* queue transport
+   286→* safe caching
+   287→* short-lived sessions only if specifically architected that way
+   288→* temporary coordination
+   289→
+   290→Never make Redis the only copy of:
+   291→
+   292→* payments
+   293→* bills
+   294→* meals
+   295→* ledger entries
+   296→* expenses
+   297→* audit events
+   298→* user records
+   299→* formula versions
+   300→
+   301→Losing Redis must not corrupt financial or historical data.
+   302→
+   303→---
+   304→
+   305→# 7. OBJECT STORAGE
+   306→
+   307→Use private S3-compatible object storage for:
+   308→
+   309→* payment proofs
+   310→* expense receipts
+   311→* market-task purchase proofs
+   312→* approved supporting documents
+   313→* exports
+   314→
+   315→Development:
+   316→
+   317→* MinIO is acceptable.
+   318→
+   319→Production:
+   320→
+   321→* mature S3-compatible managed storage.
+   322→
+   323→Never store raw uploaded binary documents directly in normal relational database rows.
+   324→
+   325→Store metadata in PostgreSQL.
+   326→
+   327→---
+   328→
+   329→# 8. EXACT ROLES
+   330→
+   331→ONLY TWO AUTHORIZATION ROLES EXIST:
+   332→
+   333→```text
+   334→ADMIN
+   335→RESIDENT
+   336→```
+   337→
+   338→Do not create:
+   339→
+   340→* SUPER_ADMIN
+   341→* MANAGER
+   342→* MODERATOR
+   343→* ACCOUNTANT
+   344→* EDITOR
+   345→* OPERATOR
+   346→
+   347→The UI can call ADMIN "Admin".
+   348→
+   349→Backend role is:
+   350→
+   351→```text
+   352→ADMIN
+   353→```
+   354→
+   355→The other role is:
+   356→
+   357→```text
+   358→RESIDENT
+   359→```
+   360→
+   361→Authorization must exist in backend guards and domain services.
+   362→
+   363→Hiding frontend buttons is NOT authorization.
+   364→
+   365→---
+   366→
+   367→# 9. MULTI-INSTITUTION DECISION
+   368→
+   369→Architect the data model with an `institution_id` boundary from day one so data ownership is explicit.
+   370→
+   371→However, do NOT expose complex multi-tenant administration if it is not required.
+   372→
+   373→Every operational entity belongs to exactly one institution.
+   374→
+   375→Examples:
+   376→
+   377→```text
+   378→institution_id
+   379→```
+   380→
+   381→exists on appropriate:
+   382→
+   383→* users
+   384→* meals
+   385→* expenses
+   386→* bills
+   387→* payments
+   388→* formulas
+   389→* settings
+   390→* policies
+   391→* tasks
+   392→* announcements
+   393→* audit events
+   394→
+   395→Never allow cross-institution record access.
+   396→
+   397→---
+   398→
+   399→# 10. AUTHENTICATION ARCHITECTURE
+   400→
+   401→Use secure server-managed sessions.
+   402→
+   403→Prefer opaque random session tokens rather than exposing authorization state in editable browser tokens.
+   404→
+   405→Cookie:
+   406→
+   407→```text
+   408→__Host-session
+   409→```
+   410→
+   411→Properties:
+   412→
+   413→```text
+   414→Secure
+   415→HttpOnly
+   416→SameSite=Lax or stricter where compatible
+   417→Path=/
+   418→no Domain attribute
+   419→```
+   420→
+   421→Store only an opaque identifier in the browser.
+   422→
+   423→Store a HASH of the session token server-side.
+   424→
+   425→Never store plaintext reusable session tokens in the database.
+   426→
+   427→---
+   428→
+   429→# 11. PASSWORD STORAGE
+   430→
+   431→Use Argon2id.
+   432→
+   433→Parameters must be tuned on production hardware rather than copied blindly.
+   434→
+   435→Target a secure computational cost that remains practical for authentication.
+   436→
+   437→Store algorithm parameters alongside the password hash.
+   438→
+   439→Never:
+   440→
+   441→* plaintext
+   442→* SHA256 passwords
+   443→* MD5
+   444→* reversible encryption
+   445→* custom password crypto
+   446→
+   447→---
+   448→
+   449→# 12. ADMIN MFA
+   450→
+   451→Admin accounts must support strong MFA.
+   452→
+   453→Preferred:
+   454→
+   455→```text
+   456→WebAuthn / passkey
+   457→```
+   458→
+   459→Fallback:
+   460→
+   461→```text
+   462→TOTP
+   463→```
+   464→
+   465→For particularly sensitive actions require recent authentication.
+   466→
+   467→Examples:
+   468→
+   469→* generate billing
+   470→* reopen billing period
+   471→* change active formula
+   472→* issue refund
+   473→* export all data
+   474→* change security settings
+   475→
+   476→---
+   477→
+   478→# 13. REGISTRATION FLOW
+   479→
+   480→Resident:
+   481→
+   482→```text
+   483→Register
+   484→   ↓
+   485→Enter information
+   486→   ↓
+   487→Accept current policy versions
+   488→   ↓
+   489→Submit
+   490→   ↓
+   491→PENDING_APPROVAL
+   492→```
+   493→
+   494→Admin can:
+   495→
+   496→```text
+   497→APPROVE
+   498→REQUEST_CHANGES
+   499→REJECT
+   500→```
+   501→
+   502→After approval:
+   503→
+   504→```text
+   505→ACTIVE
+   506→```
+   507→
+   508→Resident status state machine:
+   509→
+   510→```text
+   511→PENDING_APPROVAL
+   512→      │
+   513→      ├──> CHANGES_REQUESTED
+   514→      │
+   515→      ├──> REJECTED
+   516→      │
+   517→      └──> ACTIVE
+   518→                 │
+   519→                 ├──> INACTIVE
+   520→                 └──> PENDING_DELETION
+   521→```
+   522→
+   523→Never model this as five independent Boolean columns.
+   524→
+   525→---
+   526→
+   527→# 14. POLICY ACCEPTANCE
+   528→
+   529→Policies must be versioned.
+   530→
+   531→Never simply store:
+   532→
+   533→```text
+   534→accepted_terms = true
+   535→```
+   536→
+   537→Store:
+   538→
+   539→```text
+   540→policy_id
+   541→policy_version_id
+   542→user_id
+   543→accepted_at
+   544→ip metadata if appropriate
+   545→user agent metadata if appropriate
+   546→```
+   547→
+   548→If policy changes later, previous acceptance history remains.
+   549→
+   550→---
+   551→
+   552→# 15. TIME ARCHITECTURE
+   553→
+   554→Institution has one business timezone:
+   555→
+   556→```text
+   557→institution.timezone
+   558→```
+   559→
+   560→Example:
+   561→
+   562→```text
+   563→Asia/Kolkata
+   564→```
+   565→
+   566→Store timestamps as UTC.
+   567→
+   568→Convert to institution timezone when evaluating:
+   569→
+   570→* meal cutoffs
+   571→* meal service times
+   572→* billing periods
+   573→* leave dates
+   574→* holidays
+   575→* policy deadlines
+   576→* scheduled deletion
+   577→* task deadlines
+   578→
+   579→Never trust browser/device clock for authoritative decisions.
+   580→
+   581→---
+   582→
+   583→# 16. SERVER TIME IS AUTHORITATIVE
+   584→
+   585→Resident changing device time must not bypass meal cutoff.
+   586→
+   587→Every time-sensitive write is validated by backend server time.
+   588→
+   589→Frontend may show a countdown, but backend performs final authorization.
+   590→
+   591→---
+   592→
+   593→# 17. MONEY MODEL
+   594→
+   595→Never use JavaScript floating-point values as authoritative money.
+   596→
+   597→Store money using integer minor units.
+   598→
+   599→For INR:
+   600→
+   601→```text
+   602→₹100.25
+   603→```
+   604→
+   605→becomes:
+   606→
+   607→```text
+   608→10025 paise
+   609→```
+   610→
+   611→Use names such as:
+   612→
+   613→```text
+   614→amount_minor
+   615→price_minor
+   616→balance_minor
+   617→```
+   618→
+   619→If PostgreSQL decimal representation is necessary, use explicit fixed precision.
+   620→
+   621→Never use:
+   622→
+   623→```text
+   624→float
+   625→double precision
+   626→```
+   627→
+   628→for authoritative financial values.
+   629→
+   630→---
+   631→
+   632→# 18. CURRENCY CONFIGURATION
+   633→
+   634→Institution:
+   635→
+   636→```text
+   637→currency_code = INR
+   638→currency_minor_digits = 2
+   639→```
+   640→
+   641→Centralize rounding.
+   642→
+   643→Never allow different pages to independently round financial calculations.
+   644→
+   645→---
+   646→
+   647→# 19. FINANCIAL LEDGER
+   648→
+   649→Implement an immutable double-entry ledger internally.
+   650→
+   651→Residents do NOT need to see accounting terminology.
+   652→
+   653→Backend should maintain:
+   654→
+   655→```text
+   656→ledger_accounts
+   657→ledger_journals
+   658→ledger_entries
+   659→```
+   660→
+   661→A journal contains one business transaction.
+   662→
+   663→Entries must balance.
+   664→
+   665→Conceptually:
+   666→
+   667→```text
+   668→SUM(debits) = SUM(credits)
+   669→```
+   670→
+   671→Posted journals cannot be edited.
+   672→
+   673→A correction creates another journal.
+   674→
+   675→Examples:
+   676→
+   677→Payment:
+   678→
+   679→```text
+   680→Dr Cash/Bank
+   681→Cr Resident Balance / Receivable
+   682→```
+   683→
+   684→Expense:
+   685→
+   686→```text
+   687→Dr Expense
+   688→Cr Cash/Payable
+   689→```
+   690→
+   691→Refund:
+   692→
+   693→```text
+   694→Dr Resident Balance Liability
+   695→Cr Cash/Bank
+   696→```
+   697→
+   698→Exact chart-of-account design should be documented.
+   699→
+   700→---
+   701→
+   702→# 20. IMMUTABLE FINANCIAL HISTORY
+   703→
+   704→After approval, never edit:
+   705→
+   706→* payment
+   707→* expense
+   708→* refund
+   709→* bill
+   710→* posted ledger journal
+   711→
+   712→Wrong transaction?
+   713→
+   714→Create:
+   715→
+   716→```text
+   717→reversal
+   718→correction
+   719→adjustment
+   720→```
+   721→
+   722→Do not mutate history.
+   723→
+   724→---
+   725→
+   726→# 21. DATABASE PERMISSIONS
+   727→
+   728→Separate database credentials:
+   729→
+   730→```text
+   731→migration role
+   732→runtime API role
+   733→worker role
+   734→read-only operational role if required
+   735→```
+   736→
+   737→Runtime API must not own the schema.
+   738→
+   739→Runtime API must not perform DDL.
+   740→
+   741→Prevent normal runtime role from updating/deleting append-only:
+   742→
+   743→* audit records
+   744→* posted journals
+   745→* billing snapshots
+   746→
+   747→Use database permission boundaries where practical.
+   748→
+   749→---
+   750→
+   751→# 22. CORE DATABASE ENTITIES
+   752→
+   753→Design normalized PostgreSQL tables around approximately the following domains.
+   754→
+   755→Do not blindly copy field names without examining relationships, but preserve these concepts.
+   756→
+   757→## Institution
+   758→
+   759→```text
+   760→institutions
+   761→institution_settings
+   762→institution_security_settings
+   763→```
+   764→
+   765→Important properties:
+   766→
+   767→```text
+   768→id
+   769→name
+   770→timezone
+   771→currency
+   772→status
+   773→created_at
+   774→updated_at
+   775→```
+   776→
+   777→---
+   778→
+   779→# 23. USER DOMAIN
+   780→
+   781→```text
+   782→users
+   783→user_profiles
+   784→user_policy_acceptances
+   785→user_status_history
+   786→sessions
+   787→mfa_credentials
+   788→password_reset_tokens
+   789→```
+   790→
+   791→`users`:
+   792→
+   793→```text
+   794→id
+   795→institution_id
+   796→role
+   797→status
+   798→email/username
+   799→password_hash
+   800→membership_effective_from
+   801→membership_effective_until
+   802→created_at
+   803→updated_at
+   804→```
+   805→
+   806→Use opaque UUID-style identifiers.
+   807→
+   808→Never expose sequential IDs as authorization.
+   809→
+   810→---
+   811→
+   812→# 24. MEAL DEFINITIONS
+   813→
+   814→Create:
+   815→
+   816→```text
+   817→meal_definitions
+   818→```
+   819→
+   820→Represents configuration such as:
+   821→
+   822→```text
+   823→Lunch
+   824→Dinner
+   825→Breakfast
+   826→Special Dinner
+   827→Festival Meal
+   828→```
+   829→
+   830→Fields/concepts:
+   831→
+   832→```text
+   833→id
+   834→institution_id
+   835→name
+   836→description
+   837→icon
+   838→color_token
+   839→meal_type
+   840→active
+   841→default_state
+   842→default_visibility
+   843→pricing_strategy
+   844→fixed_price_minor nullable
+   845→service_schedule
+   846→service_start_local
+   847→service_end_local
+   848→cutoff_strategy
+   849→cutoff_offset
+   850→cutoff_local_time
+   851→internal_notes
+   852→created_at
+   853→updated_at
+   854→archived_at
+   855→delete_requested_at
+   856→```
+   857→
+   858→Meal types can include:
+   859→
+   860→```text
+   861→REGULAR
+   862→SPECIAL
+   863→GUEST_ONLY
+   864→FESTIVAL
+   865→CUSTOM
+   866→```
+   867→
+   868→---
+   869→
+   870→# 25. MEAL DEFINITION VERSIONS
+   871→
+   872→Configuration changes must preserve history.
+   873→
+   874→Use:
+   875→
+   876→```text
+   877→meal_definition_versions
+   878→```
+   879→
+   880→Store snapshots/versioned settings.
+   881→
+   882→Changing Lunch from a 9:00 cutoff to 10:00 must not rewrite the meaning of historical Lunch instances.
+   883→
+   884→---
+   885→
+   886→# 26. MEAL INSTANCES
+   887→
+   888→Create:
+   889→
+   890→```text
+   891→meal_instances
+   892→```
+   893→
+   894→Example:
+   895→
+   896→```text
+   897→Lunch — 2026-09-02
+   898→```
+   899→
+   900→Instance stores resolved configuration for that service.
+   901→
+   902→Fields/concepts:
+   903→
+   904→```text
+   905→id
+   906→meal_definition_id
+   907→meal_definition_version_id
+   908→service_date
+   909→service_start_at
+   910→service_end_at
+   911→cutoff_at
+   912→lock_at
+   913→status
+   914→price_strategy_snapshot
+   915→created_at
+   916→```
+   917→
+   918→Unique constraint:
+   919→
+   920→```text
+   921→meal_definition + service occurrence
+   922→```
+   923→
+   924→No duplicate service instance.
+   925→
+   926→---
+   927→
+   928→# 27. RESIDENT MEAL RECORDS
+   929→
+   930→Create:
+   931→
+   932→```text
+   933→resident_meals
+   934→```
+   935→
+   936→Concepts:
+   937→
+   938→```text
+   939→id
+   940→institution_id
+   941→resident_id
+   942→meal_instance_id
+   943→
+   944→baseline_state
+   945→resident_selected_state
+   946→policy_state
+   947→leave_state
+   948→admin_override_state
+   949→
+   950→effective_state
+   951→effective_reason
+   952→
+   953→locked_at
+   954→created_at
+   955→updated_at
+   956→version
+   957→```
+   958→
+   959→Unique:
+   960→
+   961→```text
+   962→resident_id + meal_instance_id
+   963→```
+   964→
+   965→---
+   966→
+   967→# 28. MEAL STATE PRECEDENCE
+   968→
+   969→Define ONE deterministic rule engine.
+   970→
+   971→Suggested conceptual order:
+   972→
+   973→```text
+   974→Does meal instance exist?
+   975→       ↓
+   976→Is resident membership active for that time?
+   977→       ↓
+   978→Is meal visible/applicable?
+   979→       ↓
+   980→Does calendar disable it?
+   981→       ↓
+   982→Does approved leave affect it?
+   983→       ↓
+   984→Does financial restriction affect it?
+   985→       ↓
+   986→Has resident changed it before cutoff?
+   987→       ↓
+   988→Has admin overridden it?
+   989→       ↓
+   990→Has instance locked?
+   991→       ↓
+   992→FINAL EFFECTIVE STATE
+   993→```
+   994→
+   995→Admin override is authoritative for that instance, but all overridden values must retain history.
+   996→
+   997→---
+   998→
+   999→# 29. OVERRIDE RULE
+  1000→
+  1001→Do not permanently mark:
+  1002→
+  1003→```text
+  1004→override = true
+  1005→```
+  1006→
+  1007→based only on history.
+  1008→
+  1009→Displayed override exists when:
+  1010→
+  1011→```text
+  1012→admin_override_state != baseline_without_admin_override
+  1013→```
+  1014→
+  1015→Example:
+  1016→
+  1017→```text
+  1018→default ON
+  1019→admin changes OFF
+  1020→→ ADMIN OVERRIDE
+  1021→```
+  1022→
+  1023→Admin changes back:
+  1024→
+  1025→```text
+  1026→default ON
+  1027→admin ON
+  1028→→ no current override badge
+  1029→```
+  1030→
+  1031→Audit still records both actions.
+  1032→
+  1033→---
+  1034→
+  1035→# 30. MID-MONTH JOINING
+  1036→
+  1037→Resident has:
+  1038→
+  1039→```text
+  1040→membership_effective_from
+  1041→```
+  1042→
+  1043→If resident joins after a meal cutoff:
+  1044→
+  1045→```text
+  1046→do not create an automatic ON meal
+  1047→```
+  1048→
+  1049→Example:
+  1050→
+  1051→```text
+  1052→Joined 15:30
+  1053→
+  1054→Lunch cutoff 10:00
+  1055→→ unavailable automatically
+  1056→
+  1057→Dinner cutoff 17:00
+  1058→→ default state can apply
+  1059→```
+  1060→
+  1061→Admin may add historical consumed meal using explicit override/correction.
+  1062→
+  1063→Require reason.
+  1064→
+  1065→Audit it.
+  1066→
+  1067→---
+  1068→
+  1069→# 31. USER-FACING MEAL STATES
+  1070→
+  1071→Residents should see simple language only:
+  1072→
+  1073→```text
+  1074→ON
+  1075→OFF
+  1076→LOCKED
+  1077→ADMIN OVERRIDE
+  1078→ON LEAVE
+  1079→NOT AVAILABLE
+  1080→```
+  1081→
+  1082→Do not expose internal engine terminology.
+  1083→
+  1084→---
+  1085→
+  1086→# 32. MEAL LOCKING
+  1087→
+  1088→State machine:
+  1089→
+  1090→```text
+  1091→SCHEDULED
+  1092→OPEN
+  1093→LOCKED
+  1094→SERVICE_ACTIVE
+  1095→COMPLETED
+  1096→CANCELLED
+  1097→```
+  1098→
+  1099→Backend transitions based on server time or explicit administrative rules.
+  1100→
+  1101→Residents cannot modify after cutoff/lock.
+  1102→
+  1103→Admin may override after lock with:
+  1104→
+  1105→* explicit reason;
+  1106→* audit record;
+  1107→* concurrency protection.
+  1108→
+  1109→---
+  1110→
+  1111→# 33. BILLED HISTORICAL MEALS
+  1112→
+  1113→If meal belongs to a CLOSED/BILLED period, an admin must not silently mutate billing.
+  1114→
+  1115→Historical correction should result in:
+  1116→
+  1117→* adjustment;
+  1118→* billing revision where allowed;
+  1119→* or next-period credit/debit adjustment.
+  1120→
+  1121→Original bill remains preserved.
+  1122→
+  1123→---
+  1124→
+  1125→# 34. GUEST MEALS
+  1126→
+  1127→Use separate domain:
+  1128→
+  1129→```text
+  1130→guest_meal_requests
+  1131→guest_meals
+  1132→```
+  1133→
+  1134→Lifecycle:
+  1135→
+  1136→```text
+  1137→REQUESTED
+  1138→CONFIRMED
+  1139→LOCKED
+  1140→CANCELLED
+  1141→CONSUMED
+  1142→```
+  1143→
+  1144→Record:
+  1145→
+  1146→```text
+  1147→host_resident_id
+  1148→meal_instance_id
+  1149→quantity
+  1150→unit_price_minor
+  1151→total_price_minor
+  1152→created_at
+  1153→locked_at
+  1154→```
+  1155→
+  1156→Guest meals must contribute correctly to:
+  1157→
+  1158→* meal count
+  1159→* guest income
+  1160→* billing
+  1161→* formula inputs
+  1162→
+  1163→---
+  1164→
+  1165→# 35. LEAVE REQUESTS
+  1166→
+  1167→Create:
+  1168→
+  1169→```text
+  1170→leave_requests
+  1171→```
+  1172→
+  1173→Fields:
+  1174→
+  1175→```text
+  1176→resident_id
+  1177→start_date
+  1178→end_date
+  1179→reason
+  1180→status
+  1181→created_at
+  1182→reviewed_at
+  1183→reviewed_by
+  1184→review_reason
+  1185→```
+  1186→
+  1187→State machine:
+  1188→
+  1189→```text
+  1190→PENDING
+  1191→APPROVED
+  1192→REJECTED
+  1193→CANCELLED
+  1194→```
+  1195→
+  1196→Approved leave:
+  1197→
+  1198→* automatically affects applicable future/unlocked meals;
+  1199→* does NOT silently rewrite already locked meals.
+  1200→
+  1201→Locked meals require admin correction.
+  1202→
+  1203→---
+  1204→
+  1205→# 36. CALENDAR
+  1206→
+  1207→Create:
+  1208→
+  1209→```text
+  1210→calendar_events
+  1211→```
+  1212→
+  1213→Types:
+  1214→
+  1215→```text
+  1216→HOLIDAY
+  1217→FESTIVAL
+  1218→MAINTENANCE
+  1219→CUSTOM
+  1220→```
+  1221→
+  1222→Fields:
+  1223→
+  1224→```text
+  1225→name
+  1226→description
+  1227→start_date
+  1228→end_date
+  1229→type
+  1230→disable_meals
+  1231→created_by
+  1232→```
+  1233→
+  1234→Calendar rules affect meal-policy evaluation.
+  1235→
+  1236→Do not unnecessarily rewrite thousands of future rows if dynamic policy evaluation is safer.
+  1237→
+  1238→At lock/snapshot time, freeze effective outcome.
+  1239→
+  1240→---
+  1241→
+  1242→# 37. PAYMENT DOMAIN
+  1243→
+  1244→Create:
+  1245→
+  1246→```text
+  1247→payments
+  1248→payment_proofs
+  1249→payment_status_history
+  1250→```
+  1251→
+  1252→Payment fields:
+  1253→
+  1254→```text
+  1255→id
+  1256→institution_id
+  1257→resident_id
+  1258→amount_minor
+  1259→method
+  1260→reference
+  1261→notes
+  1262→status
+  1263→idempotency_key
+  1264→submitted_at
+  1265→reviewed_at
+  1266→reviewed_by
+  1267→rejection_reason
+  1268→approved_journal_id
+  1269→void_journal_id
+  1270→```
+  1271→
+  1272→Methods may include:
+  1273→
+  1274→```text
+  1275→UPI
+  1276→CASH
+  1277→BANK_TRANSFER
+  1278→OTHER
+  1279→```
+  1280→
+  1281→State:
+  1282→
+  1283→```text
+  1284→PENDING
+  1285→APPROVED
+  1286→REJECTED
+  1287→VOIDED
+  1288→REFUNDED/PARTIALLY_REFUNDED when needed
+  1289→```
+  1290→
+  1291→No financial "Edit".
+  1292→
+  1293→---
+  1294→
+  1295→# 38. PAYMENT APPROVAL
+  1296→
+  1297→Approval transaction:
+  1298→
+  1299→```text
+  1300→BEGIN
+  1301→
+  1302→lock payment row
+  1303→
+  1304→verify status = PENDING
+  1305→
+  1306→mark approved
+  1307→
+  1308→create balanced ledger journal
+  1309→
+  1310→write audit event
+  1311→
+  1312→write outbox event
+  1313→
+  1314→COMMIT
+  1315→```
+  1316→
+  1317→All-or-nothing.
+  1318→
+  1319→Two admins approving simultaneously must not generate duplicate money.
+  1320→
+  1321→---
+  1322→
+  1323→# 39. REFUNDS
+  1324→
+  1325→Create:
+  1326→
+  1327→```text
+  1328→refunds
+  1329→```
+  1330→
+  1331→Before refunding, determine available resident credit.
+  1332→
+  1333→Admin can choose:
+  1334→
+  1335→```text
+  1336→Carry Forward
+  1337→Issue Refund
+  1338→```
+  1339→
+  1340→Refund requires:
+  1341→
+  1342→* amount
+  1343→* resident
+  1344→* reason
+  1345→* destination/reference where appropriate
+  1346→* recent admin authentication
+  1347→* balanced ledger journal
+  1348→* audit
+  1349→
+  1350→State:
+  1351→
+  1352→```text
+  1353→PENDING
+  1354→PROCESSING
+  1355→COMPLETED
+  1356→FAILED
+  1357→VOIDED where logically valid
+  1358→```
+  1359→
+  1360→Never silently reduce the original payment.
+  1361→
+  1362→---
+  1363→
+  1364→# 40. EXPENSE DOMAIN
+  1365→
+  1366→Create:
+  1367→
+  1368→```text
+  1369→expense_categories
+  1370→expenses
+  1371→expense_items
+  1372→expense_proofs
+  1373→expense_status_history
+  1374→```
+  1375→
+  1376→Expense:
+  1377→
+  1378→```text
+  1379→id
+  1380→institution_id
+  1381→date
+  1382→category_id
+  1383→status
+  1384→source
+  1385→description
+  1386→comment
+  1387→submitted_by
+  1388→approved_by
+  1389→total_minor
+  1390→created_at
+  1391→```
+  1392→
+  1393→Expense item:
+  1394→
+  1395→```text
+  1396→item_name
+  1397→quantity
+  1398→unit
+  1399→unit_price_minor
+  1400→line_total_minor
+  1401→```
+  1402→
+  1403→UI may begin with one item but domain should support multiple sensible line items.
+  1404→
+  1405→---
+  1406→
+  1407→# 41. EXPENSE STATES
+  1408→
+  1409→```text
+  1410→DRAFT
+  1411→PENDING
+  1412→APPROVED
+  1413→REJECTED
+  1414→VOIDED
+  1415→```
+  1416→
+  1417→Pending/draft expense can be deleted if it has never affected accounting.
+  1418→
+  1419→Approved expense:
+  1420→
+  1421→```text
+  1422→cannot be deleted
+  1423→```
+  1424→
+  1425→Can only be voided/reversed with reason.
+  1426→
+  1427→---
+  1428→
+  1429→# 42. FUNDS
+  1430→
+  1431→Do not create one vague mutable `balance` column as the source of truth.
+  1432→
+  1433→Derive/account using ledger.
+  1434→
+  1435→Expose friendly projections:
+  1436→
+  1437→```text
+  1438→Total Deposits
+  1439→Available Balance
+  1440→Charges
+  1441→Credits
+  1442→Refunds
+  1443→Amount to Pay
+  1444→```
+  1445→
+  1446→Admin may additionally see:
+  1447→
+  1448→```text
+  1449→Deficit
+  1450→```
+  1451→
+  1452→Resident UI should prefer:
+  1453→
+  1454→```text
+  1455→Amount to Pay
+  1456→```
+  1457→
+  1458→rather than accounting jargon.
+  1459→
+  1460→---
+  1461→
+  1462→# 43. DEFICIT POLICY
+  1463→
+  1464→Create versioned policy configuration:
+  1465→
+  1466→```text
+  1467→deficit_threshold_minor
+  1468→grace_period_days
+  1469→restrict_meals
+  1470→policy_enabled
+  1471→```
+  1472→
+  1473→Resident financial-policy state:
+  1474→
+  1475→```text
+  1476→AVAILABLE
+  1477→GRACE_PERIOD
+  1478→RESTRICTED
+  1479→EXEMPTED
+  1480→```
+  1481→
+  1482→Do NOT instantly disable meals merely because balance temporarily becomes negative.
+  1483→
+  1484→Consider:
+  1485→
+  1486→* pending approved payment;
+  1487→* grace period;
+  1488→* policy exemption.
+  1489→
+  1490→---
+  1491→
+  1492→# 44. POLICY EXEMPTIONS
+  1493→
+  1494→Create:
+  1495→
+  1496→```text
+  1497→policy_exemptions
+  1498→```
+  1499→
+  1500→Fields:
+  1501→
+  1502→```text
+  1503→resident_id
+  1504→policy_type
+  1505→reason
+  1506→starts_at
+  1507→expires_at
+  1508→approved_by
+  1509→created_at
+  1510→```
+  1511→
+  1512→Expiry automatically triggers reevaluation.
+  1513→
+  1514→Never create permanent invisible bypasses.
+  1515→
+  1516→---
+  1517→
+  1518→# 45. FORMULA ENGINE — CRITICAL
+  1519→
+  1520→This module is security-critical.
+  1521→
+  1522→There are two UX input modes:
+  1523→
+  1524→```text
+  1525→Natural Language
+  1526→Formula
+  1527→```
+  1528→
+  1529→Both must compile into exactly the SAME safe internal AST.
+  1530→
+  1531→Never execute:
+  1532→
+  1533→```text
+  1534→eval()
+  1535→Function()
+  1536→dynamic JavaScript
+  1537→raw user SQL
+  1538→shell commands
+  1539→```
+  1540→
+  1541→---
+  1542→
+  1543→# 46. FORMULA VARIABLES
+  1544→
+  1545→Maintain an explicit whitelist.
+  1546→
+  1547→Examples:
+  1548→
+  1549→```text
+  1550→total_market_cost
+  1551→total_guest_income
+  1552→total_consumed_resident_meals
+  1553→total_guest_meals
+  1554→total_approved_expenses
+  1555→resident_consumed_meals
+  1556→resident_guest_meals
+  1557→```
+  1558→
+  1559→Every variable has:
+  1560→
+  1561→```text
+  1562→identifier
+  1563→human-readable label
+  1564→description
+  1565→type
+  1566→unit
+  1567→scope
+  1568→source
+  1569→```
+  1570→
+  1571→---
+  1572→
+  1573→# 47. FORMULA OPERATORS
+  1574→
+  1575→Initially support only safe deterministic operations:
+  1576→
+  1577→```text
+  1578→+
+  1579→-
+  1580→*
+  1581→/
+  1582→()
+  1583→SUM
+  1584→MIN
+  1585→MAX
+  1586→ROUND
+  1587→IF
+  1588→```
+  1589→
+  1590→Potential future additions require explicit review.
+  1591→
+  1592→Do NOT try to implement Microsoft Excel.
+  1593→
+  1594→---
+  1595→
+  1596→# 48. FORMULA AST
+  1597→
+  1598→Example:
+  1599→
+  1600→```json
+  1601→{
+  1602→  "type": "divide",
+  1603→  "left": {
+  1604→    "type": "subtract",
+  1605→    "left": { "type": "variable", "name": "total_market_cost" },
+  1606→    "right": { "type": "variable", "name": "total_guest_income" }
+  1607→  },
+  1608→  "right": {
+  1609→    "type": "variable",
+  1610→    "name": "total_consumed_resident_meals"
+  1611→  }
+  1612→}
+  1613→```
+  1614→
+  1615→Evaluator operates on validated AST, never raw text.
+  1616→
+  1617→---
+  1618→
+  1619→# 49. NATURAL LANGUAGE FORMULAS
+  1620→
+  1621→Admin can write:
+  1622→
+  1623→```text
+  1624→Subtract guest income from total market cost,
+  1625→then divide the result by consumed resident meals.
+  1626→```
+  1627→
+  1628→System parses it into candidate AST.
+  1629→
+  1630→Before saving, UI MUST show:
+  1631→
+  1632→```text
+  1633→I understood this as:
+  1634→
+  1635→(Total Market Cost - Guest Income)
+  1636→÷ Resident Consumed Meals
+  1637→
+  1638→Example using current data:
+  1639→
+  1640→₹42,000 - ₹2,000
+  1641→= ₹40,000
+  1642→
+  1643→₹40,000 ÷ 1,000
+  1644→= ₹40.00 per meal
+  1645→```
+  1646→
+  1647→Buttons:
+  1648→
+  1649→```text
+  1650→Cancel
+  1651→Save Formula
+  1652→```
+  1653→
+  1654→Natural-language output must never execute without validation.
+  1655→
+  1656→---
+  1657→
+  1658→# 50. FORMULA VERSIONING
+  1659→
+  1660→Create:
+  1661→
+  1662→```text
+  1663→formula_definitions
+  1664→formula_versions
+  1665→```
+  1666→
+  1667→Version fields:
+  1668→
+  1669→```text
+  1670→version
+  1671→expression_source
+  1672→compiled_ast
+  1673→created_by
+  1674→created_at
+  1675→effective_from
+  1676→effective_until
+  1677→reason
+  1678→checksum
+  1679→```
+  1680→
+  1681→Never overwrite old version.
+  1682→
+  1683→---
+  1684→
+  1685→# 51. FORMULA CHANGE DURING MONTH
+  1686→
+  1687→Default safest behavior:
+  1688→
+  1689→```text
+  1690→New formula applies from the next billing period.
+  1691→```
+  1692→
+  1693→If Admin intentionally selects current OPEN period:
+  1694→
+  1695→1. show impact simulation;
+  1696→2. show current formula;
+  1697→3. show proposed formula;
+  1698→4. show old calculated meal charge;
+  1699→5. show new calculated meal charge;
+  1700→6. require explicit confirmation;
+  1701→7. version the formula;
+  1702→8. audit action.
+  1703→
+  1704→A CLOSED/BILLED period cannot be recalculated by ordinary formula editing.
+  1705→
+  1706→---
+  1707→
+  1708→# 52. BILLING PERIODS
+  1709→
+  1710→Create:
+  1711→
+  1712→```text
+  1713→billing_periods
+  1714→```
+  1715→
+  1716→Unique:
+  1717→
+  1718→```text
+  1719→institution + year + month
+  1720→```
+  1721→
+  1722→State:
+  1723→
+  1724→```text
+  1725→OPEN
+  1726→CLOSING
+  1727→CLOSED
+  1728→BILLED
+  1729→REOPENED
+  1730→```
+  1731→
+  1732→Do not create bills for future months.
+  1733→
+  1734→---
+  1735→
+  1736→# 53. BILLING READINESS CHECK
+  1737→
+  1738→Before generation, verify:
+  1739→
+  1740→```text
+  1741→no unresolved critical meal inconsistencies
+  1742→no unprocessed financial records required for period
+  1743→no invalid formula
+  1744→no divide-by-zero result
+  1745→no orphan financial references
+  1746→approved payments match ledger
+  1747→approved expenses match ledger
+  1748→guest meal totals reconcile
+  1749→resident meal totals reconcile
+  1750→no duplicate meal instances
+  1751→no duplicate resident meals
+  1752→required task expenses processed
+  1753→billing period still OPEN
+  1754→```
+  1755→
+  1756→Display human-readable results.
+  1757→
+  1758→---
+  1759→
+  1760→# 54. BILLING CONFIRMATION UI
+  1761→
+  1762→Example:
+  1763→
+  1764→```text
+  1765→August 2026 Billing
+  1766→
+  1767→126 residents
+  1768→4,827 resident meals
+  1769→214 guest meals
+  1770→₹184,320 eligible expenses
+  1771→₹72,000 approved payments
+  1772→₹38.18 meal charge
+  1773→
+  1774→✓ Payments reconciled
+  1775→✓ Expenses reconciled
+  1776→✓ Formula valid
+  1777→✓ Meal records complete
+  1778→✓ No blocking tasks
+  1779→✓ Snapshot ready
+  1780→```
+  1781→
+  1782→Then:
+  1783→
+  1784→```text
+  1785→Confirm you reviewed the period
+  1786→
+  1787→2 + 9 = [      ]
+  1788→```
+  1789→
+  1790→Primary button:
+  1791→
+  1792→```text
+  1793→Generate & Close August
+  1794→```
+  1795→
+  1796→Arithmetic confirmation prevents accidental clicks.
+  1797→
+  1798→It is not authentication.
+  1799→
+  1800→---
+  1801→
+  1802→# 55. BILLING GENERATION TRANSACTION
+  1803→
+  1804→Acquire billing-period lock.
+  1805→
+  1806→Then:
+  1807→
+  1808→```text
+  1809→BEGIN
+  1810→
+  1811→verify period OPEN
+  1812→
+  1813→set CLOSING
+  1814→
+  1815→run readiness checks again server-side
+  1816→
+  1817→capture immutable snapshot
+  1818→
+  1819→calculate all bills
+  1820→
+  1821→create bill lines
+  1822→
+  1823→create ledger postings if required
+  1824→
+  1825→set CLOSED/BILLED
+  1826→
+  1827→write audit event
+  1828→
+  1829→write outbox events
+  1830→
+  1831→COMMIT
+  1832→```
+  1833→
+  1834→Use advisory lock or equivalent plus database row lock.
+  1835→
+  1836→Running generation twice must NOT duplicate bills.
+  1837→
+  1838→---
+  1839→
+  1840→# 56. BILLING SNAPSHOT
+  1841→
+  1842→Create:
+  1843→
+  1844→```text
+  1845→billing_snapshots
+  1846→billing_snapshot_records
+  1847→```
+  1848→
+  1849→Snapshot includes immutable representation/checksums of:
+  1850→
+  1851→* relevant residents
+  1852→* meal records
+  1853→* guest meals
+  1854→* eligible expenses
+  1855→* approved payments
+  1856→* refunds
+  1857→* formula versions
+  1858→* policies
+  1859→* pricing
+  1860→* adjustments
+  1861→
+  1862→A later configuration change must never modify historical bill result.
+  1863→
+  1864→---
+  1865→
+  1866→# 57. BILLS
+  1867→
+  1868→Create:
+  1869→
+  1870→```text
+  1871→bills
+  1872→bill_lines
+  1873→bill_adjustments
+  1874→```
+  1875→
+  1876→Bill state:
+  1877→
+  1878→```text
+  1879→GENERATED
+  1880→PARTIALLY_PAID
+  1881→PAID
+  1882→OVERDUE
+  1883→VOIDED only through controlled exceptional workflow
+  1884→```
+  1885→
+  1886→Bill:
+  1887→
+  1888→```text
+  1889→resident_id
+  1890→billing_period_id
+  1891→snapshot_id
+  1892→bill_number
+  1893→subtotal_minor
+  1894→credits_minor
+  1895→payments_minor
+  1896→total_due_minor
+  1897→due_date
+  1898→generated_at
+  1899→```
+  1900→
+  1901→---
+  1902→
+  1903→# 58. BILL CALCULATION PROVENANCE
+  1904→
+  1905→Every amount should be explainable.
+  1906→
+  1907→Example resident UI:
+  1908→
+  1909→```text
+  1910→August 2026
+  1911→
+  1912→Resident meals
+  1913→43 × ₹38.18      ₹1,641.74
+  1914→
+  1915→Guest meals
+  1916→4 × ₹55.00         ₹220.00
+  1917→
+  1918→Adjustments          -₹100.00
+  1919→
+  1920→Total               ₹1,761.74
+  1921→
+  1922→Payments            -₹1,500.00
+  1923→
+  1924→Amount to Pay          ₹261.74
+  1925→```
+  1926→
+  1927→Button:
+  1928→
+  1929→```text
+  1930→View calculation
+  1931→```
+  1932→
+  1933→Never display unexplained magic totals.
+  1934→
+  1935→---
+  1936→
+  1937→# 59. CLOSED-PERIOD CORRECTIONS
+  1938→
+  1939→Never silently edit historical billing.
+  1940→
+  1941→Use:
+  1942→
+  1943→```text
+  1944→Adjustment
+  1945→Credit
+  1946→Debit Adjustment
+  1947→Reversal
+  1948→Revision
+  1949→```
+  1950→
+  1951→Original financial history remains.
+  1952→
+  1953→---
+  1954→
+  1955→# 60. MARKET TASK DOMAIN
+  1956→
+  1957→Create:
+  1958→
+  1959→```text
+  1960→tasks
+  1961→task_items
+  1962→task_assignments
+  1963→task_submissions
+  1964→task_submission_items
+  1965→```
+  1966→
+  1967→Task types can support:
+  1968→
+  1969→```text
+  1970→MARKET_PURCHASE
+  1971→GENERAL
+  1972→```
+  1973→
+  1974→Admin creates shopping task:
+  1975→
+  1976→```text
+  1977→description
+  1978→items
+  1979→expected quantity
+  1980→units
+  1981→estimated amount where appropriate
+  1982→assigned resident
+  1983→date/deadline
+  1984→notes
+  1985→```
+  1986→
+  1987→---
+  1988→
+  1989→# 61. MARKET TASK FLOW
+  1990→
+  1991→```text
+  1992→ASSIGNED
+  1993→   ↓
+  1994→Resident:
+  1995→   ├── REJECTED with reason
+  1996→   └── ACCEPTED
+  1997→           ↓
+  1998→       IN_PROGRESS
+  1999→           ↓
+  2000→       SUBMITTED
+
+[showing lines 1-2000 of 7632; use offset=2001 with limit to continue reading]

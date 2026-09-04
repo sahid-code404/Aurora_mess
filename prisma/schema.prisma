@@ -1,0 +1,910 @@
+// =====================================================================
+// AURORA RESIDENCY MESS — Resident Meal, Finance & Operations Platform
+// Prisma schema (SQLite). Status enums are Strings (SQLite has no enums);
+// state transitions are validated in domain services (src/lib/domain).
+// MONEY RULE: every financial value is an Int in minor units (paise).
+// No mutable "balance" column — funds derive from the ledger.
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// Institution boundary (multi-institution-ready, single active instance)
+// ---------------------------------------------------------------------
+
+model Institution {
+  id                  String   @id @default(cuid())
+  name                String
+  timezone            String   @default("Asia/Kolkata")
+  currencyCode        String   @default("INR")
+  currencyMinorDigits Int      @default(2)
+  status              String   @default("ACTIVE")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  settings         InstitutionSettings?
+  securitySettings InstitutionSecuritySettings?
+}
+
+model InstitutionSettings {
+  id                     String      @id @default(cuid())
+  institutionId          String      @unique
+  institution            Institution @relation(fields: [institutionId], references: [id])
+  deficitThresholdMinor  Int         @default(100000) // ₹1,000
+  gracePeriodDays        Int         @default(7)
+  restrictMealsOnDeficit Boolean     @default(true)
+  deficitPolicyEnabled   Boolean     @default(true)
+  billingDueDays         Int         @default(10)
+  guestMealPriceMinor    Int         @default(5500) // ₹55.00 default guest price
+  updatedAt              DateTime    @updatedAt
+}
+
+model InstitutionSecuritySettings {
+  id                      String      @id @default(cuid())
+  institutionId           String      @unique
+  institution             Institution @relation(fields: [institutionId], references: [id])
+  maxLoginAttempts        Int         @default(8)
+  loginWindowMinutes      Int         @default(15)
+  sessionIdleMinutes      Int         @default(43200)
+  sensitiveActionMinutes  Int         @default(15) // recent-auth window for critical ops
+  requireReasonOnOverride Boolean     @default(true)
+  updatedAt               DateTime    @updatedAt
+}
+
+// ---------------------------------------------------------------------
+// Policies (versioned) — acceptance history is immutable
+// ---------------------------------------------------------------------
+
+model Policy {
+  id            String   @id @default(cuid())
+  institutionId String
+  type          String // TERMS_OF_SERVICE | PRIVACY | HOUSE_RULES | MEAL_POLICY
+  title         String
+  content       String
+  status        String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  versions    PolicyVersion[]
+  acceptances UserPolicyAcceptance[]
+
+  @@unique([institutionId, type, title])
+}
+
+model PolicyVersion {
+  id          String   @id @default(cuid())
+  policyId    String
+  policy      Policy   @relation(fields: [policyId], references: [id])
+  version     Int
+  content     String
+  publishedAt DateTime @default(now())
+
+  acceptances UserPolicyAcceptance[]
+
+  @@unique([policyId, version])
+}
+
+model UserPolicyAcceptance {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+  policyId        String
+  policy          Policy        @relation(fields: [policyId], references: [id])
+  policyVersionId String
+  policyVersion   PolicyVersion @relation(fields: [policyVersionId], references: [id])
+  acceptedAt      DateTime      @default(now())
+  ip              String?
+  userAgent       String?
+}
+
+// ---------------------------------------------------------------------
+// Users, profiles, sessions, status history
+// ---------------------------------------------------------------------
+
+model User {
+  id                       String    @id @default(cuid())
+  institutionId            String
+  role                     String // ADMIN | RESIDENT
+  status                   String // PENDING_APPROVAL | CHANGES_REQUESTED | REJECTED | ACTIVE | INACTIVE | PENDING_DELETION
+  email                    String    @unique
+  passwordHash             String // scrypt: salt + params embedded
+  membershipEffectiveFrom  DateTime?
+  membershipEffectiveUntil DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  profile       UserProfile?           @relation(fields: [userProfileId], references: [id])
+  statusHistory UserStatusHistory[]
+  sessions      Session[]
+  acceptances   UserPolicyAcceptance[]
+  userProfileId String?
+}
+
+model UserProfile {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  fullName         String
+  phone            String?
+  roomNumber       String?
+  address          String?
+  emergencyContact String?
+  avatarColor      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  users            User[]
+}
+
+model UserStatusHistory {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  fromStatus      String?
+  toStatus        String
+  changedByUserId String?
+  reason          String?
+  createdAt       DateTime @default(now())
+}
+
+model Session {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  institutionId String
+  tokenHash     String    @unique // sha256 of opaque token — plaintext never stored
+  ip            String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+}
+
+// ---------------------------------------------------------------------
+// Meals: definitions → versions → instances → resident meals
+// ---------------------------------------------------------------------
+
+model MealDefinition {
+  id                String    @id @default(cuid())
+  institutionId     String
+  name              String
+  description       String?
+  icon              String? // lucide icon name
+  colorToken        String? // design token key
+  mealType          String    @default("REGULAR") // REGULAR | SPECIAL | GUEST_ONLY | FESTIVAL | CUSTOM
+  active            Boolean   @default(true)
+  defaultState      String    @default("ON") // ON | OFF
+  defaultVisible    Boolean   @default(true)
+  pricingStrategy   String    @default("FORMULA") // FORMULA | FIXED
+  fixedPriceMinor   Int?
+  scheduleStrategy  String    @default("DAILY") // DAILY | WEEKDAYS | ONE_TIME
+  weekdaysCsv       String? // "1,2,3,4,5" (Mon=1..Sun=7) for WEEKDAYS
+  specificDate      DateTime? // for ONE_TIME
+  serviceStartLocal String    @default("12:30")
+  serviceEndLocal   String    @default("14:00")
+  cutoffStrategy    String    @default("SAME_DAY") // SAME_DAY | PREVIOUS_DAY | CUSTOM_OFFSET
+  cutoffOffsetDays  Int       @default(0)
+  cutoffLocalTime   String    @default("09:00")
+  internalNotes     String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  archivedAt        DateTime?
+  deleteRequestedAt DateTime?
+
+  versions  MealDefinitionVersion[]
+  instances MealInstance[]
+
+  @@unique([institutionId, name])
+}
+
+model MealDefinitionVersion {
+  id                 String   @id @default(cuid())
+  mealDefinitionId   String
+  version            Int
+  configSnapshotJson String // immutable full config snapshot
+  createdByUserId    String?
+  createdAt          DateTime @default(now())
+
+  instances      MealInstance[]
+  mealDefinition MealDefinition @relation(fields: [mealDefinitionId], references: [id])
+
+  @@unique([mealDefinitionId, version])
+}
+
+model MealInstance {
+  id                      String   @id @default(cuid())
+  institutionId           String
+  mealDefinitionId        String
+  mealDefinitionVersionId String
+  serviceDate             DateTime // date (midnight UTC of local date)
+  serviceStartAt          DateTime
+  serviceEndAt            DateTime
+  cutoffAt                DateTime
+  lockAt                  DateTime
+  status                  String   @default("SCHEDULED") // SCHEDULED | OPEN | LOCKED | SERVICE_ACTIVE | COMPLETED | CANCELLED
+  priceStrategySnapshot   String   @default("FORMULA")
+  fixedPriceMinorSnapshot Int?
+  createdAt               DateTime @default(now())
+
+  definition        MealDefinition        @relation(fields: [mealDefinitionId], references: [id])
+  definitionVersion MealDefinitionVersion @relation(fields: [mealDefinitionVersionId], references: [id])
+  residentMeals     ResidentMeal[]
+  guestMeals        GuestMealRequest[]
+
+  @@unique([mealDefinitionId, serviceDate])
+  @@index([institutionId, serviceDate, status])
+}
+
+model ResidentMeal {
+  id                    String    @id @default(cuid())
+  institutionId         String
+  residentId            String
+  mealInstanceId        String
+  baselineState         String // ON | OFF (from definition default at materialization)
+  residentSelectedState String? // ON | OFF (resident's own choice)
+  policyState           String? // RESTRICTED when financial policy blocks
+  leaveState            String? // ON_LEAVE when approved leave covers
+  adminOverrideState    String? // ON | OFF (admin override, keeps history)
+  effectiveState        String // ON | OFF | ON_LEAVE | NOT_AVAILABLE
+  effectiveReason       String // engine reason code, e.g. RESIDENT_SELECTION
+  lockedAt              DateTime?
+  version               Int       @default(1)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  mealInstance MealInstance @relation(fields: [mealInstanceId], references: [id])
+
+  @@unique([residentId, mealInstanceId])
+  @@index([institutionId, residentId])
+}
+
+// ---------------------------------------------------------------------
+// Guest meals (separate domain from resident meals)
+// ---------------------------------------------------------------------
+
+model GuestMealRequest {
+  id              String    @id @default(cuid())
+  institutionId   String
+  hostResidentId  String
+  mealInstanceId  String
+  quantity        Int
+  unitPriceMinor  Int
+  totalPriceMinor Int
+  note            String?
+  status          String    @default("REQUESTED") // REQUESTED | CONFIRMED | LOCKED | CANCELLED | CONSUMED
+  createdAt       DateTime  @default(now())
+  lockedAt        DateTime?
+
+  mealInstance MealInstance @relation(fields: [mealInstanceId], references: [id])
+
+  @@index([institutionId, hostResidentId, status])
+}
+
+// ---------------------------------------------------------------------
+// Leave requests
+// ---------------------------------------------------------------------
+
+model LeaveRequest {
+  id               String    @id @default(cuid())
+  institutionId    String
+  residentId       String
+  startDate        DateTime
+  endDate          DateTime
+  reason           String
+  status           String    @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  createdAt        DateTime  @default(now())
+  reviewedAt       DateTime?
+  reviewedByUserId String?
+  reviewReason     String?
+
+  @@index([institutionId, status])
+  @@index([residentId, status])
+}
+
+// ---------------------------------------------------------------------
+// Calendar events (affect meal policy evaluation)
+// ---------------------------------------------------------------------
+
+model CalendarEvent {
+  id              String   @id @default(cuid())
+  institutionId   String
+  name            String
+  description     String?
+  startDate       DateTime
+  endDate         DateTime
+  type            String   @default("HOLIDAY") // HOLIDAY | FESTIVAL | MAINTENANCE | CUSTOM
+  disableMeals    Boolean  @default(false)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@index([institutionId, startDate])
+}
+
+// ---------------------------------------------------------------------
+// Files (proofs) — metadata only, bytes live on private object storage
+// ---------------------------------------------------------------------
+
+model StoredFile {
+  id               String   @id @default(cuid())
+  institutionId    String
+  objectKey        String   @unique
+  fileName         String
+  mimeType         String
+  sizeBytes        Int
+  sha256           String
+  uploadedByUserId String?
+  scanStatus       String   @default("PENDING") // PENDING | CLEAN | FLAGGED
+  createdAt        DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------
+// Payments (immutable after review; corrections via void/refund)
+// ---------------------------------------------------------------------
+
+model Payment {
+  id                String    @id @default(cuid())
+  institutionId     String
+  displayNumber     String    @unique // PAY-YYYYMM-NNNN
+  residentId        String
+  amountMinor       Int
+  method            String // UPI | CASH | BANK_TRANSFER | OTHER
+  reference         String?
+  notes             String?
+  status            String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
+  idempotencyKey    String?   @unique
+  proofFileId       String?
+  submittedAt       DateTime  @default(now())
+  reviewedAt        DateTime?
+  reviewedByUserId  String?
+  rejectionReason   String?
+  approvedJournalId String?
+  voidJournalId     String?
+  updatedAt         DateTime  @updatedAt
+
+  history PaymentStatusHistory[]
+  refunds Refund[]
+
+  @@index([institutionId, residentId, status])
+  @@index([institutionId, status, submittedAt])
+}
+
+model PaymentStatusHistory {
+  id              String   @id @default(cuid())
+  paymentId       String
+  payment         Payment  @relation(fields: [paymentId], references: [id])
+  fromStatus      String?
+  toStatus        String
+  changedByUserId String?
+  reason          String?
+  createdAt       DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------
+// Refunds
+// ---------------------------------------------------------------------
+
+model Refund {
+  id              String    @id @default(cuid())
+  institutionId   String
+  residentId      String
+  paymentId       String?
+  amountMinor     Int
+  mode            String // CARRY_FORWARD | ISSUE_REFUND
+  reason          String
+  destination     String?
+  status          String    @default("PENDING") // PENDING | PROCESSING | COMPLETED | FAILED | VOIDED
+  journalId       String?
+  createdByUserId String
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  payment Payment? @relation(fields: [paymentId], references: [id])
+}
+
+// ---------------------------------------------------------------------
+// Expenses (with line items, proofs, immutable once approved)
+// ---------------------------------------------------------------------
+
+model ExpenseCategory {
+  id            String   @id @default(cuid())
+  institutionId String
+  name          String
+  description   String?
+  createdAt     DateTime @default(now())
+
+  expenses Expense[]
+
+  @@unique([institutionId, name])
+}
+
+model Expense {
+  id                     String    @id @default(cuid())
+  institutionId          String
+  displayNumber          String    @unique // EXP-YYYYMM-NNNN
+  date                   DateTime
+  categoryId             String?
+  status                 String    @default("PENDING") // DRAFT | PENDING | APPROVED | REJECTED | VOIDED
+  source                 String    @default("DIRECT") // DIRECT | TASK
+  description            String
+  comment                String?
+  submittedByUserId      String
+  approvedByUserId       String?
+  reviewedAt             DateTime?
+  totalMinor             Int
+  voidReason             String?
+  sourceTaskSubmissionId String?   @unique // prevents duplicate official expense from a task
+  journalId              String? // posted ledger journal (approval)
+  reversalJournalId      String? // void reversal journal
+  proofFileId            String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  category ExpenseCategory? @relation(fields: [categoryId], references: [id])
+  items    ExpenseItem[]
+
+  @@index([institutionId, status, date])
+}
+
+model ExpenseItem {
+  id             String  @id @default(cuid())
+  expenseId      String
+  expense        Expense @relation(fields: [expenseId], references: [id])
+  itemName       String
+  quantity       Float
+  unit           String  @default("unit")
+  unitPriceMinor Int
+  lineTotalMinor Int // server-computed: round(quantity * unitPriceMinor)
+  sortOrder      Int     @default(0)
+}
+
+// ---------------------------------------------------------------------
+// Double-entry ledger (immutable once posted)
+// ---------------------------------------------------------------------
+
+model LedgerAccount {
+  id            String   @id @default(cuid())
+  institutionId String
+  code          String // CASH | RESIDENT_RECEIVABLE | GUEST_INCOME | MESS_EXPENSE | OPERATING_EXPENSE | REFUND_PAYABLE
+  name          String
+  type          String // ASSET | LIABILITY | INCOME | EXPENSE | EQUITY
+  createdAt     DateTime @default(now())
+
+  entries LedgerEntry[]
+
+  @@unique([institutionId, code])
+}
+
+model LedgerJournal {
+  id                  String   @id @default(cuid())
+  institutionId       String
+  refType             String? // PAYMENT | EXPENSE | REFUND | BILL | ADJUSTMENT | TASK_EXPENSE
+  refId               String?
+  description         String
+  status              String   @default("POSTED") // POSTED | REVERSED
+  createdByUserId     String?
+  reversedByJournalId String?
+  createdAt           DateTime @default(now())
+
+  entries LedgerEntry[]
+}
+
+model LedgerEntry {
+  id          String   @id @default(cuid())
+  journalId   String
+  accountId   String
+  debitMinor  Int      @default(0)
+  creditMinor Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  journal LedgerJournal @relation(fields: [journalId], references: [id])
+  account LedgerAccount @relation(fields: [accountId], references: [id])
+
+  @@index([journalId])
+  @@index([accountId])
+}
+
+// ---------------------------------------------------------------------
+// Central Variable Registry & Custom Variable Value History (spec §4, §18, §111-114)
+// ---------------------------------------------------------------------
+
+model VariableDefinition {
+  id              String    @id @default(cuid())
+  institutionId   String
+  key             String    // stable machine key: e.g. "kitchen_staff_salary", "meal_charge", "total_resident_meals"
+  displayName     String
+  description     String
+  category        String    // SYSTEM | CUSTOM | DERIVED
+  valueType       String    // MONEY | NUMBER | PERCENTAGE | COUNT | DURATION | BOOLEAN
+  unit            String    // INR | PERCENT | MEALS | RESIDENTS | DAYS | HOURS | NONE
+  scope           String    @default("BILLING_PERIOD") // GLOBAL | BILLING_PERIOD | RESIDENT | MEAL | DATE
+  frequency       String?   @default("MONTHLY") // CONSTANT | MONTHLY | ONE_TIME
+  providerKey     String?   // For SYSTEM variables, e.g. "RESIDENT_MEAL_ENGINE", "EXPENSE_ENGINE"
+  isPinned        Boolean   @default(false)
+  archivedAt      DateTime?
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  customValues    CustomVariableValue[]
+
+  @@unique([institutionId, key])
+}
+
+model CustomVariableValue {
+  id                   String              @id @default(cuid())
+  variableDefinitionId String
+  valueMinor           Int?                // For MONEY in paise
+  valueNumber          Float?              // For NUMBER, PERCENTAGE, COUNT, DURATION
+  valueBoolean         Boolean?            // For BOOLEAN
+  valueText            String?             // Textual/memo representation
+  effectiveFrom        DateTime
+  effectiveUntil       DateTime?
+  billingPeriodKey     String?             // "YYYY-MM" e.g. "2026-09"
+  billingPeriodId      String?
+  residentId           String?
+  supersedesId         String?
+  createdByUserId      String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  definition           VariableDefinition  @relation(fields: [variableDefinitionId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------
+// Formula engine (versioned, safe AST, DAG dependencies)
+// ---------------------------------------------------------------------
+
+model FormulaDefinition {
+  id                 String    @id @default(cuid())
+  institutionId      String
+  name               String    @default("Meal Charge")
+  description        String?
+  outputVariableKey  String    @default("meal_charge")
+  scope              String    @default("BILLING_PERIOD") // GLOBAL | BILLING_PERIOD | RESIDENT | MEAL
+  status             String    @default("ACTIVE") // ACTIVE | ARCHIVED | DRAFT
+  activeVersionId    String?
+  archivedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @default(now()) @updatedAt
+
+  versions           FormulaVersion[]
+
+  @@unique([institutionId, outputVariableKey])
+}
+
+model FormulaVersion {
+  id                   String             @id @default(cuid())
+  formulaDefinitionId  String
+  version              Int
+  inputMode            String             @default("FORMULA") // FORMULA | NATURAL_LANGUAGE
+  expressionSource     String             // canonical formula text
+  naturalSource        String?            // original natural language, if any
+  normalizedExpression String?            // auto-formatted expression
+  compiledAstJson      String             // validated AST (JSON) — the only thing ever evaluated
+  humanPreview         String             // "(Total Market Expense − Guest Income) ÷ Total Resident Meals"
+  outputType           String             @default("MONEY_PER_MEAL")
+  checksum             String
+  createdByUserId      String?
+  reason               String?
+  effectiveFrom        DateTime?
+  effectiveUntil       DateTime?
+  status               String             @default("ACTIVE") // ACTIVE | SCHEDULED | DRAFT | HISTORICAL
+  active               Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+
+  definition           FormulaDefinition  @relation(fields: [formulaDefinitionId], references: [id], onDelete: Cascade)
+  dependencies         FormulaDependency[]
+
+  @@unique([formulaDefinitionId, version])
+}
+
+model FormulaDependency {
+  id               String         @id @default(cuid())
+  formulaVersionId String
+  variableKey      String
+  dependencyType   String         @default("DIRECT") // DIRECT | DERIVED
+  createdAt        DateTime       @default(now())
+
+  formulaVersion   FormulaVersion @relation(fields: [formulaVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([formulaVersionId, variableKey])
+}
+
+// ---------------------------------------------------------------------
+// Billing periods, snapshots, bills
+// ---------------------------------------------------------------------
+
+model BillingPeriod {
+  id                      String    @id @default(cuid())
+  institutionId           String
+  year                    Int
+  month                   Int // 1-12
+  status                  String    @default("OPEN") // OPEN | CLOSING | BILLED | REOPENED
+  formulaVersionId        String?
+  mealChargeMinorSnapshot Int? // frozen per-meal charge at close time
+  guestPriceMinorSnapshot Int?
+  generationState         String? // CLOSING | GENERATING | COMPLETED | FAILED
+  generationError         String?
+  closedAt                DateTime?
+  billedAt                DateTime?
+  createdByUserId         String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  snapshot BillingSnapshot?
+  bills    Bill[]
+
+  @@unique([institutionId, year, month])
+}
+
+model BillingSnapshot {
+  id                    String   @id @default(cuid())
+  institutionId         String
+  billingPeriodId       String   @unique
+  payloadJson           String // immutable inputs: residents, meals, guests, expenses, payments, refunds, formula, policies
+  checksum              String
+  residentCount         Int
+  residentMealCount     Int
+  guestMealCount        Int
+  eligibleExpensesMinor Int
+  approvedPaymentsMinor Int
+  mealChargeMinor       Int
+  createdByUserId       String?
+  createdAt             DateTime @default(now())
+
+  period BillingPeriod @relation(fields: [billingPeriodId], references: [id])
+}
+
+model Bill {
+  id                String   @id @default(cuid())
+  institutionId     String
+  residentId        String
+  billingPeriodId   String
+  snapshotId        String
+  billNumber        String   @unique // BILL-YYYYMM-NNNN
+  revision          Int      @default(1)
+  residentMealCount Int      @default(0)
+  guestMealCount    Int      @default(0)
+  mealChargeMinor   Int      @default(0)
+  guestChargeMinor  Int      @default(0)
+  subtotalMinor     Int      @default(0)
+  adjustmentsMinor  Int      @default(0)
+  paymentsMinor     Int      @default(0)
+  totalDueMinor     Int      @default(0)
+  dueDate           DateTime
+  status            String   @default("GENERATED") // GENERATED | PARTIALLY_PAID | PAID | OVERDUE | VOIDED
+  generatedAt       DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  period      BillingPeriod    @relation(fields: [billingPeriodId], references: [id])
+  lines       BillLine[]
+  adjustments BillAdjustment[]
+
+  @@unique([residentId, billingPeriodId])
+  @@index([institutionId, status])
+}
+
+model BillLine {
+  id             String  @id @default(cuid())
+  billId         String
+  code           String // RESIDENT_MEALS | GUEST_MEALS | ADJUSTMENT
+  label          String
+  quantity       Float?
+  unitPriceMinor Int?
+  amountMinor    Int
+  detailJson     String? // provenance (dates covered, formula text, etc.)
+  sortOrder      Int     @default(0)
+
+  bill Bill @relation(fields: [billId], references: [id])
+}
+
+model BillAdjustment {
+  id              String   @id @default(cuid())
+  billId          String
+  amountMinor     Int // signed: negative = credit
+  reason          String
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  bill Bill @relation(fields: [billId], references: [id])
+}
+
+// ---------------------------------------------------------------------
+// Market tasks
+// ---------------------------------------------------------------------
+
+model Task {
+  id                   String    @id @default(cuid())
+  institutionId        String
+  taskType             String    @default("MARKET_PURCHASE") // MARKET_PURCHASE | GENERAL
+  description          String
+  assignedResidentId   String
+  assignedByUserId     String
+  dueDate              DateTime?
+  notes                String?
+  estimatedAmountMinor Int?
+  status               String    @default("ASSIGNED") // ASSIGNED | ACCEPTED | REJECTED | IN_PROGRESS | SUBMITTED | APPROVED | REJECTED_BY_ADMIN | CANCELLED
+  rejectionReason      String? // resident reject reason
+  adminReviewReason    String? // admin reject reason
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  items      TaskItem[]
+  submission TaskSubmission?
+
+  @@index([institutionId, assignedResidentId, status])
+}
+
+model TaskItem {
+  id                      String @id @default(cuid())
+  taskId                  String
+  task                    Task   @relation(fields: [taskId], references: [id])
+  itemName                String
+  expectedQuantity        Float?
+  unit                    String @default("unit")
+  estimatedUnitPriceMinor Int?
+}
+
+model TaskSubmission {
+  id                String    @id @default(cuid())
+  taskId            String    @unique
+  comment           String?
+  claimedTotalMinor Int // claimed — admin approval recomputes official totals
+  status            String    @default("SUBMITTED") // SUBMITTED | APPROVED | REJECTED
+  submittedAt       DateTime  @default(now())
+  reviewedAt        DateTime?
+  reviewedByUserId  String?
+  reviewReason      String?
+  expenseId         String?   @unique // link to official expense created on approval
+  proofFileId       String?
+
+  task  Task                 @relation(fields: [taskId], references: [id])
+  items TaskSubmissionItem[]
+
+  @@index([status])
+}
+
+model TaskSubmissionItem {
+  id               String         @id @default(cuid())
+  taskSubmissionId String
+  taskSubmission   TaskSubmission @relation(fields: [taskSubmissionId], references: [id])
+  itemName         String
+  quantity         Float
+  unit             String         @default("unit")
+  unitPriceMinor   Int
+  lineTotalMinor   Int
+}
+
+// ---------------------------------------------------------------------
+// Announcements & notifications
+// ---------------------------------------------------------------------
+
+model Announcement {
+  id              String    @id @default(cuid())
+  institutionId   String
+  title           String
+  message         String // plain text (escaped on render — never raw HTML)
+  type            String    @default("INFO") // INFO | ALERT | WARNING | MAINTENANCE | EVENT
+  priority        String    @default("NORMAL") // NORMAL | HIGH | URGENT | CRITICAL
+  target          String    @default("EVERYONE") // EVERYONE | RESIDENTS | ADMINS
+  publishAt       DateTime  @default(now())
+  expiresAt       DateTime?
+  pinned          Boolean   @default(false)
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+
+  @@index([institutionId, publishAt])
+}
+
+model Notification {
+  id            String    @id @default(cuid())
+  institutionId String
+  userId        String
+  type          String // PAYMENT_APPROVED | BILL_GENERATED | TASK_ASSIGNED | ...
+  title         String
+  message       String
+  entityRef     String?
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+}
+
+// ---------------------------------------------------------------------
+// Audit (append-only) + outbox + idempotency + deletion workflow
+// ---------------------------------------------------------------------
+
+model AuditEvent {
+  id            String   @id @default(cuid())
+  institutionId String
+  actorUserId   String?
+  actorRole     String?
+  action        String // PAYMENT_APPROVED, MEAL_OVERRIDDEN, FORMULA_ACTIVATED, ...
+  entityType    String
+  entityId      String?
+  requestId     String?
+  occurredAt    DateTime @default(now())
+  reason        String?
+  beforeSummary String?
+  afterSummary  String?
+  metadataJson  String?
+  ip            String?
+  userAgent     String?
+
+  @@index([institutionId, entityType, entityId, occurredAt])
+  @@index([institutionId, occurredAt])
+}
+
+model OutboxEvent {
+  id            String    @id @default(cuid())
+  institutionId String
+  type          String // NOTIFICATION | EMAIL | EXPORT
+  payloadJson   String
+  status        String    @default("PENDING") // PENDING | PROCESSED | FAILED
+  attempts      Int       @default(0)
+  lastError     String?
+  createdAt     DateTime  @default(now())
+  processedAt   DateTime?
+
+  @@index([status, createdAt])
+}
+
+model IdempotencyRecord {
+  id            String   @id @default(cuid())
+  institutionId String
+  scope         String // PAYMENT_SUBMIT | BILL_GENERATE | ...
+  key           String
+  responseJson  String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@unique([institutionId, scope, key])
+}
+
+model DeletionRequest {
+  id                String    @id @default(cuid())
+  institutionId     String
+  entityType        String // MEAL_DEFINITION | USER | ...
+  entityId          String
+  requestedByUserId String
+  requestedAt       DateTime  @default(now())
+  scheduledFor      DateTime?
+  reason            String?
+  status            String    @default("QUEUED") // QUEUED | SCHEDULED | BLOCKED | COMPLETED | CANCELLED
+  blockedReason     String?
+  completedAt       DateTime?
+}
+
+// ---------------------------------------------------------------------
+// Policy exemptions (deficit policy bypass with expiry — never permanent)
+// ---------------------------------------------------------------------
+
+model PolicyExemption {
+  id               String    @id @default(cuid())
+  institutionId    String
+  residentId       String
+  policyType       String    @default("DEFICIT_RESTRICTION")
+  reason           String
+  startsAt         DateTime  @default(now())
+  expiresAt        DateTime?
+  approvedByUserId String
+  createdAt        DateTime  @default(now())
+
+  @@index([institutionId, residentId, policyType])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}

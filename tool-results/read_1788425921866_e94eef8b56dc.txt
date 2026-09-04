@@ -1,0 +1,702 @@
+     1→    56→  DialogContent,
+     2→    57→  DialogHeader,
+     3→    58→  DialogTitle,
+     4→    59→  DialogDescription,
+     5→    60→  DialogFooter,
+     6→    61→} from "@/components/ui/dialog";
+     7→    62→import {
+     8→    63→  Select,
+     9→    64→  SelectTrigger,
+    10→    65→  SelectValue,
+    11→    66→  SelectContent,
+    12→    67→  SelectItem,
+    13→    68→} from "@/components/ui/select";
+    14→    69→import { useAuthStore, type Role } from "@/stores/use-auth-store";
+    15→    70→import { toast } from "sonner";
+    16→    71→import { cn } from "@/lib/utils";
+    17→    72→import { formatDeletionCountdown } from "@/lib/user-cleanup";
+    18→    73→import { Checkbox } from "@/components/ui/checkbox";
+    19→    74→
+    20→    75→type UserStatus = "PENDING" | "APPROVED" | "ACTIVE" | "INACTIVE" | "SUSPENDED" | "ARCHIVED";
+    21→    76→
+    22→    77→type ManagedUser = {
+    23→    78→  id: string;
+    24→    79→  name: string;
+    25→    80→  email: string;
+    26→    81→  phone?: string | null;
+    27→    82→  role: Role;
+    28→    83→  status: UserStatus;
+    29→    84→  room?: string | null;
+    30→    85→  gender?: string | null;
+    31→    86→  emergencyContact?: string | null;
+    32→    87→  avatarUrl?: string | null;
+    33→    88→  createdAt: string;
+    34→    89→  lastLoginAt?: string | null;
+    35→    90→  deletedAt?: string | null;
+    36→    91→  deletionReason?: string | null;
+    37→    92→  // PRD Module 03 — registration review metadata
+    38→    93→  emailVerified?: boolean;
+    39→    94→  institutionName?: string | null;
+    40→    95→  institutionUserId?: string | null;
+    41→    96→  changesRequested?: string | null; // JSON string
+    42→    97→  changesRequestReason?: string | null;
+    43→    98→  changesRequestedAt?: string | null;
+    44→    99→  rejectionReason?: string | null;
+    45→   100→};
+    46→   101→
+    47→   102→type Action =
+    48→   103→  | "APPROVE"
+    49→   104→  | "SUSPEND"
+    50→   105→  | "ACTIVATE"
+    51→   106→  | "DEACTIVATE"
+    52→   107→  | "ARCHIVE"
+    53→   108→  | "RESTORE"
+    54→   109→  | "ASSIGN_ROLE"
+    55→   110→  | "EDIT_USER"
+    56→   111→  | "DELETE_USER"
+    57→   112→  | "RESTORE_DELETED"
+    58→   113→  // PRD Module 03 — DEC-015 review workflow
+    59→   114→  | "REQUEST_CHANGES"
+    60→   115→  | "REJECT";
+    61→   116→
+    62→   117→const STATUS_META: Record<UserStatus, { label: string; className: string }> = {
+    63→   118→  PENDING: { label: "Pending", className: "bg-warning/15 text-warning" },
+    64→   119→  APPROVED: { label: "Approved", className: "bg-success/15 text-success" },
+    65→   120→  ACTIVE: { label: "Active", className: "bg-success/15 text-success" },
+    66→   121→  INACTIVE: { label: "Inactive", className: "bg-muted text-muted-foreground" },
+    67→   122→  SUSPENDED: { label: "Suspended", className: "bg-destructive/15 text-destructive" },
+    68→   123→  ARCHIVED: { label: "Archived", className: "bg-muted text-muted-foreground" },
+    69→   124→};
+    70→   125→
+    71→   126→const ROLE_META: Record<Role, { label: string; className: string }> = {
+    72→   127→  SUPER_ADMIN: { label: "Super Admin", className: "bg-destructive/15 text-destructive" },
+    73→   128→  ADMIN: { label: "Admin", className: "bg-primary/15 text-primary" },
+    74→   129→  MANAGER: { label: "Manager", className: "bg-info/15 text-info" },
+    75→   130→  USER: { label: "Resident", className: "bg-muted text-muted-foreground" },
+    76→   131→};
+    77→   132→
+    78→   133→const STATUS_FILTERS: { key: UserStatus | "ALL" | "DELETED"; label: string; short: string }[] = [
+    79→   134→  { key: "ALL", label: "All", short: "All" },
+    80→   135→  { key: "PENDING", label: "Pending", short: "Pending" },
+    81→   136→  { key: "ACTIVE", label: "Active", short: "Active" },
+    82→   137→  { key: "SUSPENDED", label: "Suspended", short: "Suspended" },
+    83→   138→  { key: "ARCHIVED", label: "Archived", short: "Archived" },
+    84→   139→  { key: "DELETED", label: "Deletion Queue", short: "Deletion Queue" },
+    85→   140→];
+    86→   141→
+    87→   142→const ACTIONS_NEED_REASON: Action[] = ["SUSPEND", "DEACTIVATE", "ARCHIVE", "REJECT"];
+    88→   143→const REQUEST_CHANGES_FIELDS = [
+    89→   144→  { key: "name", label: "Full Name" },
+    90→   145→  { key: "institutionUserId", label: "Institution User ID" },
+    91→   146→  { key: "phone", label: "Mobile Number" },
+    92→   147→  { key: "email", label: "Email" },
+    93→   148→  { key: "room", label: "Room Number" },
+    94→   149→  { key: "gender", label: "Gender" },
+    95→   150→] as const;
+    96→   151→
+    97→   152→async function unwrap<T>(promise: Promise<unknown>): Promise<T> {
+    98→   153→  const res = await promise;
+    99→   154→  if (res && typeof res === "object" && "success" in res && "data" in (res as Record<string, unknown>)) {
+   100→   155→    return (res as unknown as { data: T }).data;
+   101→   156→  }
+   102→   157→  return res as T;
+   103→   158→}
+   104→   159→
+   105→   160→function initials(name: string) {
+   106→   161→  return name
+   107→   162→    .split(" ")
+   108→   163→    .filter(Boolean)
+   109→   164→    .slice(0, 2)
+   110→   165→    .map((p) => p[0]?.toUpperCase() ?? "")
+   111→   166→    .join("");
+   112→   167→}
+   113→   168→
+   114→   169→const AVATAR_GRADIENTS = [
+   115→   170→  "from-violet-500 to-fuchsia-500",
+   116→   171→  "from-emerald-500 to-teal-500",
+   117→   172→  "from-amber-500 to-orange-500",
+   118→   173→  "from-rose-500 to-pink-500",
+   119→   174→  "from-cyan-500 to-blue-500",
+   120→   175→  "from-indigo-500 to-purple-500",
+   121→   176→];
+   122→   177→
+   123→   178→function gradientFor(name: string) {
+   124→   179→  const idx = name.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % AVATAR_GRADIENTS.length;
+   125→   180→  return AVATAR_GRADIENTS[idx];
+   126→   181→}
+   127→   182→
+   128→   183→export function UsersView() {
+   129→   184→  const role = useAuthStore((s) => s.user?.role);
+   130→   185→  const isAdmin = role === "ADMIN" || role === "SUPER_ADMIN";
+   131→   186→  const qc = useQueryClient();
+   132→   187→  // Debounced search — `searchInput` drives the input field; `search` is the
+   133→   188→  // debounced value (200ms after the user stops typing) used for both the API
+   134→   189→  // queryKey (`q: search`) and the client-side filter. Prevents refetching and
+   135→   190→  // re-filtering on every keystroke.
+   136→   191→  const [searchInput, setSearchInput] = useState("");
+   137→   192→  const [search, setSearch] = useState("");
+   138→   193→  useEffect(() => {
+   139→   194→    const t = setTimeout(() => setSearch(searchInput), 200);
+   140→   195→    return () => clearTimeout(t);
+   141→   196→  }, [searchInput]);
+   142→   197→  const [status, setStatus] = useState<UserStatus | "ALL" | "DELETED">("ALL");
+   143→   198→  const [confirm, setConfirm] = useState<{ user: ManagedUser; action: Action } | null>(null);
+   144→   199→  const [reason, setReason] = useState("");
+   145→   200→  const [assignRole, setAssignRole] = useState<ManagedUser | null>(null);
+   146→   201→  const [newRole, setNewRole] = useState<Role>("USER");
+   147→   202→  const [assignReason, setAssignReason] = useState("");
+   148→   203→  const [editUser, setEditUser] = useState<ManagedUser | null>(null);
+   149→   204→  const [editForm, setEditForm] = useState({
+   150→   205→    name: "",
+   151→   206→    email: "",
+   152→   207→    phone: "",
+   153→   208→    room: "",
+   154→   209→    gender: "",
+   155→   210→    emergencyContact: "",
+   156→   211→    password: "",
+   157→   212→  });
+   158→   213→  const [showPassword, setShowPassword] = useState(false);
+   159→   214→  const [deleteTarget, setDeleteTarget] = useState<ManagedUser | null>(null);
+   160→   215→  const [deleteReason, setDeleteReason] = useState("");
+   161→   216→
+   162→   217→  // PRD Module 03 — Request Changes / Reject dialog state
+   163→   218→  const [requestChangesTarget, setRequestChangesTarget] = useState<ManagedUser | null>(null);
+   164→   219→  const [requestChangesFields, setRequestChangesFields] = useState<string[]>([]);
+   165→   220→  const [requestChangesReason, setRequestChangesReason] = useState("");
+   166→   221→  const [rejectTarget, setRejectTarget] = useState<ManagedUser | null>(null);
+   167→   222→  const [view360Target, setView360Target] = useState<string | null>(null);
+   168→   223→  const [rejectReason, setRejectReason] = useState("");
+   169→   224→
+   170→   225→  const { data: users = [], isLoading, isFetching } = useQuery({
+   171→   226→    queryKey: ["users", { search }],
+   172→   227→    queryFn: () =>
+   173→   228→      unwrap<ManagedUser[]>(
+   174→   229→        api.get("/users", {
+   175→   230→          params: { q: search || undefined },
+   176→   231→        })
+   177→   232→      ),
+   178→   233→    enabled: isAdmin,
+   179→   234→    placeholderData: (prev) => prev,
+   180→   235→  });
+   181→   236→
+   182→   237→  const actionMutation = useMutation({
+   183→   238→    mutationFn: ({ id, action, role: r, reason: rs }: { id: string; action: Action; role?: Role; reason?: string }) =>
+   184→   239→      unwrap<ManagedUser>(api.patch(`/users/${id}`, { action, role: r, reason: rs })),
+   185→   240→    onMutate: async ({ id, action, role: r }) => {
+   186→   241→      await qc.cancelQueries({ queryKey: ["users"] });
+   187→   242→      const prev = qc.getQueryData<ManagedUser[]>(["users", { search, status }]);
+   188→   243→      if (prev) {
+   189→   244→        const next = prev.map((u) => {
+   190→   245→          if (u.id !== id) return u;
+   191→   246→          let nextStatus = u.status;
+   192→   247→          let nextRole = u.role;
+   193→   248→          if (action === "APPROVE" || action === "ACTIVATE" || action === "RESTORE") nextStatus = "ACTIVE";
+   194→   249→          if (action === "SUSPEND") nextStatus = "SUSPENDED";
+   195→   250→          if (action === "DEACTIVATE") nextStatus = "INACTIVE";
+   196→   251→          if (action === "ARCHIVE") nextStatus = "ARCHIVED";
+   197→   252→          if (action === "ASSIGN_ROLE" && r) nextRole = r;
+   198→   253→          return { ...u, status: nextStatus, role: nextRole };
+   199→   254→        });
+   200→   255→        qc.setQueryData<ManagedUser[]>(["users", { search, status }], next);
+   201→   256→      }
+   202→   257→      return { prev };
+   203→   258→    },
+   204→   259→    onError: (e: Error, _v, ctx) => {
+   205→   260→      if (ctx?.prev) qc.setQueryData(["users", { search, status }], ctx.prev);
+   206→   261→      toast.error(e.message || "Action failed");
+   207→   262→    },
+   208→   263→    onSuccess: (_u, vars) => {
+   209→   264→      const labels: Record<Action, string> = {
+   210→   265→        APPROVE: "approved",
+   211→   266→        SUSPEND: "suspended",
+   212→   267→        ACTIVATE: "activated",
+   213→   268→        DEACTIVATE: "deactivated",
+   214→   269→        ARCHIVE: "archived",
+   215→   270→        RESTORE: "restored",
+   216→   271→        ASSIGN_ROLE: "role updated",
+   217→   272→        EDIT_USER: "updated",
+   218→   273→        DELETE_USER: "moved to deletion queue",
+   219→   274→        RESTORE_DELETED: "restored",
+   220→   275→        REQUEST_CHANGES: "requested changes for",
+   221→   276→        REJECT: "rejected",
+   222→   277→      };
+   223→   278→      toast.success(`User ${labels[vars.action]}`);
+   224→   279→    },
+   225→   280→    onSettled: () => qc.invalidateQueries({ queryKey: ["users"] }),
+   226→   281→  });
+   227→   282→
+   228→   283→  const editMutation = useMutation({
+   229→   284→    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
+   230→   285→      const res = await api.put<{ success: boolean; data: ManagedUser }>(`/users/${id}`, data);
+   231→   286→      return res.data;
+   232→   287→    },
+   233→   288→    onSuccess: () => {
+   234→   289→      toast.success("User updated successfully");
+   235→   290→      setEditUser(null);
+   236→   291→      setEditForm({ name: "", email: "", phone: "", room: "", gender: "", emergencyContact: "", password: "" });
+   237→   292→      qc.invalidateQueries({ queryKey: ["users"] });
+   238→   293→    },
+   239→   294→    onError: (e: Error) => {
+   240→   295→      toast.error(e.message || "Failed to update user");
+   241→   296→    },
+   242→   297→  });
+   243→   298→
+   244→   299→  const deleteMutation = useMutation({
+   245→   300→    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+   246→   301→      const res = await api.delete<{ success: boolean; data: ManagedUser }>(`/users/${id}`, { body: JSON.stringify({ reason }) });
+   247→   302→      return res.data;
+   248→   303→    },
+   249→   304→    onSuccess: () => {
+   250→   305→      toast.success("User moved to deletion queue (7 days)");
+   251→   306→      setDeleteTarget(null);
+   252→   307→      setDeleteReason("");
+   253→   308→      qc.invalidateQueries({ queryKey: ["users"] });
+   254→   309→    },
+   255→   310→    onError: (e: Error) => {
+   256→   311→      toast.error(e.message || "Failed to delete user");
+   257→   312→    },
+   258→   313→  });
+   259→   314→
+   260→   315→  const restoreDeletedMutation = useMutation({
+   261→   316→    mutationFn: async (id: string) => {
+   262→   317→      const res = await api.post<{ success: boolean; data: ManagedUser }>(`/users/${id}/restore`);
+   263→   318→      return res.data;
+   264→   319→    },
+   265→   320→    onSuccess: () => {
+   266→   321→      toast.success("User restored successfully");
+   267→   322→      qc.invalidateQueries({ queryKey: ["users"] });
+   268→   323→    },
+   269→   324→    onError: (e: Error) => {
+   270→   325→      toast.error(e.message || "Failed to restore user");
+   271→   326→    },
+   272→   327→  });
+   273→   328→
+   274→   329→  // PRD Module 03 — Request Changes mutation (PATCH /api/users/[id]/request-changes)
+   275→   330→  const requestChangesMutation = useMutation({
+   276→   331→    mutationFn: async ({ id, fields, reason }: { id: string; fields: string[]; reason: string }) => {
+   277→   332→      const res = await api.patch<{ success: boolean; data: { id: string; status: string; changesRequested: string[] } }>(
+   278→   333→        `/users/${id}/request-changes`,
+   279→   334→        { fields, reason }
+   280→   335→      );
+   281→   336→      return res.data;
+   282→   337→    },
+   283→   338→    onSuccess: () => {
+   284→   339→      toast.success("Changes requested — user notified");
+   285→   340→      setRequestChangesTarget(null);
+   286→   341→      setRequestChangesFields([]);
+   287→   342→      setRequestChangesReason("");
+   288→   343→      qc.invalidateQueries({ queryKey: ["users"] });
+   289→   344→    },
+   290→   345→    onError: (e: Error) => {
+   291→   346→      toast.error(e.message || "Failed to request changes");
+   292→   347→    },
+   293→   348→  });
+   294→   349→
+   295→   350→  // PRD Module 03 — Reject mutation (PATCH /api/users/[id]/reject)
+   296→   351→  const rejectMutation = useMutation({
+   297→   352→    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+   298→   353→      const res = await api.patch<{ success: boolean; data: { id: string; status: string } }>(
+   299→   354→        `/users/${id}/reject`,
+   300→   355→        { reason }
+   301→   356→      );
+   302→   357→      return res.data;
+   303→   358→    },
+   304→   359→    onSuccess: () => {
+   305→   360→      toast.success("Registration rejected");
+   306→   361→      setRejectTarget(null);
+   307→   362→      setRejectReason("");
+   308→   363→      qc.invalidateQueries({ queryKey: ["users"] });
+   309→   364→    },
+   310→   365→    onError: (e: Error) => {
+   311→   366→      toast.error(e.message || "Failed to reject user");
+   312→   367→    },
+   313→   368→  });
+   314→   369→
+   315→   370→  const kpis = useMemo(() => {
+   316→   371→    // Membership KPIs are resident-only. Pending registrations and every
+   317→   372→    // administrator role are excluded from Total Users.
+   318→   373→    const residents = users.filter((u) => u.role !== "ADMIN" && u.role !== "SUPER_ADMIN");
+   319→   374→    const total = residents.filter((u) => !u.deletedAt && u.status !== "PENDING" && u.status !== "ARCHIVED").length;
+   320→   375→    const active = residents.filter((u) => u.status === "ACTIVE" && !u.deletedAt).length;
+   321→   376→    const pending = residents.filter((u) => u.status === "PENDING").length;
+   322→   377→    const suspended = residents.filter((u) => u.status === "SUSPENDED").length;
+   323→   378→    const inQueue = residents.filter((u) => u.deletedAt).length;
+   324→   379→    return { total, active, pending, suspended, inQueue };
+   325→   380→  }, [users]);
+   326→   381→
+   327→   382→  const activeAdminCount = useMemo(
+   328→   383→    () => users.filter(
+   329→   384→      (u) => !u.deletedAt && u.status === "ACTIVE" && (u.role === "ADMIN" || u.role === "SUPER_ADMIN"),
+   330→   385→    ).length,
+   331→   386→    [users],
+   332→   387→  );
+   333→   388→  const lastAdminRoleLocked = !!assignRole
+   334→   389→    && assignRole.status === "ACTIVE"
+   335→   390→    && (assignRole.role === "ADMIN" || assignRole.role === "SUPER_ADMIN")
+   336→   391→    && activeAdminCount <= 1;
+   337→   392→
+   338→   393→  const filteredUsers = useMemo(() => {
+   339→   394→    if (status === "DELETED") return users.filter((u) => u.deletedAt);
+   340→   395→    if (status === "ALL") return users.filter((u) => !u.deletedAt);
+   341→   396→    return users.filter((u) => !u.deletedAt && u.status === status);
+   342→   397→  }, [users, status]);
+   343→   398→
+   344→   399→  // Event handlers — declared BEFORE the `if (!isAdmin)` early return so they
+   345→   400→  // can be wrapped in `useCallback` (rules of hooks: hooks must be called
+   346→   401→  // unconditionally, in the same order, every render).
+   347→   402→  const handleAction = useCallback((user: ManagedUser, action: Action) => {
+   348→   403→    if (action === "EDIT_USER") {
+   349→   404→      setEditForm({
+   350→   405→        name: user.name,
+   351→   406→        email: user.email,
+   352→   407→        phone: user.phone || "",
+   353→   408→        room: user.room || "",
+   354→   409→        gender: user.gender || "",
+   355→   410→        emergencyContact: user.emergencyContact || "",
+   356→   411→        password: "",
+   357→   412→      });
+   358→   413→      setShowPassword(false);
+   359→   414→      setEditUser(user);
+   360→   415→      return;
+   361→   416→    }
+   362→   417→    if (action === "DELETE_USER") {
+   363→   418→      setDeleteReason("");
+   364→   419→      setDeleteTarget(user);
+   365→   420→      return;
+   366→   421→    }
+   367→   422→    if (action === "RESTORE_DELETED") {
+   368→   423→      restoreDeletedMutation.mutate(user.id);
+   369→   424→      return;
+   370→   425→    }
+   371→   426→    if (action === "ASSIGN_ROLE") {
+   372→   427→      setNewRole(user.role);
+   373→   428→      setAssignReason("");
+   374→   429→      setAssignRole(user);
+   375→   430→      return;
+   376→   431→    }
+   377→   432→    // PRD Module 03 — Request Changes uses its own dialog with a
+   378→   433→    // field multi-select + reason textarea.
+   379→   434→    if (action === "REQUEST_CHANGES") {
+   380→   435→      setRequestChangesFields([]);
+   381→   436→      setRequestChangesReason("");
+   382→   437→      setRequestChangesTarget(user);
+   383→   438→      return;
+   384→   439→    }
+   385→   440→    if (ACTIONS_NEED_REASON.includes(action)) {
+   386→   441→      setReason("");
+   387→   442→      setConfirm({ user, action });
+   388→   443→      return;
+   389→   444→    }
+   390→   445→    actionMutation.mutate({ id: user.id, action });
+   391→   446→  }, [actionMutation, restoreDeletedMutation]);
+   392→   447→
+   393→   448→  const submitEdit = useCallback(() => {
+   394→   449→    if (!editUser) return;
+   395→   450→    if (editForm.name.trim().length < 2) {
+   396→   451→      toast.error("Name must be at least 2 characters");
+   397→   452→      return;
+   398→   453→    }
+   399→   454→    if (editForm.password && editForm.password.length < 8) {
+   400→   455→      toast.error("Password must be at least 8 characters");
+   401→   456→      return;
+   402→   457→    }
+   403→   458→    const data: Record<string, unknown> = {
+   404→   459→      name: editForm.name,
+   405→   460→      email: editForm.email,
+   406→   461→      phone: editForm.phone || null,
+   407→   462→      room: editForm.room || null,
+   408→   463→      gender: editForm.gender || null,
+   409→   464→      emergencyContact: editForm.emergencyContact || null,
+   410→   465→    };
+   411→   466→    if (editForm.password) data.password = editForm.password;
+   412→   467→    editMutation.mutate({ id: editUser.id, data });
+   413→   468→  }, [editUser, editForm, editMutation]);
+   414→   469→
+   415→   470→  const submitConfirm = useCallback(() => {
+   416→   471→    if (!confirm) return;
+   417→   472→    if (ACTIONS_NEED_REASON.includes(confirm.action) && !reason.trim()) {
+   418→   473→      toast.error("A reason is required for this action");
+   419→   474→      return;
+   420→   475→    }
+   421→   476→    // PRD Module 03 — REJECT is routed to the new /api/users/[id]/reject
+   422→   477→    // endpoint (sets status=ARCHIVED with rejectionReason) instead of the
+   423→   478→    // generic PATCH /api/users/[id] action enum.
+   424→   479→    if (confirm.action === "REJECT") {
+   425→   480→      rejectMutation.mutate({ id: confirm.user.id, reason });
+   426→   481→      setConfirm(null);
+   427→   482→      setReason("");
+   428→   483→      return;
+   429→   484→    }
+   430→   485→    actionMutation.mutate({ id: confirm.user.id, action: confirm.action, reason });
+   431→   486→    setConfirm(null);
+   432→   487→    setReason("");
+   433→   488→  }, [confirm, reason, actionMutation, rejectMutation]);
+   434→   489→
+   435→   490→  const submitRequestChanges = useCallback(() => {
+   436→   491→    if (!requestChangesTarget) return;
+   437→   492→    if (requestChangesFields.length === 0) {
+   438→   493→      toast.error("Select at least one field to correct");
+   439→   494→      return;
+   440→   495→    }
+   441→   496→    if (requestChangesReason.trim().length < 3) {
+   442→   497→      toast.error("A reason is required (min 3 characters)");
+   443→   498→      return;
+   444→   499→    }
+   445→   500→    requestChangesMutation.mutate({
+   446→   501→      id: requestChangesTarget.id,
+   447→   502→      fields: requestChangesFields,
+   448→   503→      reason: requestChangesReason.trim(),
+   449→   504→    });
+   450→   505→  }, [requestChangesTarget, requestChangesFields, requestChangesReason, requestChangesMutation]);
+   451→   506→
+   452→   507→  const submitAssignRole = useCallback(() => {
+   453→   508→    if (!assignRole) return;
+   454→   509→    if (lastAdminRoleLocked && newRole !== "ADMIN" && newRole !== "SUPER_ADMIN") {
+   455→   510→      toast.error("Assign another active administrator before changing this admin role");
+   456→   511→      return;
+   457→   512→    }
+   458→   513→    actionMutation.mutate({
+   459→   514→      id: assignRole.id,
+   460→   515→      action: "ASSIGN_ROLE",
+   461→   516→      role: newRole,
+   462→   517→      reason: assignReason || undefined,
+   463→   518→    });
+   464→   519→    setAssignRole(null);
+   465→   520→    setAssignReason("");
+   466→   521→  }, [assignRole, newRole, assignReason, actionMutation, lastAdminRoleLocked]);
+   467→   522→
+   468→   523→  const submitDelete = useCallback(() => {
+   469→   524→    if (!deleteTarget) return;
+   470→   525→    if (deleteReason.trim().length < 3) {
+   471→   526→      toast.error("A reason is required (min 3 characters)");
+   472→   527→      return;
+   473→   528→    }
+   474→   529→    deleteMutation.mutate({ id: deleteTarget.id, reason: deleteReason });
+   475→   530→  }, [deleteTarget, deleteReason, deleteMutation]);
+   476→   531→
+   477→   532→  if (!isAdmin) {
+   478→   533→    return (
+   479→   534→      <GlassCard className="p-10 text-center" hover={false}>
+   480→   535→        <ShieldCheck className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+   481→   536→        <h3 className="font-semibold">Admins only</h3>
+   482→   537→        <p className="text-sm text-muted-foreground mt-1">
+   483→   538→          You need administrator privileges to manage users.
+   484→   539→        </p>
+   485→   540→      </GlassCard>
+   486→   541→    );
+   487→   542→  }
+   488→   543→
+   489→   544→  return (
+   490→   545→    <StaggerGroup className="space-y-4 pb-6">
+   491→   546→      {/* Subtle refetch indicator — thin animated bar at the top of the list.
+   492→   547→          Shows on every refetch (search debounced trigger, mutation
+   493→   548→          invalidation) but NOT on the initial load (the full skeleton handles
+   494→   549→          that). */}
+   495→   550→      <AnimatePresence>
+   496→   551→        {isFetching && (
+   497→   552→          <motion.div
+   498→   553→            initial={{ scaleX: 0, opacity: 0 }}
+   499→   554→            animate={{ scaleX: 1, opacity: 1 }}
+   500→   555→            exit={{ opacity: 0 }}
+   501→   556→            transition={{ duration: 0.4, ease: "easeOut" }}
+   502→   557→            style={{ transformOrigin: "left" }}
+   503→   558→            className="h-0.5 rounded-full bg-primary/60 shadow-sm shadow-primary/30"
+   504→   559→            aria-hidden="true"
+   505→   560→          />
+   506→   561→        )}
+   507→   562→      </AnimatePresence>
+   508→   563→      {/* KPIs */}
+   509→   564→      <StaggerItem>
+   510→   565→        <div className="grid grid-cols-3 gap-3">
+   511→   566→          <KpiCard label="Total Users" value={kpis.total} icon={UsersIcon} color="primary" sub="Approved members" />
+   512→   567→          <KpiCard label="Active" value={kpis.active} icon={UserCheck} color="success" sub="Approved" />
+   513→   568→          <KpiCard label="Pending Approval" value={kpis.pending} icon={UserPlus} color="warning" sub={kpis.pending > 0 ? "Awaiting" : "All clear"} />
+   514→   569→        </div>
+   515→   570→      </StaggerItem>
+   516→   571→
+   517→   572→      {/* Search + filter */}
+   518→   573→      <StaggerItem>
+   519→   574→        <div className="space-y-3">
+   520→   575→          <GlassInput
+   521→   576→            placeholder="Search by name, email, phone, or room…"
+   522→   577→            value={searchInput}
+   523→   578→            onChange={(e) => setSearchInput(e.target.value)}
+   524→   579→            icon={<Search />}
+   525→   580→          />
+   526→   581→          {/* Filter pills — scrollable, all visible left-to-right */}
+   527→   582→          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1">
+   528→   583→            {STATUS_FILTERS.map((f) => {
+   529→   584→              const active = status === f.key;
+   530→   585→              const pendingBadge = f.key === "PENDING" && kpis.pending > 0 ? kpis.pending : null;
+   531→   586→              const queueBadge = f.key === "DELETED" && kpis.inQueue > 0 ? kpis.inQueue : null;
+   532→   587→              const badge = pendingBadge ?? queueBadge;
+   533→   588→              const isQueueBadge = queueBadge !== null;
+   534→   589→              return (
+   535→   590→                <motion.button
+   536→   591→                  key={f.key}
+   537→   592→                  whileTap={{ scale: 0.96 }}
+   538→   593→                  onClick={() => setStatus(f.key)}
+   539→   594→                  className={cn(
+   540→   595→                    "flex items-center justify-center gap-1.5 h-8 px-2.5 rounded-xl text-[11px] font-medium transition-all whitespace-nowrap shrink-0",
+   541→   596→                    active
+   542→   597→                      ? "bg-primary text-primary-foreground shadow-md shadow-primary/30"
+   543→   598→                      : "glass-soft text-muted-foreground hover:text-foreground"
+   544→   599→                  )}
+   545→   600→                >
+   546→   601→                  <span>{f.short}</span>
+   547→   602→                  {badge !== null && (
+   548→   603→                    <span className={cn(
+   549→   604→                      "text-[9px] rounded-full px-1.5 py-0.5 leading-none font-bold min-w-[16px] text-center",
+   550→   605→                      active
+   551→   606→                        ? "bg-primary-foreground/20 text-primary-foreground"
+   552→   607→                        : isQueueBadge
+   553→   608→                          ? "bg-destructive text-white"
+   554→   609→                          : "bg-warning text-white"
+   555→   610→                    )}>
+   556→   611→                      {badge}
+   557→   612→                    </span>
+   558→   613→                  )}
+   559→   614→                </motion.button>
+   560→   615→              );
+   561→   616→            })}
+   562→   617→          </div>
+   563→   618→        </div>
+   564→   619→      </StaggerItem>
+   565→   620→
+   566→   621→      {/* User list */}
+   567→   622→      <StaggerItem>
+   568→   623→        {isLoading ? (
+   569→   624→          <div className="space-y-3">
+   570→   625→            {Array.from({ length: 5 }).map((_, i) => (
+   571→   626→              <ShimmerSkeleton key={i} className="h-24" />
+   572→   627→            ))}
+   573→   628→          </div>
+   574→   629→        ) : filteredUsers.length === 0 ? (
+   575→   630→          <GlassCard className="p-12 text-center" hover={false}>
+   576→   631→            <UsersIcon className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+   577→   632→            <p className="text-sm text-muted-foreground">
+   578→   633→              {status === "DELETED" ? "No users in the deletion queue." : "No users match your search."}
+   579→   634→            </p>
+   580→   635→          </GlassCard>
+   581→   636→        ) : (
+   582→   637→          <div className="space-y-3">
+   583→   638→            <AnimatePresence mode="popLayout">
+   584→   639→              {filteredUsers.map((u) => (
+   585→   640→                <motion.div
+   586→   641→                  key={u.id}
+   587→   642→                  initial={{ opacity: 0, y: 12, scale: 0.98 }}
+   588→   643→                  animate={{ opacity: 1, y: 0, scale: 1 }}
+   589→   644→                  exit={{ opacity: 0, scale: 0.95 }}
+   590→   645→                  transition={{ type: "spring", stiffness: 280, damping: 26 }}
+   591→   646→                >
+   592→   647→                  <UserRow
+   593→   648→                    user={u}
+   594→   649→                    onAction={(action) => handleAction(u, action)}
+   595→   650→                    canEditRole={role === "ADMIN" || role === "SUPER_ADMIN"}
+   596→   651→                    onView360={u.role === "USER" ? setView360Target : undefined}
+   597→   652→                  />
+   598→   653→                </motion.div>
+   599→   654→              ))}
+   600→   655→            </AnimatePresence>
+   601→   656→          </div>
+   602→   657→        )}
+   603→   658→      </StaggerItem>
+   604→   659→
+   605→   660→      {/* Confirm dialog */}
+   606→   661→      <Dialog open={!!confirm} onOpenChange={(v) => !v && setConfirm(null)}>
+   607→   662→        <DialogContent className="glass-strong border-border/60 rounded-3xl max-w-md">
+   608→   663→          <DialogHeader>
+   609→   664→            <DialogTitle className="text-lg capitalize">
+   610→   665→              {confirm?.action.toLowerCase()} {confirm?.user.name}?
+   611→   666→            </DialogTitle>
+   612→   667→            <DialogDescription>
+   613→   668→              This action will change the user's status to{" "}
+   614→   669→              <span className="font-medium text-foreground">
+   615→   670→                {confirm && actionResultStatus(confirm.action)}
+   616→   671→              </span>
+   617→   672→              . A reason is required and will be logged.
+   618→   673→            </DialogDescription>
+   619→   674→          </DialogHeader>
+   620→   675→          <GlassTextarea
+   621→   676→            label="Reason"
+   622→   677→            rows={3}
+   623→   678→            placeholder={`Reason for ${confirm?.action.toLowerCase()}…`}
+   624→   679→            value={reason}
+   625→   680→            onChange={(e) => setReason(e.target.value)}
+   626→   681→          />
+   627→   682→          <DialogFooter className="gap-2">
+   628→   683→            <GlassButton variant="ghost" size="md" onClick={() => setConfirm(null)}>
+   629→   684→              Cancel
+   630→   685→            </GlassButton>
+   631→   686→            <GlassButton
+   632→   687→              variant={confirm?.action === "SUSPEND" || confirm?.action === "ARCHIVE" || confirm?.action === "REJECT" ? "danger" : "primary"}
+   633→   688→              size="md"
+   634→   689→              onClick={submitConfirm}
+   635→   690→              loading={actionMutation.isPending || rejectMutation.isPending}
+   636→   691→            >
+   637→   692→              Confirm
+   638→   693→            </GlassButton>
+   639→   694→          </DialogFooter>
+   640→   695→        </DialogContent>
+   641→   696→      </Dialog>
+   642→   697→
+   643→   698→      {/* Assign role dialog */}
+   644→   699→      <Dialog open={!!assignRole} onOpenChange={(v) => !v && setAssignRole(null)}>
+   645→   700→        <DialogContent className="glass-strong border-border/60 rounded-3xl max-w-md">
+   646→   701→          <DialogHeader>
+   647→   702→            <DialogTitle>Assign Role</DialogTitle>
+   648→   703→            <DialogDescription>
+   649→   704→              Change the role for{" "}
+   650→   705→              <span className="font-medium text-foreground">{assignRole?.name}</span>.
+   651→   706→            </DialogDescription>
+   652→   707→          </DialogHeader>
+   653→   708→          <div className="space-y-3">
+   654→   709→            <div>
+   655→   710→              <label className="mb-1.5 ml-1 block text-xs font-medium text-muted-foreground">Role</label>
+   656→   711→              <Select
+   657→   712→                value={newRole}
+   658→   713→                onValueChange={(v) => setNewRole(v as Role)}
+   659→   714→                disabled={lastAdminRoleLocked}
+   660→   715→              >
+   661→   716→                <SelectTrigger className="w-full glass-soft border-0">
+   662→   717→                  <SelectValue />
+   663→   718→                </SelectTrigger>
+   664→   719→                <SelectContent>
+   665→   720→                  <SelectItem value="USER">Resident</SelectItem>
+   666→   721→                  <SelectItem value="ADMIN">Admin</SelectItem>
+   667→   722→                </SelectContent>
+   668→   723→              </Select>
+   669→   724→            </div>
+   670→   725→            {lastAdminRoleLocked && (
+   671→   726→              <div className="rounded-2xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning flex items-start gap-2">
+   672→   727→                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+   673→   728→                <span>This is the only active administrator. Assign another active admin before changing this role.</span>
+   674→   729→              </div>
+   675→   730→            )}
+   676→   731→            {newRole === "ADMIN" && assignRole?.role === "USER" && (
+   677→   732→              <div className="rounded-2xl border border-primary/25 bg-primary/8 p-3 text-xs text-muted-foreground">
+   678→   733→                Admins do not have resident fund accounts and are excluded from Resident 360 financial/meal domains. Existing resident financial history remains historical and is not converted into an admin balance.
+   679→   734→              </div>
+   680→   735→            )}
+   681→   736→            <GlassTextarea
+   682→   737→              label="Reason (optional)"
+   683→   738→              rows={2}
+   684→   739→              placeholder="Why is this role being assigned?"
+   685→   740→              value={assignReason}
+   686→   741→              onChange={(e) => setAssignReason(e.target.value)}
+   687→   742→            />
+   688→   743→          </div>
+   689→   744→          <DialogFooter className="gap-2">
+   690→   745→            <GlassButton variant="ghost" size="md" onClick={() => setAssignRole(null)}>
+   691→   746→              Cancel
+   692→   747→            </GlassButton>
+   693→   748→            <GlassButton
+   694→   749→              variant="primary"
+   695→   750→              size="md"
+   696→   751→              onClick={submitAssignRole}
+   697→   752→              loading={actionMutation.isPending}
+   698→   753→              disabled={lastAdminRoleLocked && newRole !== "ADMIN" && newRole !== "SUPER_ADMIN"}
+   699→   754→            >
+   700→   755→              <Shield className="h-4 w-4" />
+   701→
+   702→[showing lines 56-755 of 1262; use offset=756 with limit to continue reading]

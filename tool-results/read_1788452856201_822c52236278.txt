@@ -1,0 +1,591 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Admin Meals — BoardOps kitchen-view layout.
+     5→ * Centered date capsule picker → 3 KPI cards → per-meal count cards with
+     6→ * color-tinted gradient glass → expandable resident meal-status rows with
+     7→ * admin override authority (reason-required confirm, audit trail).
+     8→ * GET /api/v1/admin/meals?date= · POST /meals/:instanceId/override
+     9→ */
+    10→
+    11→import { useMemo, useRef, useState } from "react";
+    12→import { AnimatePresence, motion } from "framer-motion";
+    13→import {
+    14→  Calendar,
+    15→  ChevronDown,
+    16→  ChevronLeft,
+    17→  ChevronRight,
+    18→  Lock,
+    19→  Plane,
+    20→  RotateCcw,
+    21→  ShieldCheck,
+    22→  UserPlus,
+    23→  UserRound,
+    24→  Users,
+    25→  Utensils,
+    26→  X,
+    27→  type LucideIcon,
+    28→} from "lucide-react";
+    29→import { toast } from "sonner";
+    30→import GlassCard from "@/components/glass/GlassCard";
+    31→import { KpiCard } from "@/components/glass/KpiCard";
+    32→import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
+    33→import MealOrb from "@/components/glass/MealOrb";
+    34→import StatusBadge from "@/components/glass/StatusBadge";
+    35→import EmptyState from "@/components/glass/EmptyState";
+    36→import ErrorState from "@/components/glass/ErrorState";
+    37→import { KpiGridSkeleton, ListSkeleton } from "@/components/glass/LoadingSkeleton";
+    38→import ConfirmDialog from "@/components/glass/ConfirmDialog";
+    39→import GlassToggle from "@/components/glass/GlassToggle";
+    40→import { GlassButton } from "@/components/glass/GlassButton";
+    41→import { useSession } from "@/hooks/use-session";
+    42→import { postJson } from "@/hooks/use-api-query";
+    43→import { ApiClientError } from "@/lib/api";
+    44→import { cn } from "@/lib/utils";
+    45→import { SPRING_SNAPPY } from "@/lib/motion";
+    46→import { useApiMetaQuery, errMessage, useInvalidate, metaNum } from "./_shared/api";
+    47→import { SearchField, mealIcon } from "./_shared/fields";
+    48→import { fmtTime, shiftDateKey, mealHex, initialsOf } from "./_shared/format";
+    49→
+    50→const MEALS_PATH = "/api/v1/admin/meals";
+    51→
+    52→interface MealInstanceEntry {
+    53→  instance: {
+    54→    id: string;
+    55→    serviceDate: string;
+    56→    serviceWindow: { startAt: string; endAt: string };
+    57→    cutoffAt: string;
+    58→    status: "OPEN" | "LOCKED" | string;
+    59→  };
+    60→  definition: { name: string; icon: string | null; colorToken: string | null; mealType: string };
+    61→  counts: { confirmed: number; off: number; guests: number; onLeave: number; notAvailable: number };
+    62→}
+    63→
+    64→interface ResidentMealEntry {
+    65→  residentId: string;
+    66→  fullName: string;
+    67→  roomNumber: string | null;
+    68→  monthlyMealCount: number;
+    69→  today: {
+    70→    mealInstanceId: string;
+    71→    residentMealId: string;
+    72→    name: string;
+    73→    effectiveState: string;
+    74→    effectiveReason: string;
+    75→    baselineState: string;
+    76→    residentSelectedState: string | null;
+    77→    adminOverrideState: string | null;
+    78→    overridden: boolean;
+    79→    locked: boolean;
+    80→    version: number;
+    81→  }[];
+    82→}
+    83→
+    84→interface MealsData {
+    85→  date: string;
+    86→  timezone: string;
+    87→  instances: MealInstanceEntry[];
+    88→  residents: ResidentMealEntry[];
+    89→}
+    90→
+    91→interface OverrideTarget {
+    92→  resident: ResidentMealEntry;
+    93→  meal: ResidentMealEntry["today"][number];
+    94→  state: "ON" | "OFF";
+    95→}
+    96→
+    97→/* ------------------------------- helpers -------------------------------- */
+    98→
+    99→function parseKey(key: string): Date {
+   100→  const [y, m, d] = key.split("-").map(Number);
+   101→  return new Date(Date.UTC(y, (m ?? 1) - 1, d ?? 1));
+   102→}
+   103→
+   104→function weekdayShort(key: string): string {
+   105→  return new Intl.DateTimeFormat("en-IN", { weekday: "short", timeZone: "UTC" }).format(parseKey(key));
+   106→}
+   107→
+   108→function dateShortLabel(key: string): string {
+   109→  return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }).format(parseKey(key));
+   110→}
+   111→
+   112→/** Capsule labels — relative for ±1 day, compact otherwise (BoardOps pattern). */
+   113→function datePillLabels(key: string, todayKey: string): { top: string; bottom: string } {
+   114→  const base = `${weekdayShort(key)}, ${dateShortLabel(key)}`;
+   115→  if (key === todayKey) return { top: "Today", bottom: base };
+   116→  if (key === shiftDateKey(todayKey, -1)) return { top: "Yesterday", bottom: base };
+   117→  if (key === shiftDateKey(todayKey, 1)) return { top: "Tomorrow", bottom: base };
+   118→  return { top: dateShortLabel(key), bottom: weekdayShort(key) };
+   119→}
+   120→
+   121→function stateLabel(state: string): string {
+   122→  switch (state) {
+   123→    case "ON":
+   124→      return "On";
+   125→    case "OFF":
+   126→      return "Off";
+   127→    case "ON_LEAVE":
+   128→      return "On leave";
+   129→    default:
+   130→      return "Not available";
+   131→  }
+   132→}
+   133→
+   134→/* ----------------------------- circle arrow ----------------------------- */
+   135→
+   136→function CircleArrow({
+   137→  direction,
+   138→  onClick,
+   139→  disabled,
+   140→  label,
+   141→}: {
+   142→  direction: "prev" | "next";
+   143→  onClick: () => void;
+   144→  disabled?: boolean;
+   145→  label: string;
+   146→}) {
+   147→  const Icon = direction === "prev" ? ChevronLeft : ChevronRight;
+   148→  return (
+   149→    <motion.button
+   150→      type="button"
+   151→      whileTap={{ scale: 0.9 }}
+   152→      onClick={onClick}
+   153→      disabled={disabled}
+   154→      aria-label={label}
+   155→      className="glass-strong flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-pill transition-colors hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+   156→    >
+   157→      <Icon className="size-5" aria-hidden />
+   158→    </motion.button>
+   159→  );
+   160→}
+   161→
+   162→/* -------------------------------- the view ------------------------------- */
+   163→
+   164→export default function AdminMeals() {
+   165→  const [dateParam, setDateParam] = useState<string | undefined>(undefined);
+   166→  const [search, setSearch] = useState("");
+   167→  const [expandedResident, setExpandedResident] = useState<string | null>(null);
+   168→  const [override, setOverride] = useState<OverrideTarget | null>(null);
+   169→  const [acting, setActing] = useState(false);
+   170→  const invalidate = useInvalidate();
+   171→  const { institution } = useSession();
+   172→  const tz = institution?.timezone ?? "Asia/Kolkata";
+   173→
+   174→  /** Server "today" — captured from the first (undated) fetch. */
+   175→  const todayKeyRef = useRef<string | null>(null);
+   176→
+   177→  const query = useApiMetaQuery<MealsData>(MEALS_PATH, { date: dateParam });
+   178→  const { isLoading, error, refetch, data: envelope } = query;
+   179→  const data = envelope?.data;
+   180→  const meta = envelope?.meta ?? {};
+   181→
+   182→  const activeDate = data?.date;
+   183→  if (activeDate && todayKeyRef.current === null) {
+   184→    todayKeyRef.current = activeDate;
+   185→  }
+   186→  const todayKey = todayKeyRef.current;
+   187→  const isToday = activeDate === todayKey;
+   188→
+   189→  const filteredResidents = useMemo(() => {
+   190→    const q = search.trim().toLowerCase();
+   191→    const list = data?.residents ?? [];
+   192→    if (!q) return list;
+   193→    return list.filter(
+   194→      (r) =>
+   195→        r.fullName.toLowerCase().includes(q) ||
+   196→        (r.roomNumber ?? "").toLowerCase().includes(q)
+   197→    );
+   198→  }, [data, search]);
+   199→
+   200→  /** Today's totals computed from the per-instance counts (BoardOps pattern).
+   201→   *  PER-TIME totals include guests (lunch 3 regular + 1 guest = 4 total). */
+   202→  const totals = useMemo(() => {
+   203→    const instances = data?.instances ?? [];
+   204→    return {
+   205→      meals: instances.reduce((s, c) => s + c.counts.confirmed + c.counts.guests, 0),
+   206→      guests: instances.reduce((s, c) => s + c.counts.guests, 0),
+   207→      off: instances.reduce((s, c) => s + c.counts.off, 0),
+   208→    };
+   209→  }, [data]);
+   210→
+   211→  /** Month KPI: regular meals only — guest meals are NEVER counted in the
+   212→   *  monthly total (they're charged separately at the guest price). */
+   213→  const metaTotalMeals = metaNum(meta, "totalMealsThisMonth");
+   214→  const metaGuestsThisMonth = metaNum(meta, "guestMealsThisMonth");
+   215→
+   216→  async function runOverride(reason: string | undefined) {
+   217→    if (!override) return;
+   218→    setActing(true);
+   219→    try {
+   220→      await postJson(`${MEALS_PATH}/${override.meal.mealInstanceId}/override`, {
+   221→        residentId: override.resident.residentId,
+   222→        state: override.state,
+   223→        reason,
+   224→      });
+   225→      invalidate([MEALS_PATH, "/api/v1/admin/dashboard"]);
+   226→      toast.success("Meal updated", {
+   227→        description: `${override.resident.fullName} · ${override.meal.name} → ${override.state === "ON" ? "On" : "Off"}`,
+   228→      });
+   229→      setOverride(null);
+   230→    } catch (err) {
+   231→      toast.error(errMessage(err));
+   232→    } finally {
+   233→      setActing(false);
+   234→    }
+   235→  }
+   236→
+   237→  if (isLoading && !data) {
+   238→    return (
+   239→      <div className="space-y-4">
+   240→        <div className="flex items-center justify-center gap-3 sm:gap-4">
+   241→          <div className="glass-skeleton size-10 rounded-pill" />
+   242→          <div className="glass-skeleton h-12 w-full max-w-[280px] rounded-pill" />
+   243→          <div className="glass-skeleton size-10 rounded-pill" />
+   244→        </div>
+   245→        <KpiGridSkeleton count={3} />
+   246→        <ListSkeleton rows={4} />
+   247→      </div>
+   248→    );
+   249→  }
+   250→
+   251→  if (error || !data) {
+   252→    return (
+   253→      <ErrorState
+   254→        code={(error as ApiClientError | undefined)?.code}
+   255→        message={(error as ApiClientError | undefined)?.message}
+   256→        onRetry={() => void refetch()}
+   257→      />
+   258→    );
+   259→  }
+   260→
+   261→  const daySub = isToday ? "Today" : activeDate ? dateShortLabel(activeDate) : undefined;
+   262→  const pill = activeDate ? datePillLabels(activeDate, todayKey ?? activeDate) : null;
+   263→
+   264→  return (
+   265→    <StaggerGroup className="space-y-4">
+   266→      {/* Date capsule — centered text + circular arrows (BoardOps pattern) */}
+   267→      <StaggerItem>
+   268→      <div className="flex items-center justify-center gap-3 sm:gap-4">
+   269→        <CircleArrow
+   270→          direction="prev"
+   271→          label="Previous day"
+   272→          disabled={!activeDate}
+   273→          onClick={() => activeDate && setDateParam(shiftDateKey(activeDate, -1))}
+   274→        />
+   275→        <button
+   276→          type="button"
+   277→          onClick={() => {
+   278→            if (activeDate && todayKey && activeDate !== todayKey) setDateParam(todayKey);
+   279→          }}
+   280→          className="glass flex min-w-0 max-w-[280px] flex-1 cursor-pointer items-center justify-center gap-2.5 rounded-pill px-4 py-2.5 transition-all hover:ring-1 hover:ring-primary/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:px-6"
+   281→        >
+   282→          <Calendar className="size-4 shrink-0 text-primary" aria-hidden />
+   283→          {pill && (
+   284→            <span className="min-w-0 text-center leading-tight">
+   285→              <span className="block truncate text-sm font-bold text-primary">{pill.top}</span>
+   286→              <span className="block truncate text-[11px] text-muted-foreground">{pill.bottom}</span>
+   287→            </span>
+   288→          )}
+   289→          {!isToday && <RotateCcw className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
+   290→        </button>
+   291→        <CircleArrow
+   292→          direction="next"
+   293→          label="Next day"
+   294→          disabled={!activeDate}
+   295→          onClick={() => activeDate && setDateParam(shiftDateKey(activeDate, 1))}
+   296→        />
+   297→      </div>
+   298→      </StaggerItem>
+   299→
+   300→      {/* KPI cards — month total (regular meals only, guests excluded) +
+   301→          today's live counts (per-time totals include guests) */}
+   302→      <StaggerItem>
+   303→      <div className="grid grid-cols-3 gap-3">
+   304→        <KpiCard
+   305→          label="Total Meals"
+   306→          value={String(metaTotalMeals ?? totals.meals)}
+   307→          sub="This month · guests not counted"
+   308→          icon={<Utensils />}
+   309→          glow="success"
+   310→          tone="success"
+   311→          index={0}
+   312→        />
+   313→        <KpiCard
+   314→          label="Guests"
+   315→          value={String(totals.guests)}
+   316→          sub={metaGuestsThisMonth != null ? `${daySub ?? "Today"} · ${metaGuestsThisMonth} this month` : daySub}
+   317→          icon={<UserPlus />}
+   318→          glow="primary"
+   319→          tone="primary"
+   320→          index={1}
+   321→        />
+   322→        <KpiCard
+   323→          label="Meals OFF"
+   324→          value={String(totals.off)}
+   325→          sub={`Skipped · ${daySub ?? "—"}`}
+   326→          icon={<X />}
+   327→          glow="warning"
+   328→          tone="warning"
+   329→          index={2}
+   330→        />
+   331→      </div>
+   332→      </StaggerItem>
+   333→
+   334→      {/* Per-meal count cards */}
+   335→      <StaggerItem>
+   336→      {data.instances.length === 0 ? (
+   337→        <EmptyState
+   338→          icon={Utensils}
+   339→          title="No meals configured for this date"
+   340→          description="Meal instances are generated from active meal definitions — check the schedule in Meal Configuration."
+   341→        />
+   342→      ) : (
+   343→        <div className="grid-cards gap-3">
+   344→          {data.instances.map((entry) => {
+   345→            const Icon = mealIcon(entry.definition.icon);
+   346→            const locked = entry.instance.status !== "OPEN";
+   347→            const hex = mealHex(entry.definition.colorToken);
+   348→            const total = entry.counts.confirmed + entry.counts.guests;
+   349→            return (
+   350→              <motion.div
+   351→                key={entry.instance.id}
+   352→                whileHover={{ y: -4, scale: 1.01 }}
+   353→                whileTap={{ scale: 0.98 }}
+   354→                transition={SPRING_SNAPPY}
+   355→                className="glass relative overflow-hidden rounded-xl"
+   356→                style={{
+   357→                  background: `linear-gradient(135deg, ${hex}2e 0%, ${hex}0a 55%, transparent 100%)`,
+   358→                  borderColor: `${hex}50`,
+   359→                  boxShadow: `0 8px 32px -10px ${hex}40, inset 0 1px 0 0 ${hex}22`,
+   360→                }}
+   361→              >
+   362→                <div
+   363→                  aria-hidden
+   364→                  className="pointer-events-none absolute -right-12 -top-12 size-32 rounded-full opacity-40 blur-3xl"
+   365→                  style={{ background: hex }}
+   366→                />
+   367→                <div className="relative p-5">
+   368→                  <div className="mb-3 flex items-start justify-between gap-3">
+   369→                    <MealOrb icon={<Icon />} colorToken={entry.definition.colorToken} size="lg" />
+   370→                    <div className="min-w-0 text-right">
+   371→                      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Service</p>
+   372→                      <p className="kpi-num mt-0.5 text-xs font-medium">
+   373→                        {fmtTime(entry.instance.serviceWindow.startAt, tz)} – {fmtTime(entry.instance.serviceWindow.endAt, tz)}
+   374→                      </p>
+   375→                    </div>
+   376→                  </div>
+   377→                  <h3 className="truncate text-base font-semibold">{entry.definition.name}</h3>
+   378→
+   379→                  <div className="mt-3 flex items-end justify-between gap-3">
+   380→                    <div>
+   381→                      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Total meals</p>
+   382→                      <p className="kpi-num mt-1 text-4xl font-bold leading-none tracking-tight">{total}</p>
+   383→                      <p className="kpi-num mt-1.5 text-[11px] text-muted-foreground">
+   384→                        {entry.counts.confirmed} regular{entry.counts.guests > 0 ? ` + ${entry.counts.guests} guest${entry.counts.guests === 1 ? "" : "s"}` : ""}
+   385→                      </p>
+   386→                    </div>
+   387→                    <div className="flex flex-col items-end gap-1">
+   388→                      <span className="kpi-num rounded-pill bg-primary/12 px-2 py-0.5 text-[10px] font-medium text-primary">
+   389→                        Regular: <strong>{entry.counts.confirmed}</strong>
+   390→                      </span>
+   391→                      <span
+   392→                        className="kpi-num rounded-pill px-2 py-0.5 text-[10px] font-medium"
+   393→                        style={{ backgroundColor: `${hex}25`, color: hex }}
+   394→                      >
+   395→                        Guests: <strong>{entry.counts.guests}</strong>
+   396→                      </span>
+   397→                      <span className="kpi-num rounded-pill bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
+   398→                        OFF: <strong>{entry.counts.off}</strong>
+   399→                      </span>
+   400→                    </div>
+   401→                  </div>
+   402→
+   403→                  <p className="mt-3 border-t border-border/30 pt-2.5 text-[11px] leading-relaxed text-muted-foreground">
+   404→                    {locked ? "Locked" : "Cutoff"} at {fmtTime(entry.instance.cutoffAt, tz)}
+   405→                    {entry.counts.onLeave > 0 && ` · ${entry.counts.onLeave} on leave`}
+   406→                    {entry.counts.notAvailable > 0 && ` · ${entry.counts.notAvailable} n/a`}
+   407→                  </p>
+   408→                </div>
+   409→              </motion.div>
+   410→            );
+   411→          })}
+   412→        </div>
+   413→      )}
+   414→      </StaggerItem>
+   415→
+   416→      {/* Resident meal status — expandable rows with admin override */}
+   417→      <StaggerItem>
+   418→      <section className="space-y-3">
+   419→        <GlassCard className="p-4">
+   420→          <div className="mb-3 flex flex-wrap items-center gap-2">
+   421→            <Users className="size-5 text-primary" aria-hidden />
+   422→            <h3 className="font-semibold">Resident meal status</h3>
+   423→            {activeDate && <span className="kpi-num text-xs text-muted-foreground">· {dateShortLabel(activeDate)}</span>}
+   424→            <span className="ml-auto text-xs text-muted-foreground">
+   425→              {filteredResidents.length} of {data.residents.length} residents
+   426→            </span>
+   427→          </div>
+   428→
+   429→          <div className="mb-3">
+   430→            <SearchField value={search} onChange={setSearch} placeholder="Filter residents by name or room…" />
+   431→          </div>
+   432→
+   433→          {filteredResidents.length === 0 ? (
+   434→            <EmptyState
+   435→              icon={UserRound}
+   436→              title={search ? "No residents match" : "No residents with meals today"}
+   437→              description={search ? "Try a different name or room." : "Active residents appear here once meals materialize."}
+   438→            />
+   439→          ) : (
+   440→            <div className="no-scrollbar max-h-[28rem] space-y-2 overflow-y-auto">
+   441→              {filteredResidents.map((r) => {
+   442→                const isExpanded = expandedResident === r.residentId;
+   443→                return (
+   444→                  <GlassCard key={r.residentId} className="overflow-hidden">
+   445→                    <button
+   446→                      type="button"
+   447→                      onClick={() => setExpandedResident(isExpanded ? null : r.residentId)}
+   448→                      aria-expanded={isExpanded}
+   449→                      className="flex w-full cursor-pointer items-center gap-3 p-3 text-left transition-colors hover:bg-foreground/[0.04] dark:hover:bg-white/[0.04]"
+   450→                    >
+   451→                      <span
+   452→                        aria-hidden
+   453→                        className="glass-inset flex size-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold text-primary"
+   454→                      >
+   455→                        {initialsOf(r.fullName)}
+   456→                      </span>
+   457→                      <span className="min-w-0 flex-1">
+   458→                        <span className="block truncate text-sm font-medium">{r.fullName}</span>
+   459→                        <span className="block truncate text-[11px] text-muted-foreground">
+   460→                          {r.roomNumber ? `Room ${r.roomNumber}` : "No room"}
+   461→                        </span>
+   462→                      </span>
+   463→                      <motion.span
+   464→                        animate={{ rotate: isExpanded ? 180 : 0 }}
+   465→                        transition={{ duration: 0.2 }}
+   466→                        className="flex shrink-0 items-center text-muted-foreground"
+   467→                      >
+   468→                        <ChevronDown className="size-4" aria-hidden />
+   469→                      </motion.span>
+   470→                    </button>
+   471→
+   472→                    <AnimatePresence initial={false}>
+   473→                      {isExpanded && (
+   474→                        <motion.div
+   475→                          initial={{ height: 0, opacity: 0 }}
+   476→                          animate={{ height: "auto", opacity: 1 }}
+   477→                          exit={{ height: 0, opacity: 0 }}
+   478→                          transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+   479→                          className="overflow-hidden"
+   480→                        >
+   481→                          <div className="space-y-2 px-3 pb-3">
+   482→                            {/* Monthly tally banner */}
+   483→                            <div className="flex items-center justify-between gap-2 rounded-lg bg-primary/10 p-2.5 ring-1 ring-primary/20">
+   484→                              <div className="flex min-w-0 items-center gap-2">
+   485→                                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/20 text-primary">
+   486→                                  <Utensils className="size-4" aria-hidden />
+   487→                                </span>
+   488→                                <span className="min-w-0">
+   489→                                  <span className="block text-[11px] font-medium leading-tight text-foreground/80">
+   490→                                    Total meals consumed
+   491→                                  </span>
+   492→                                  <span className="block text-[10px] leading-tight text-muted-foreground">
+   493→                                    This month
+   494→                                  </span>
+   495→                                </span>
+   496→                              </div>
+   497→                              <span className="kpi-num inline-flex h-9 min-w-10 shrink-0 items-center justify-center rounded-lg bg-primary px-2.5 text-lg font-bold text-primary-foreground shadow-sm">
+   498→                                {r.monthlyMealCount}
+   499→                              </span>
+   500→                            </div>
+   501→
+   502→                            {r.today.map((meal) => {
+   503→                              const instance = data.instances.find((i) => i.instance.id === meal.mealInstanceId);
+   504→                              const lockedNow = meal.locked || (instance && instance.instance.status !== "OPEN");
+   505→                              const isOn = meal.effectiveState === "ON";
+   506→                              const RowIcon: LucideIcon = mealIcon(instance?.definition.icon);
+   507→                              return (
+   508→                                <div key={meal.mealInstanceId} className="glass-inset rounded-md p-3">
+   509→                                  <div className="flex items-center gap-3.5">
+   510→                                    <MealOrb icon={<RowIcon />} colorToken={instance?.definition.colorToken} size="sm" />
+   511→                                    <div className="min-w-0 flex-1">
+   512→                                      <p className="truncate text-[15px] font-semibold leading-tight">{meal.name}</p>
+   513→                                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+   514→                                        {lockedNow && (
+   515→                                          <span className="inline-flex items-center gap-0.5 text-[10px] text-danger">
+   516→                                            <Lock className="size-2.5" aria-hidden /> Locked
+   517→                                          </span>
+   518→                                        )}
+   519→                                        {meal.overridden && (
+   520→                                          <span className="inline-flex items-center gap-0.5 rounded-pill bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+   521→                                            <ShieldCheck className="size-2.5" aria-hidden /> Overridden
+   522→                                          </span>
+   523→                                        )}
+   524→                                        {meal.effectiveState !== "ON" && meal.effectiveState !== "OFF" && (
+   525→                                          <StatusBadge status={meal.effectiveState} label={stateLabel(meal.effectiveState)} />
+   526→                                        )}
+   527→                                      </div>
+   528→                                    </div>
+   529→                                    <GlassToggle
+   530→                                      checked={isOn}
+   531→                                      onChange={() =>
+   532→                                        setOverride({
+   533→                                          resident: r,
+   534→                                          meal,
+   535→                                          state: isOn ? "OFF" : "ON",
+   536→                                        })
+   537→                                      }
+   538→                                      label={`${meal.name} for ${r.fullName} — currently ${stateLabel(meal.effectiveState)}. Admin override to ${isOn ? "off" : "on"}.`}
+   539→                                    />
+   540→                                  </div>
+   541→                                  <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+   542→                                    Baseline {meal.baselineState === "ON" ? "on" : "off"}
+   543→                                    {meal.residentSelectedState
+   544→                                      ? ` · resident chose ${meal.residentSelectedState === "ON" ? "on" : "off"}`
+   545→                                      : ""}
+   546→                                    {instance ? ` · cutoff ${fmtTime(instance.instance.cutoffAt, tz)}` : ""}
+   547→                                  </p>
+   548→                                </div>
+   549→                              );
+   550→                            })}
+   551→                          </div>
+   552→                        </motion.div>
+   553→                      )}
+   554→                    </AnimatePresence>
+   555→                  </GlassCard>
+   556→                );
+   557→              })}
+   558→            </div>
+   559→          )}
+   560→        </GlassCard>
+   561→      </section>
+   562→      </StaggerItem>
+   563→
+   564→      {/* Override confirm — reason required for the audit trail */}
+   565→      {override && (
+   566→        <ConfirmDialog
+   567→          open
+   568→          onOpenChange={(open) => !open && setOverride(null)}
+   569→          title={`${override.state === "ON" ? "Turn meal on" : "Turn meal off"} — ${override.meal.name}`}
+   570→          description={
+   571→            <>
+   572→              {override.meal.locked
+   573→                ? "This meal is already locked for residents. Your admin override applies after the cutoff and is recorded in the audit trail with your reason."
+   574→                : "The resident's own choice is replaced by your decision. Residents are notified and the change is audited."}
+   575→              <span className="mt-2 block font-medium">
+   576→                {override.resident.fullName} · {override.meal.name} → {override.state === "ON" ? "On" : "Off"}
+   577→              </span>
+   578→            </>
+   579→          }
+   580→          confirmLabel={override.state === "ON" ? "Set on" : "Set off"}
+   581→          tone={override.state === "OFF" ? "destructive" : "primary"}
+   582→          requireReason
+   583→          reasonPlaceholder="Reason (required for the audit trail)"
+   584→          loading={acting}
+   585→          onConfirm={(reason) => void runOverride(reason)}
+   586→        />
+   587→      )}
+   588→    </StaggerGroup>
+   589→  );
+   590→}
+   591→

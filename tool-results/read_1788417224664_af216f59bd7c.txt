@@ -1,0 +1,1060 @@
+     1→# PROJECT WORKLOG — Resident Meal, Finance & Operations Platform
+     2→
+     3→This is the SHARED worklog. Every agent MUST read this file before working and MUST append
+     4→their section after finishing (append only, never overwrite).
+     5→
+     6→---
+     7→
+     8→Task ID: 0
+     9→Agent: Main Orchestrator (Z.ai Code)
+    10→Task: Read the full 7,632-line master spec, analyze, and produce the master plan/contracts.
+    11→
+    12→Work Log:
+    13→- Read entire spec at /home/z/my-project/upload/Pasted Content_1788376605170.txt (320 numbered sections)
+    14→- Inspected sandbox: Next.js 16.1.3 (App Router, Turbopack, port 3000, dev server RUNNING), React 19,
+    15→  Tailwind CSS 4, full shadcn/ui set in src/components/ui, Prisma 6 + SQLite (db/custom.db),
+    16→  framer-motion, zod 4, TanStack Query, sonner, lucide-react, z-ai-web-dev-sdk.
+    17→- Verified dev server responds 200 on /
+    18→
+    19→## ENVIRONMENT ADAPTATIONS (documented decisions — spec §0 "choose safest behavior + document")
+    20→1. Spec asks for NestJS+PostgreSQL+Redis monorepo. Sandbox constraint: single Next.js 16 app on port 3000
+    21→   with Prisma/SQLite only. DECISION: implement the spec's DOMAIN MODEL, INVARIANTS, and UX as a
+    22→   modular-monolith Next.js app: App Router API routes under `/api/v1/*` act as the REST API layer
+    23→   (mirroring the NestJS module boundaries via folder-per-module + domain services in src/lib/domain).
+    24→   Redis replaced by in-memory rate limiting. Money stays integer minor units; ledger stays double-entry.
+    25→2. Spec asks for `/admin/*` + `/app/*` routes. Sandbox constraint: user can only see `/`.
+    26→   DECISION: single-page app at `/` with hash-based routing (e.g. `#/admin/meals`, `#/app/billing`).
+    27→   Hash router gives back-button support + shareable state without extra Next.js routes.
+    28→3. Spec asks `__Host-session` cookie. Sandbox serves over internal HTTP proxy.
+    29→   DECISION: cookie name `mes_session`, HttpOnly, SameSite=Lax, Path=/, 30d expiry. Session tokens are
+    30→   256-bit random, only SHA-256 hash stored server-side (spec §10 honored). Documented for prod swap.
+    31→4. Spec asks Argon2id. Native module risk in sandbox. DECISION: Node built-in `scrypt` (memory-hard,
+    32→   per-user salt, params stored with hash, timingSafeEqual compare). Documented ADR swap for prod.
+    33→5. File proofs stored on private filesystem folder `uploads-storage/` (never under public/) with random
+    34→   object keys + sha256 checksums + magic-byte validation, served only via authenticated endpoint.
+    35→6. Cutoffs/locking are ALWAYS computed from server time (spec §16) — browsers only render countdowns.
+    36→
+    37→## MASTER ARCHITECTURE
+    38→
+    39→### Repository layout (single Next.js app, modular monolith)
+    40→```
+    41→src/
+    42→  app/
+    43→    layout.tsx                     # fonts, ThemeProvider, Toaster, QueryProvider
+    44→    page.tsx                       # THIN: renders <AppRoot /> (client SPA)
+    45→    globals.css                    # Liquid Glass design tokens + primitives styling
+    46→    api/v1/
+    47→      auth/                        # register, login, logout, me, policies (public)
+    48→      me/                          # profile, notifications, dashboard (resident)
+    49→      meals/                       # resident meal list, toggle
+    50→      guest-meals/ leave-requests/ billing/ bills/ payments/ tasks/ announcements/
+    51→      search/ files/ health/
+    52→      admin/
+    53→        residents/ users/ meals/ meal-definitions/ meal-instances/ leave-requests/
+    54→        guest-meals/ payments/ expenses/ refunds/ funds/ ledger/ formulas/ billing/
+    55→        billing-periods/ tasks/ task-submissions/ calendar/ announcements/ notifications/
+    56→        settings/ policies/ audit/ ai/
+    57→  components/
+    58→    glass/                         # design primitives (GlassCard, KpiCard, StatusBadge, Segmented,
+    59→                                   # GlassSheet, AppBar, BottomNav, Sidebar, EmptyState, ErrorState,
+    60→                                   # PageHeader, FilterSheet, ConfirmDialog, MoneyInput, Toggle, ...)
+    61→    app/
+    62→      AppRoot.tsx                  # auth gate + role shell + hash router
+    63→      AuthScreen.tsx               # login/register tabs (+ policy acceptance on register)
+    64→      router.ts                    # hash router + route registry (ALL routes defined here)
+    65→      nav.ts                       # navigation model per role (bottom nav mobile / sidebar desktop)
+    66→      admin/                       # ONE FOLDER PER VIEW: dashboard, meals, payments, residents,
+    67→                                   # resident360, funds, expenses, meal-configuration, formulas,
+    68→                                   # billing, tasks, calendar, announcements, notifications,
+    69→                                   # settings, audit
+    70→      resident/                    # dashboard, meals, billing, payments, tasks, profile, notifications
+    71→      shared/                      # cross-role domain components (BillCalculation, ActivityFeed, ...)
+    72→  lib/
+    73→    db.ts                          # prisma client (exists)
+    74→    money.ts                       # integer minor units, format ₹, round-half-up helpers (THE rounding)
+    75→    time.ts                        # institution-timezone helpers via Intl (no external tz lib)
+    76→    ids.ts                         # PAY-YYYYMM-#### / EXP-… / BILL-YYYYMM-#### display numbers
+    77→    errors.ts                      # ApiError + domain codes (MEAL_CUTOFF_PASSED, ...) + envelope
+    78→    api.ts                         # client fetch helper (typed envelopes) + useApi hooks support
+    79→    validation.ts                  # zod schemas shared by routes
+    80→    auth/
+    81→      password.ts                  # scrypt hash/verify (params stored)
+    82→      session.ts                   # create/rotate/revoke, cookie helpers, getSessionUser()
+    83→      guard.ts                     # requireAdmin / requireResident / ownership helpers
+    84→    audit.ts                       # appendAudit() — always inside same transaction as mutation
+    85→    outbox.ts                      # appendOutbox() + simple sweeper (notifications/email decoupled)
+    86→    notify.ts                      # createNotification() (in-transaction)
+    87→    storage.ts                     # upload validation (JPEG/PNG/PDF magic bytes, 2MB), sha256, keys
+    88→    domain/
+    89→      meal-engine.ts               # THE deterministic state-precedence engine (spec §28)
+    90→      instance-service.ts          # ensureInstancesForDate() generation from definitions
+    91→      ledger.ts                    # postJournal() balanced double-entry, account codes
+    92→      funds.ts                     # read model: deposits/consumed/available/amountToPay/deficit
+    93→      formula/ast.ts               # AST types
+    94→      formula/parser.ts            # tokenizer + recursive-descent parser (NO eval ever)
+    95→      formula/evaluator.ts         # safe evaluation, FORMULA_DIVIDE_BY_ZERO guard
+    96→      formula/variables.ts         # whitelist registry w/ labels+sources
+    97→      formula/nl.ts                # natural-language → candidate AST (uses z-ai-web-dev-sdk LLM)
+    98→      billing.ts                   # readiness checks, snapshot, bill calc w/ provenance lines
+    99→      deficit.ts                   # financial-policy state (AVAILABLE/GRACE/RESTRICTED/EXEMPT)
+   100→```
+   101→
+   102→### API ENVELOPE (all /api/v1 routes)
+   103→Success: `{ ok: true, data: <T>, meta?: { requestId, cursor?, total? } }`
+   104→Failure: `{ ok: false, error: { code: "DOMAIN_CODE", message: "plain-language", fields?: {...}, requestId } }`
+   105→HTTP status 4xx/5xx. Domain codes used by frontend for friendly copy. requestId = crypto.randomUUID().
+   106→
+   107→### AUTH
+   108→- POST /api/v1/auth/register  { email, password, fullName, phone?, room?, acceptances:[{policyId, policyVersionId}] }
+   109→  → user PENDING_APPROVAL (+ status history + policy acceptance rows). Login allowed ONLY when ACTIVE.
+   110→- POST /api/v1/auth/login { email, password } → session cookie; generic failure message (no enumeration).
+   111→- POST /api/v1/auth/logout. GET /api/v1/auth/me → { user, profile, institution, role }.
+   112→- GET /api/v1/auth/policies → active policy versions (public for registration).
+   113→- Sessions: token 32B random base64url; store sha256(token); rotation on login; revoke on deactivate.
+   114→
+   115→### ROLE MODEL (ONLY TWO — spec §8)
+   116→ADMIN, RESIDENT. Backend guards on EVERY route + ownership checks (resident can only see own data).
+   117→Registration → PENDING_APPROVAL → (APPROVE→ACTIVE | REQUEST_CHANGES→CHANGES_REQUESTED | REJECT→REJECTED);
+   118→ACTIVE → INACTIVE / PENDING_DELETION. Status history table records every transition w/ reason.
+   119→
+   120→### MONEY (spec §17-18)
+   121→All amounts Int paise (`amountMinor`). `lib/money.ts`: fromDecimal/toDecimal (string math), format with
+   122→en-IN grouping (₹1,84,320.00), round-half-up ONLY in lib/money.ts. Client shows; server computes.
+   123→
+   124→### MEAL ENGINE (spec §24-33)
+   125→- meal_definitions (config) → meal_definition_versions (immutable snapshots) → meal_instances
+   126→  (per definition+date, unique) → resident_meals (unique resident+instance).
+   127→- Precedence (engine, deterministic): instance missing→NOT_AVAILABLE; membership not active for
+   128→  serviceDate→NOT_AVAILABLE; not visible→NOT_AVAILABLE; calendar disableMeals→NOT_AVAILABLE(reason CALENDAR);
+   129→  approved leave covering date→ON_LEAVE; deficit policy RESTRICTED→NOT_AVAILABLE(reason POLICY);
+   130→  else resident selected state (before cutoff) or baseline default; admin_override_state overrides
+   131→  everything for that instance; after cutoffAt → locked for residents; admin override post-lock allowed
+   132→  with mandatory reason + audit. effective_state + effective_reason always stored.
+   133→- Toggle endpoint: POST /api/v1/meals/:instanceId/toggle { state, expectedVersion } — server-time cutoff
+   134→  check inside transaction, optimistic version check (RESOURCE_CHANGED on stale).
+   135→- Mid-month join: membershipEffectiveFrom — meals before join cutoff = NOT_AVAILABLE (no retro ON).
+   136→- New active resident: defaults applied ONLY to instances with cutoff still in future.
+   137→
+   138→### FINANCE (spec §19-20, 37-44)
+   139→- ledger_accounts by code: CASH, RESIDENT_RECEIVABLE, GUEST_INCOME, MESS_EXPENSE, OPERATING_EXPENSE,
+   140→  REFUND_PAYABLE (per institution). postJournal({entries:[{accountCode, debitMinor, creditMinor}],
+   141→  refType, refId, description}) — verifies SUM(debits)=SUM(credits), never mutates posted journals.
+   142→- Payment submit (resident, proof optional file, idempotency key) → PENDING. Admin approve: txn{ lock
+   143→  row, verify PENDING, mark APPROVED, post journal Dr CASH / Cr RESIDENT_RECEIVABLE, audit, outbox }.
+   144→  Reject/void similar. Refund: checks available credit (funds read model), mode CARRY_FORWARD or
+   145→  ISSUE_REFUND w/ journal. Expense (admin) w/ items (server recomputes line totals + total), approve
+   146→  posts journal Dr MESS_EXPENSE / Cr CASH; void creates reversal journal (never delete approved).
+   147→- Funds read model derives everything from ledger + bills (no mutable balance column).
+   148→
+   149→### FORMULA ENGINE (spec §45-53) — security critical
+   150→- Whitelisted variables: total_market_cost, total_guest_income, total_consumed_resident_meals,
+   151→  total_guest_meals, total_approved_expenses, resident_consumed_meals, resident_guest_meals.
+   152→- Operators: + - * / ( ) SUM MIN MAX ROUND IF. Parser → typed AST (JSON). Evaluator with integer/decimal
+   153→  safe math (BigInt/Number paise), divide-by-zero → FORMULA_DIVIDE_BY_ZERO (blocks billing).
+   154→- NL mode: POST /api/v1/admin/formulas/parse-nl { text } → LLM (z-ai-web-dev-sdk) returns candidate AST
+   155→  JSON → server VALIDATES (whitelist + parse) → preview with current-period numbers → explicit Save.
+   156→  NL output NEVER executes without validation. UI always shows "I understood this as: …" preview.
+   157→- formula_versions immutable; new version effective from NEXT period by default; applying to OPEN period
+   158→  requires impact simulation + explicit confirm; CLOSED/BILLED never recalculated.
+   159→
+   160→### BILLING (spec §52-59)
+   161→- billing_periods unique (institution, year, month). OPEN→CLOSING→BILLED (+REOPENED restricted).
+   162→- Readiness endpoint runs full checks (payments↔ledger reconcile, expenses↔ledger, no PENDING financials
+   163→  required, formula valid, meal duplicates none, instances complete, etc.) → human-readable results.
+   164→- Generate: advisory lock (SQLite: transaction serialization + status guard), re-run readiness, snapshot
+   165→  ALL inputs to billing_snapshots (JSON + checksum), compute meal charge from active formula version,
+   166→  create bills + bill_lines w/ full provenance (qty × unit), adjustments, payments applied, status BILLED.
+   167→- Client confirm requires arithmetic answer (e.g. "2 + 9 = [11]") verified server-side.
+   168→- Bill numbers: BILL-YYYYMM-NNNN. Corrections on closed periods = adjustments only (bill_adjustments).
+   169→
+   170→### TASKS (spec §60-62)
+   171→ASSIGNED → (REJECT w/ reason | ACCEPT → IN_PROGRESS → SUBMITTED) → admin (REJECTED_BY_ADMIN | APPROVED).
+   172→Approve txn: creates official expense w/ items linked by sourceTaskSubmissionId (unique → no dup money).
+   173→
+   174→### COMMS + AUDIT (spec §63-66, 73)
+   175→- announcements (targeted, escaped text only), notifications (system-generated, read_at), audit_events
+   176→  (append-only, actor/action/entity/before/after/reason/requestId), outbox_events (+ sweeper).
+   177→
+   178→### DESIGN LANGUAGE — "Liquid Glass" (spec §100-126) — MANDATORY
+   179→- Premium, quiet, Apple-inspired. NOT default shadcn look. Dense frosted materials:
+   180→  light glass `rgba(255,255,255,0.78–0.88)` + `backdrop-filter: blur(20-28px) saturate(140%)`;
+   181→  dark glass `rgba(18,20,24,0.8–0.9)` + same blur. 1px hairline borders w/ inner top highlight.
+   182→- Radius tokens: xs 10, sm 14, md 18, lg 22, xl 28, sheet 32, pill 999. Spacing 4-based scale.
+   183→- Color families: Frost (teal-emerald primary accent — NO indigo/blue per environment rule), Graphite,
+   184→  Cloud, Ink, Emerald success, Amber warning, Red danger. Semantic > decorative. WCAG AA on glass.
+   185→- Motion: spring physics (framer-motion), button press scale 0.97-0.985, page fade/slide 180-280ms,
+   186→  toggle thumb springs + rollback animation on server reject, toasts spring, KPI number interpolation,
+   187→  tab indicator shared-layout, prefers-reduced-motion honored. 60fps compositor props only.
+   188→- Mobile-first 320px. Bottom nav (admin: Home/Meals/Money/Tasks/More; resident: Home/Meals/Billing/
+   189→  Payments/Tasks). Tablet: rail. Desktop 1200px+: persistent sidebar, restrained max width (~1440px).
+   190→- Sticky footer: root wrapper min-h-screen flex-col, footer mt-auto (env requirement).
+   191→- Safe-area insets, 44px touch targets, skeletons (no aggressive shimmer), empty/error states with
+   192→  plain-language copy + domain-code mapping. Dark mode designed separately (denser glass).
+   193→
+   194→### SEED (development-only; obvious non-production data)
+   195→admin@messtest.in / Admin#12345 ; resident demos: sahid@messtest.in, riya@…, arjun@…, meera@…, farhan@…
+   196→password Resident#12345 ; pending resident: newres@messtest.in. Login screen shows a "Development seed"
+   197→panel listing these (dev convenience only). Institution: Aurora Residency Mess, Asia/Kolkata, INR.
+   198→
+   199→### AGENT RULES
+   200→- NEVER modify: prisma/schema.prisma (frozen contract by Task 1 — if something is missing, note it in
+   201→  worklog and work around it), src/lib/db.ts, src/components/ui/* (use as-is), package.json deps
+   202→  (everything needed exists), Caddyfile, next.config.ts.
+   203→- Every agent works ONLY in its assigned folders. Shared files (page.tsx, AppRoot, router, nav,
+   204→  globals.css) may only be touched by the agent explicitly assigned to them.
+   205→- Use `bun run lint` before finishing. API routes: use Route Handler exports (GET/POST/PATCH...),
+   206→  zod-validate ALL inputs, never trust client totals/status/ids (derive resident from session).
+   207→- Money: Int paise everywhere. Use lib/money.ts.
+   208→- Run `bun run db:generate` after schema changes if needed — schema won't change after Task 1.
+   209→
+   210→Stage Summary:
+   211→- Spec fully analyzed; environment adaptations documented; master contracts established above.
+   212→- All subsequent agents MUST follow the file map, API envelope, domain rules, and design language here.
+   213→
+   214→---
+   215→Task ID: 1-a, 1-b, 1-c, 1-d
+   216→Agent: Main Orchestrator (Z.ai Code)
+   217→Task: Database schema + shared core libraries + brand assets
+   218→
+   219→Work Log:
+   220→- Wrote prisma/schema.prisma: 38 models — Institution(+Settings,+SecuritySettings), Policy/PolicyVersion/
+   221→  UserPolicyAcceptance, User/UserProfile/UserStatusHistory/Session, MealDefinition/MealDefinitionVersion/
+   222→  MealInstance/ResidentMeal, GuestMealRequest, LeaveRequest, CalendarEvent, StoredFile, Payment/
+   223→  PaymentStatusHistory, Refund, ExpenseCategory/Expense/ExpenseItem, LedgerAccount/LedgerJournal/
+   224→  LedgerEntry, FormulaDefinition/FormulaVersion, BillingPeriod/BillingSnapshot/Bill/BillLine/
+   225→  BillAdjustment, Task/TaskItem/TaskSubmission/TaskSubmissionItem, Announcement, Notification,
+   226→  AuditEvent, OutboxEvent, IdempotencyRecord, DeletionRequest. Enums→Strings (SQLite). Money = Int paise.
+   227→- `bun run db:push` → "The database is already in sync" ✓ (db/custom.db)
+   228→- Shared libs created:
+   229→  - src/lib/money.ts (parseDecimalToMinor, formatMinor en-IN ₹, divideMinorRoundHalfUp, multiplyRoundHalfUp)
+   230→  - src/lib/time.ts (partsInTz, zonedTimeToUtc 2-pass, computeCutoffAt, computeServiceWindow, monthBoundsInTz,
+   231→    weekdayOfKey, greetingFor, format labels)
+   232→  - src/lib/errors.ts (ApiError + CODES registry + ok()/fail() envelopes with requestId)
+   233→  - src/lib/ids.ts (PAY-/EXP-/BILL-YYYYMM-NNNN sequence w/ uniqueness retry)
+   234→  - src/lib/institution.ts (getInstitution w/ 60s cache + invalidate)
+   235→  - src/lib/auth/password.ts (scrypt N=16384,r=8,p=1, params stored, timingSafeEqual, passwordProblems)
+   236→  - src/lib/auth/session.ts (opaque 32B token, sha256 stored, rotation on login, revoke all, cookie helpers)
+   237→  - src/lib/auth/guard.ts (route() wrapper: auth modes PUBLIC/ANY/ADMIN/RESIDENT, params resolve, zod
+   238→    parseBody helper, assertOwnership) — ALL api routes MUST use route()
+   239→  - src/lib/audit.ts (appendAudit(tx)), src/lib/outbox.ts (appendOutbox + sweepOutbox→notifications)
+   240→  - src/lib/storage.ts (magic-byte JPEG/PNG/PDF validation, 2MB, sha256, uploads-storage/ private dir)
+   241→  - src/lib/rate-limit.ts (in-memory sliding window), src/lib/api.ts (client fetch + ApiClientError)
+   242→  - src/lib/validation.ts (shared zod: email/password/fullName/methods/reason/dateKey/money parse)
+   243→- Brand assets via image-generation skill: public/auth-bg-light.png, public/auth-bg-dark.png (1152x864),
+   244→  public/logo-mark.png (1024x1024)
+   245→- `bun run lint` → clean ✓
+   246→
+   247→Stage Summary:
+   248→- Schema is FROZEN. Agents must not modify prisma/schema.prisma.
+   249→- All shared libs are FROZEN contracts — import them, do not rewrite them.
+   250→- route() from src/lib/auth/guard.ts is mandatory for every /api/v1 route file.
+   251→- Brand assets ready at public/auth-bg-light.png, public/auth-bg-dark.png, public/logo-mark.png.
+   252→
+   253→---
+   254→Task ID: 2
+   255→Agent: Frontend Design Lead (Liquid Glass design system + app shell)
+   256→Task: Design system (globals.css tokens + materials), glass primitives, app shell
+   257→(hash router, role nav, AppBar/BottomNav/Sidebar/MoreSheet), AuthScreen, hooks,
+   258→layout/page wiring, and stub views for every route.
+   259→
+   260→Work Log:
+   261→- globals.css: kept shadcn CSS-variable base + @theme inline, EXTENDED with:
+   262→  radius scale (xs 10 → sheet 32, pill 999), glass fills (light rgba(255,255,255,.80/.88),
+   263→  dark rgba(18,20,24,.82/.90)), blur/saturate tokens (24-28px, 145-155%), hairline borders +
+   264→  inset top highlights, shadow tokens, z-index scale vars, Frost oklch(0.51 0.079 178) primary
+   265→  (teal-emerald, NO blue/indigo), success/warning/danger semantic colors, chart family,
+   266→  dark = designed denser variant. Utilities (unlayered so they beat Tailwind utilities in
+   267→  cascade — required for reskinning shadcn dialog/sheet/dropdown): .glass/.glass-strong/
+   268→  .glass-inset (NO backdrop-filter for nested)/.glass-nav/.glass-fallback(@supports)/
+   269→  .glass-skeleton (soft pulse)/.kpi-num (tnum+lnum)/.no-scrollbar/.safe-b. app-bg = layered
+   270→  radial gradients (light cream/sage, dark ink/teal glow) as fixed z-index:-1 layer in layout
+   271→  (real content for backdrop-filter to blur). auth screen composites /auth-bg-*.png at 13-16%
+   272→  opacity under gradients. Thin translucent scrollbars (webkit+firefox), ::selection,
+   273→  prefers-reduced-motion global kill.
+   274→- src/components/glass (20 primitives): GlassCard (interactive spring hover/tap 0.992,
+   275→  keyboard), KpiCard (AnimatedNumber via useMotionValue/useSpring, parses "₹1,23,456.00" prefix/
+   276→  suffix/decimals, reduced-motion static, delta chip, KpiSkeleton), StatusBadge (status→tone
+   277→  vocabulary: ON/APPROVED emerald, PENDING/LOCKED/ON_LEAVE/OFF graphite, ADMIN_OVERRIDE amber,
+   278→  REJECTED/RESTRICTED red, OPEN/BILLED frost; text+dot never color-only), SegmentedControl
+   279→  (layoutId sliding pill, radiogroup + arrow keys), GlassToggle (iOS switch: spring thumb,
+   280→  track color interpolation, icon crossfade, role=switch/aria-checked), GlassButton
+   281→  (primary/secondary/ghost/destructive, ≥44px, press 0.985 spring, specular top highlight,
+   282→  loading keeps width), PageHeader, EmptyState/ErrorState (domain-code → friendly copy +
+   283→  retry), LoadingSkeleton (pulse blocks), FilterSheet (mobile bottom sheet 32px top radius +
+   284→  drag indicator over reskinned shadcn Sheet; desktop inline glass card), ConfirmDialog
+   285→  (consequence copy, optional mandatory reason, focus trap/ESC via Radix; reason state in
+   286→  mount-fresh child — no setState-in-effect), AppBar (mobile top: title, bell w/ unread badge,
+   287→  avatar dropdown w/ theme toggle + sign out), BottomNav (5 slots, layoutId active pill,
+   288→  safe-area-inset-bottom), Sidebar (260px glass, groups, active bar + tint, unread badge on
+   289→  Notifications, theme + sign out), MoreSheet (admin overflow grid), Money (client-safe
+   290→  formatMinor duplicate of lib/money.ts — en-IN ₹ 2dp), ActivityItem, SectionHeading, TabRow
+   291→  (scrollable tabs w/ layoutId pill).
+   292→- src/hooks: use-hash-route (parse/subscribe/navigateTo/goBack/replaceHash), use-api-query
+   293→  (TanStack wrapper over api/apiGet from @/lib/api — IMPORT ONLY, retry:false, useApiMutation
+   294→  + postJson/patchJson/deleteJson helpers), use-session (/api/v1/auth/me, error→unauth,
+   295→  logout() clears query cache), use-breakpoint (lg 1024 desktop), use-mounted
+   296→  (useSyncExternalStore — hydration-safe, lint-clean).
+   297→- App shell: nav.ts (ADMIN/RESIDENT NavItem arrays w/ bottomNav + desktop groups exactly per
+   298→  spec; bottomNavItems/sidebarGroups/navItemByKey helpers), router.ts (resolveRoute: sections,
+   299→  views, #/admin/residents/:id → resident360 w/ param, unknown→role default, useRoute gates
+   300→  URL normalization until session resolved so deep links survive), AppRoot.tsx (loading curtain
+   301→  → AuthScreen → role shell; page transitions keyed by route (fade+8px rise 240ms, reduced
+   302→  motion honored); AppBar+BottomNav mobile / Sidebar lg+ / lg:pl-[260px]; max-w-1400px content;
+   303→  sticky footer mt-auto: institution · ticking clock in institution tz (30s) · Liquid Glass
+   304→  v0.1 chip; bell polls /api/v1/notifications?unread=1 every 30s — count derived defensively
+   305→  (graceful when 404); admin mobile "More" → MoreSheet; unknown/cross-role hash renders role
+   306→  default + replaceState normalizes URL), providers.tsx (next-themes class/system, QueryClient
+   307→  retry:false, sonner Toaster glass-skinned).
+   308→- AuthScreen: desktop split-screen (brand panel: auth-bg image 13% under gradients + logo +
+   309→  "Aurora Mess" + tagline + 3 quiet feature rows; right: GlassCard strong w/ SegmentedControl).
+   310→  Sign-in: mapped error copy for INVALID_CREDENTIALS/ACCOUNT_PENDING/ACCOUNT_REJECTED +
+   311→  generic; password reveal; loading button. Register: fullName/email/phone/room/password/
+   312→  confirm, client validation mirrors lib/validation (password ≥10 + upper/lower/digit),
+   313→  policies from GET /api/v1/auth/policies with unknown-shape normalization; when endpoint
+   314→  missing (current state) → amber notice + local fallback acknowledgement checkbox (not sent);
+   315→  ApiClientError.fields → per-field errors; success → "Application submitted — waiting for
+   316→  approval" screen. Dev seed panel (spec §191): collapsible dashed DEV-only block listing
+   317→  admin@messtest.in/Admin#12345 + sahid@messtest.in/Resident#12345 with Fill buttons (sign-in
+   318→  side only). Spring entrance (fade+rise), reduced-motion respected.
+   319→- layout.tsx: Inter (next/font/google, 400-700, display swap, tabular-nums via .kpi-num) +
+   320→  Geist Mono, ThemeProvider/QueryClient/Toaster via Providers, viewport metadata (viewportFit
+   321→  cover, themeColor light #F5F3ED / dark #0C0F13), title "Aurora Mess", <div class="app-bg"/>
+   322→  outside content. page.tsx: thin server component → <AppRoot/>.
+   323→- Stub views: all 16 admin + 7 resident files via shared stub-view helper (PageHeader + KPI
+   324→  skeleton grid + "Coming in the next build step" GlassCard). resident360 accepts { id }.
+   325→- VERIFIED (agent-browser + VLM): SSR 200 HTML with app-bg + curtain; /auth/me 404 →
+   326→  AuthScreen renders (no crash loop); mocked session → admin & resident shells render
+   327→  (sidebar groups, bottom nav, AppBar badge 3 unread, footer clock); deep links survive auth
+   328→  gate (#/admin/meals, #/admin/residents/res_abc123 → "Resident 360°" w/ param visible);
+   329→  MoreSheet navigates + closes; register tab + policy fallback notice; seed Fill buttons
+   330→  populate inputs; 320px viewport: NO horizontal scroll, 44px+ targets; dark mode fully
+   331→  designed (checked light+dark screenshots + WCAG contrast audit via canvas sRGB: warning
+   332→  4.36→5.0:1 after token fix, all others ≥4.99 light / ≥6.9 dark).
+   333→- bun run lint → clean ✓; tsc --noEmit → clean for src/** (pre-existing scaffold errors only
+   334→  in examples/ + skills/, untouched); dev.log clean, GET / 200.
+   335→
+   336→Stage Summary:
+   337→- Liquid Glass design system + full app shell + auth screens + all stub views are LIVE at `/`.
+   338→- API-independent: every endpoint miss (auth/me, policies, notifications) degrades gracefully.
+   339→- Frontend contracts for later steps: useApiQuery/useApiMutation conventions, GlassCard/
+   340→  KpiCard/StatusBadge/SegmentedControl/GlassToggle/GlassButton/FilterSheet/ConfirmDialog/Money
+   341→  primitives, nav.ts keys (admin-* / app-* / admin-resident360), route hash format
+   342→  #/<area>/<view>[/:id]. View agents replace src/components/app/{admin,resident}/*.tsx files
+   343→  ONLY — shell, primitives and tokens are stable.
+   344→- Known approximations: footer "Server time" renders the client clock in the institution
+   345→  timezone (swap to /api/v1/health time when it ships); use-toast.ts (shadcn) retained but
+   346→  superseded by sonner Toaster in providers.
+   347→
+   348→---
+   349→Task ID: 1-e (supplement)
+   350→Agent: Main Orchestrator (Z.ai Code)
+   351→Task: Financial kernel + policy models (shared by meal engine, payments, expenses, billing)
+   352→
+   353→Work Log:
+   354→- Added models PolicyExemption + PasswordResetToken to schema; db push synced.
+   355→- src/lib/domain/ledger.ts (FROZEN): ensureAccounts (chart: CASH, RESIDENT_FUNDS,
+   356→  MESS_EXPENSE, MEAL_CHARGE_INCOME, GUEST_INCOME, REFUND_PAYABLE), postJournal (balanced
+   357→  double-entry, tx-aware, validates Dr=Cr), getAccountBalances, reconcileInstitution.
+   358→- src/lib/domain/funds.ts (FROZEN): residentFundsSummary (credits/pending/charges/refunds/
+   359→  carryForward/available/amountToPay/deficit + policyState EXEMPTED|AVAILABLE|GRACE_PERIOD|
+   360→  RESTRICTED w/ grace anchor = oldest unsettled bill dueDate + graceDays), isMealRestricted.
+   361→- Accounting decision: PENDING payments do NOT add funds until approved; bill generation
+   362→  posts Dr RESIDENT_FUNDS / Cr MEAL_CHARGE_INCOME (charges); guest bills post to GUEST_INCOME;
+   363→  ISSUE_REFUND posts Dr RESIDENT_FUNDS / Cr CASH; CARRY_FORWARD records only.
+   364→
+   365→Stage Summary:
+   366→- Task 2 (design system/shell/auth UI) COMPLETE — 53 files, page renders 200, lint clean.
+   367→- Kernel ready: all backend agents import @/lib/domain/ledger + @/lib/domain/funds (read/write
+   368→  via these ONLY — do not reimplement). postJournal MUST be called inside your $transaction.
+   369→
+   370→---
+   371→Task ID: 3-a
+   372→Agent: Backend Engineer — auth / users / communications
+   373→Task: REST API for auth, resident lifecycle, notifications, announcements, profile, settings,
+   374→policies, search, audit trail, file serving, health probes (Next.js 16 App Router + Prisma/SQLite).
+   375→
+   376→Work Log:
+   377→- 25 route files created under src/app/api/v1/, ALL wrapped in route() from @/lib/auth/guard
+   378→  (auth modes PUBLIC/ANY/ADMIN/RESIDENT; ctx = {req, params, user, institutionId, requestId});
+   379→  inputs zod-validated via parseBody + a local safeParse helper for query strings; all errors via
+   380→  ApiError/CODES envelopes; every sensitive mutation audited in-transaction + user notifications
+   381→  through appendOutbox("NOTIFICATION", {...}).
+   382→- AUTH: register (rate 5/h/IP; policy-acceptance rows verified against ACTIVE policies of the
+   383→  first-active institution; EMAIL_TAKEN 409 on unique violation; PENDING_APPROVAL + statusHistory
+   384→  + audit RESIDENT_REGISTERED), login (8/15min/IP + 5/15min/email pre-lookup; scrypt timing
+   385→  equalizer; ACCOUNT_PENDING/REJECTED/INACTIVE gates; createSession rotation — cookie set on the
+   386→  ok() NextResponse passthrough), logout (revokeSession), me (user+profile+institution),
+   387→  policies (public, latest versions; [] when none).
+   388→- RESIDENT LIFECYCLE (admin): list (q/status/cursor/limit=25; profile + parallel
+   389→  residentFundsSummary for billable statuses; KPI meta {total=ACTIVE|INACTIVE|CHANGES_REQUESTED,
+   390→  active, pending}), 360° view (user, profile, statusHistory, funds, payments×10, bills×5 w/ line
+   391→  counts, tasks×5, leave×5, audit ×15 — all Promise.all), approve (→ACTIVE, membershipFrom=now if
+   392→  null), request-changes/reject/deactivate {reason} (audit + reason-bearing notifications,
+   393→  revokeAllUserSessions on reject/deactivate), activate, membership PATCH (from/until ISO|null;
+   394→  closed-period guard: from < any BILLED period start → VALIDATION_FAILED 409 "Changing
+   395→  membership into a closed billing period is restricted." — period start computed with
+   396→  zonedTimeToUtc in institution tz).
+   397→- COMMS: notifications GET (sweepOutbox() FIRST, failures swallowed; ?unread=1; cursor
+   398→  "<createdAtISO>~<id>"; meta {unreadCount, nextCursor}), read-all, [id]/read (owner-only 404);
+   399→  announcements GET (target EVERYONE|role, publishAt<=now, unexpired, pinned first, publishAt desc).
+   400→- ADMIN PLATFORM: settings GET/PATCH (name/timezone[Intl-validated]/currency; settings +
+   401→  security blocks; MONEY INPUTS AS DECIMAL STRINGS "1500.50" → parseDecimalToMinor; only changed
+   402→  fields audited SETTINGS_UPDATED w/ before/after; invalidateInstitutionCache()), policies
+   403→  GET/POST (immutable PolicyVersion chain, v1 or bump; audit POLICY_PUBLISHED), audit GET
+   404→  (entityType/entityId/action filters + cursor, limit 50, metadataJson parsed).
+   405→- SEARCH (authorization-aware §76): q 2-60 chars; ADMIN → residents/payments/bills/expenses/
+   406→  tasks (≤5 per group, parallel); RESIDENT → ONLY own payments/bills/tasks/leave — cannot
+   407→  discover other residents. FILES /[id]: bytes + content-type + nosniff + inert filename;
+   408→  admin | uploader | resident whose own payment/task-submission proof references it; else 404
+   409→  (existence never leaked); never lists. HEALTH: live (200 {ok}); ready (db count → 200 | 503).
+   410→- VERIFIED end-to-end with a throwaway fixture (unique ZZ-TEST-3A institution, admin, policy v1,
+   411→  resident via the real register endpoint): pending login gate, KPI meta, approve→notification
+   412→  sweep delivery, session revocation on deactivate (old cookie → 401 immediately), settings
+   413→  "1500.50"→150050 minor flowing into funds thresholdMinor, policy v1→v2 bump visible on public
+   414→  endpoint, membership closed-period rejection with exact spec message, state-machine 409s,
+   415→  ownership 404s, FORBIDDEN role gate, logout. Fixture then surgically deleted (by
+   416→  institutionId); DB returned to empty (ready: institutions=0, policies: []) for the seed task.
+   417→- bun run lint → clean ✓. tsc --noEmit: 0 errors in my 25 files (remaining errors are
+   418→  pre-existing scaffold examples/ + skills/ or other agents' in-flight files — untouched).
+   419→- INCIDENT + OPERATOR NOTE: the shared dev server was OOM-killed by the kernel (~20:29,
+   420→  next-server anon-rss ~2.5GB of 4GB sandbox) while hot-compiling several agents' routes at
+   421→  once. Restored with the SAME command/port/log via `setsid -f bash -c 'bun run dev'` and
+   422→  updated .zscripts/dev.pid. LESSON for all agents: background processes spawned from a tool
+   423→  command are process-group-killed when the command ends — always use setsid (nohup+disown is
+   424→  NOT enough); and keep an eye on memory when many routes compile simultaneously.
+   425→
+   426→Deviations (documented):
+   427→1. register acceptances min-1 enforced only when ACTIVE policies exist (bootstrap-empty case
+   428→   accepts [] — matches frontend fallback checkbox; strict min-1 otherwise).
+   429→2. Status-machine violations → VALIDATION_FAILED with HTTP 409 (400 for malformed input).
+   430→3. Extra audit codes RESIDENT_REGISTERED / PROFILE_UPDATED (low-noise, high trail value); no
+   431→   login/logout audit per task guidance (rate limits cover).
+   432→4. /agent-ctx at filesystem root is read-only in this sandbox — per-task records live in
+   433→   /home/z/my-project/agent-ctx/{taskId}-{agent}.md.
+   434→
+   435→Stage Summary:
+   436→- Auth + user lifecycle + comms + platform-admin backend is live and verified on :3000.
+   437→- Frontend contracts available now: /api/v1/auth/* (register/login/logout/me/policies),
+   438→  /api/v1/notifications (+read-all, [id]/read), /api/v1/announcements, /api/v1/me/profile,
+   439→  /api/v1/admin/residents(+[id]/approve|request-changes|reject|deactivate|activate|membership),
+   440→  /api/v1/admin/settings, /api/v1/admin/policies, /api/v1/search, /api/v1/admin/audit,
+   441→  /api/v1/files/[id], /api/v1/health/{live,ready}. Envelope {ok,data,meta|error{code,message,
+   442→  fields,requestId}} everywhere; money always Int paise (decimal-string inputs on settings).
+   443→- Awaiting seed (institution Aurora Residency Mess, policies, admin@messtest.in, residents incl.
+   444→  sahid@messtest.in + pending newres@messtest.in) to light up the login screen end-to-end.
+   445→
+   446→---
+   447→Task ID: 3-b, 3-c (backend meals + finance/formula/billing)
+   448→Agent: full-stack-developer agents (completed via orchestrator verification)
+   449→Task: Meal engine, tasks, guest/leave/calendar + finance/formula/billing backend
+   450→
+   451→Work Log:
+   452→- 87 route files under src/app/api/v1/ (all verified responding; auth envelopes correct).
+   453→- Domain libs created by agents: meal-engine.ts, billing.ts, notify.ts, activity.ts, list.ts,
+   454→  serialize.ts, meal-definition-schema.ts, http.ts + formula/{ast,parser,evaluator,variables,
+   455→  period-variables,versions,nl}.ts (nl.ts uses z-ai-web-dev-sdk LLM for NL→AST with validation).
+   456→- NOTE: prisma format (run by an agent) inverted User↔UserProfile relation: FK now lives on
+   457→  User.userProfileId; UserProfile.userId is a plain column (agents' code sets both). Register
+   458→  creates profile then links — matches current code.
+   459→- Orchestrator added 2 missing routes: admin/announcements (GET+POST w/ preview), admin/task-submissions (GET review list).
+   460→- Fixed admin dashboard NaN guard (mealCharge → null when not finite).
+   461→
+   462→Stage Summary:
+   463→- Backend COMPLETE: auth+users+comms (3-a), meals+tasks (3-b), finance+formula+billing (3-c).
+   464→- Seed data live: admin@messtest.in/Admin#12345, residents sahid/riya/arjun/meera/farhan@messtest.in
+   465→  (Resident#12345), pending newres@messtest.in. Institution Asia/Kolkata INR. Prev month BILLED
+   466→  (meal charge ₹48.71, bills+lines+journals), current month OPEN. Pending items for demo flows:
+   467→  2 pending payments (sahid ₹2,000 UPI; meera ₹1,000 CASH), 1 pending leave (farhan), 1 submitted
+   468→  task (meera rice ₹2,750), 1 assigned task (sahid), 1 pending expense (₹1,750 veg), pending
+   469→  resident approval (newres), 1 admin meal override (sahid Dinner today OFF), guest meal tomorrow
+   470→  (sahid ×2), calendar events (festival, kitchen maintenance), announcements pinned.
+   471→- Verified via curl: login/me/dashboard/resident meals all working with envelopes.
+   472→
+   473→---
+   474→Task ID: 5-a, 5-b
+   475→Agent: full-stack-developer agents (completed; orchestrator verified + lint-fixed)
+   476→Task: Admin views (16 files) + resident views (7 files) — real API wiring
+   477→
+   478→Work Log:
+   479→- ALL views implemented against live APIs: admin (dashboard w/ needs-attention+greeting,
+   480→  meals w/ override, payments w/ review dialog + AI panel, residents + 360, funds,
+   481→  expenses w/ item repeater, meal-configuration 6-step wizard, formulas NL+formula editor
+   482→  w/ preview-before-save, billing readiness+arithmetic+generate+adjustments, tasks w/
+   483→  submission review, calendar w/ impact preview, announcements w/ critical preview,
+   484→  notifications, settings w/ theme+policy publishing, audit w/ expandable before/after).
+   485→- Resident: dashboard (greeting, KPIs, today's meals w/ cutoff countdown), meals
+   486→  (agenda/day, optimistic toggle w/ rollback, guest dialog w/ §153 preview, leave w/
+   487→  preview counts), billing (calculation provenance, pay dialog), payments, tasks
+   488→  (accept/reject/submit w/ verification state), profile, notifications.
+   489→- Orchestrator fixed lint errors: static icon wrappers (icons.tsx), setState-during-render
+   490→  patterns in audit/billing, use-now ref access, unused directives.
+   491→
+   492→Stage Summary:
+   493→- Full SPA at `/` hash-routed, both roles, verified live in agent-browser.
+   494→
+   495→---
+   496→Task ID: 6
+   497→Agent: Main Orchestrator (Z.ai Code)
+   498→Task: AI integrations — LLM formula NL + VLM payment proof preview
+   499→
+   500→Work Log:
+   501→- LLM natural-language formula parsing VERIFIED end-to-end (spec §49): input
+   502→  "Subtract guest income from total market cost, then divide the result by consumed
+   503→  resident meals." → validated AST + "I understood this as (Total Market Cost − Guest
+   504→  Income) ÷ Resident Consumed Meals" + worked example with current data. UI shows
+   505→  preview BEFORE save; nothing executes unvalidated.
+   506→- VLM endpoint POST /api/v1/admin/ai/proof-preview (z-ai-web-dev-sdk createVision,
+   507→  backend-only): reads stored proof image, extracts {amount, method, reference, summary}
+   508→  as SUGGESTION for the admin; audited AI_PROOF_PREVIEWED; rate-limited; never mutates.
+   509→  Wired into admin payments review dialog ("AI assist — Read proof" panel w/ disclaimer).
+   510→- VLM also used for §311 FINAL VISUAL QUALITY GATE on screenshots (see Task 7).
+   511→
+   512→Stage Summary:
+   513→- 3 skills integrated: image-generation (brand assets), LLM (formula NL), VLM (proof
+   514→  reading + design QA). All backend-side per environment rules.
+   515→
+   516→---
+   517→Task ID: 7
+   518→Agent: Main Orchestrator (Z.ai Code)
+   519→Task: Integration QA + Agent Browser E2E verification + fixes
+   520→
+   521→Work Log (E2E verified in agent-browser with seeded data):
+   522→- Resident flows: login (Sahid) → dashboard greeting/today's meals/pinned/activity →
+   523→  meals agenda (locked past meals, admin-override badge, ON_LEAVE) → toggle ON→OFF→ON
+   524→  with server confirmation → guest meal dialog (exact §153 preview: your meal/guests/
+   525→  total/₹165/cutoff) → submit + confirmation. Logout clean.
+   526→- Admin flows: login → dashboard needs-attention aggregation (all 6 items) → payments
+   527→  review dialog (balance summary, proof) → approve ₹1,000 (confirm dialog) + ₹2,000 →
+   528→  verified journals Dr CASH/Cr RESIDENT_FUNDS + PAYMENT_APPROVED audits + notifications.
+   529→  Expenses: pending → approve (journal posted). Tasks: submission review → approve →
+   530→  official expense EXP-…-0007 created w/ journal + sourceTaskSubmissionId link (dup-money
+   531→  guard). Billing: readiness all 10 checks ✓ + arithmetic 6+7=13 → GENERATE → 5 bills
+   532→  with provenance lines, immutable snapshot (sha256), 10 BILL journals, period BILLED.
+   533→- Formula NL editor UI: Plain Language mode → Understand → LLM interpretation preview.
+   534→- Responsive: 320×568 scrollWidth=320 (no horizontal overflow ✓), bottom nav, sticky
+   535→  footer (mt-auto pattern; pushes naturally on long pages). Dark mode designed variant.
+   536→- VLM §311 gate: initial 6.5/10 → enriched .app-bg gradients (visible refraction) →
+   537→  7.5/10. Framer-motion color-mix warnings are cosmetic.
+   538→
+   539→BUGS FOUND + FIXED during verification:
+   540→1. Billing generation deadlock: guard set status=CLOSING before in-tx readiness re-run
+   541→   → check-1 "period open" always failed. FIX: status stays OPEN during run;
+   542→   generationState=null→CLOSING claims the run (concurrent-safe), final update →BILLED.
+   543→2. Seed formula AST used spec notation (type:"divide") but evaluator expects {type:"op",
+   544→   op:"/"}. FIX: seed rewritten + evaluator now throws FORMULA_INVALID on unknown nodes
+   545→   (never returns undefined silently).
+   546→3. Readiness summary mealChargeMinor undefined→NaN display. FIX: null-guards (== null +
+   547→   Number.isFinite) in readiness route + dashboard.
+   548→4. Snapshot profile query used inverted User↔Profile relation. FIX: profiles fetched via
+   549→   user query include.
+   550→5. admin/task-submissions used non-existent Task.assignedResident relation. FIX: batch
+   551→   resident lookup.
+   552→6. 6 react-hooks lint errors (components-during-render etc.) fixed via icons.tsx wrappers
+   553→   + set-state-during-render patterns.
+   554→7. prisma format had inverted User↔UserProfile relation (FK on User.userProfileId) —
+   555→   all code adapted (documented).
+   556→
+   557→Final state: dev server 200, lint CLEAN, all E2E flows verified, DB re-seeded to
+   558→pristine demo state (Aug BILLED, Sep OPEN, pending items for demo).
+   559→
+   560→Stage Summary:
+   561→- The system satisfies the spec's core invariants: no double money (unique guards),
+   562→  immutable history (snapshots/journals/versions), server-time cutoffs, balanced
+   563→  double-entry ledger, append-only audit, authorization on every route, arithmetic
+   564→  confirmation before billing.
+   565→
+   566→---
+   567→Task ID: 8
+   568→Agent: Main Orchestrator (Z.ai Code)
+   569→Task: User report — "after sign in it not going to next page" (login succeeds but app stays on AuthScreen)
+   570→
+   571→Work Log:
+   572→- Reproduced via dev.log forensics: `POST /api/v1/auth/login 200` immediately followed by
+   573→  `GET /api/v1/auth/me 401` with NO Session SELECT query (early exit at !token) — the browser
+   574→  never sent the session cookie back. curl round-trip (login → cookie → /auth/me) worked fine.
+   575→- ROOT CAUSE: the sandbox preview panel embeds the app in a cross-site (third-party) iframe.
+   576→  Browsers reject `SameSite=Lax` cookies set in third-party iframe contexts, so login 200'd
+   577→  server-side while the cookie was silently dropped → /auth/me 401 → useSession sees no user →
+   578→  AppRoot keeps rendering AuthScreen ("not going to next page").
+   579→- FIX (dual-layer, in src/lib/auth/session.ts + login route + client):
+   580→  1. Dual Set-Cookie headers for mes_session (Lax first, then SameSite=None; Secure, appended
+   581→     via res.headers.append — exported applySessionCookies()). Over HTTPS the None/Secure cookie
+   582→     replaces the Lax one and is accepted inside iframes; over plain HTTP the Secure variant is
+   583→     discarded by the browser and Lax survives (local dev / agent-browser E2E unaffected).
+   584→  2. Bearer fallback transport for browsers that block ALL third-party cookies (Safari ITP):
+   585→     /api/v1/auth/login now returns `sessionToken` in the envelope; client persists it in
+   586→     localStorage (mes_session_token, helpers in src/lib/api.ts) and attaches
+   587→     `Authorization: Bearer` on every api()/apiGet() call; server getSessionUser resolves
+   588→     cookie first, bearer second. Rotation on login revokes old cookie AND bearer sessions;
+   589→     logout (revokeSession) revokes both + dual clear headers; client clears the stored token
+   590→     on logout and on any 401 (except login/register credential entries).
+   591→- Verified via curl: cookie-only 200, bearer-only 200 (iframe simulation), both 200, no-auth
+   592→  401, admin dashboard via bearer 200, logout revokes both transports (401 after), re-login
+   593→  rotation kills old bearer (401) while new token 200.
+   594→- Verified via agent-browser (lint clean, zero console/page errors):
+   595→  resident sign-in via UI → navigates to #/app/dashboard ("Good Morning, Sahid", sidebar,
+   596→  notifications 4 unread, localStorage token stored); cookies cleared + reload → STILL signed
+   597→  in via bearer (auth/me 200 — the exact user bug scenario, previously impossible); logout →
+   598→  auth screen with server-side revocation; pristine browser (no cookie/no token) → login →
+   599→  dashboard → Meals page navigation (#/app/meals, data loads, GET /api/v1/meals 200).
+   600→- NOTE: login rate limits (8/15min/IP, 5/15min/email, in-memory) are per client key — local
+   601→  testing exhausted the admin email quota temporarily (429 renders correctly in the UI).
+   602→  User-facing key differs (comes through gateway), so user sign-in is unaffected.
+   603→
+   604→Stage Summary:
+   605→- Sign-in now works in ALL contexts: top-level HTTPS, cross-site preview iframe (cookie
+   606→  None/Secure), and full third-party-cookie-blocked browsers (bearer). Files touched:
+   607→  src/lib/auth/session.ts (dual Set-Cookie, bearer resolution, both-transport revoke/rotate),
+   608→  src/app/api/v1/auth/login/route.ts (returns sessionToken), src/lib/api.ts (token storage +
+   609→  Authorization header + 401 cleanup), src/components/app/AuthScreen.tsx (persist token),
+   610→  src/hooks/use-session.ts (clear token on logout). No schema/DB changes.
+   611→
+   612→---
+   613→Task ID: 9-b
+   614→Agent: logic-auditor (meals/tasks)
+   615→Task: Audit meal engine, tasks, guest meals, leave, calendar logic
+   616→
+   617→Work Log:
+   618→- Read worklog for context (money = int paise, tz Asia/Kolkata, server-time cutoffs, lazy
+   619→  materialization, spec §24-36/§60-63/§153-154/§71-72 rules) and grepped the master spec
+   620→  for cutoff, §153, guest, leave, §28/§29/§30/§32/§35/§36/§61/§62/§71/§72 domain rules.
+   621→- Read fully: src/lib/domain/meal-engine.ts (727 L), src/lib/time.ts, api/v1/meals (GET +
+   622→  [instanceId]/toggle), api/v1/guest-meals, api/v1/leave-requests, api/v1/tasks (GET +
+   623→  [id]/accept|reject|start|submission), admin/meals (+ [instanceId]/override),
+   624→  admin/guest-meals (+ [id]/cancel), admin/leave-requests/[id]/approve|reject,
+   625→  admin/tasks, admin/task-submissions (+ [id]/approve|reject), api/v1/calendar.
+   626→- Read supporting code to verify guards actually work: prisma/schema.prisma (uniques,
+   627→  inverted User↔UserProfile), lib/money.ts, lib/ids.ts, lib/institution.ts, lib/auth/
+   628→  guard.ts + session.ts, lib/domain/list.ts, lib/domain/ledger.ts, lib/domain/funds.ts,
+   629→  lib/domain/billing.ts (guest charge math), lib/domain/formula/period-variables.ts
+   630→  (total_guest_income source), lib/validation.ts.
+   631→- Cross-checked spec rules: §28 precedence order, §29 override badge, §30 mid-month join,
+   632→  §31/§32 locking + concurrency protection for admin override, §34 guest lifecycle,
+   633→  §35/§154 leave semantics, §61 task state machine, §62 dup-expense guard, §71 idempotency
+   634→  list, §72 concurrency list.
+   635→- Verified each suspected issue against exact line numbers before reporting; RESEARCH
+   636→  ONLY — no files modified.
+   637→
+   638→Findings:
+   639→- [CRITICAL — conditional money mismatch] Guest meal price diverges between creation,
+   640→  formula income, and the generated bill. guest-meals/route.ts:51-55 stores
+   641→  unitPriceMinor = instance FIXED snapshot price ?? settings.guestMealPriceMinor and
+   642→  totalPriceMinor = unit × qty. period-variables.ts:94-101 computes total_guest_income =
+   643→  Σ totalPriceMinor (stored). But billing.ts:365 + 661 + 684-697 + 744 charges
+   644→  guestAmount = quantity × settings.guestMealPriceMinor (guestPriceMinor from
+   645→  institution settings) and credits GUEST_INCOME with that recomputed amount; the stored
+   646→  per-request totals (guestsByResident.amountMinor, billing.ts:552-558/592-600) are
+   647→  snapshotted but never used. Whenever a FIXED-priced meal instance has fixedPriceMinor ≠
+   648→  settings.guestMealPriceMinor, the resident is billed a different amount than the
+   649→  recorded guest charge and ledger GUEST_INCOME diverges from the formula input
+   650→  total_guest_income (readiness check #8 compares stored vs stored, so it cannot catch
+   651→  this). Fix: bill guest lines from Σ per-request totalPriceMinor (or make creation
+   652→  always use settings.guestMealPriceMinor and drop the FIXED branch).
+   653→- [MODERATE] Resident toggle optimistic-concurrency check is not atomic (TOCTOU).
+   654→  meals/[instanceId]/toggle/route.ts:63-65 checks rm.version !== expectedVersion, but the
+   655→  write at :95-105 is `update({ where: { id: rm.id }, ... version: rm.version + 1 })` —
+   656→  the version is NOT in the WHERE clause. Two concurrent toggles (or a resident toggle
+   657→  racing an admin override) that both read version N both pass the check; under SQLite
+   658→  this surfaces as either a silent lost update (both 200, second clobbers first, both
+   659→  write version N+1) or an unhandled busy/500 error — never the intended
+   660→  RESOURCE_CHANGED 409. Spec §72 requires the version column to actually guard the write.
+   661→  Fix: `updateMany({ where: { id, version: expected }, data: {..., version: { increment: 1 } } })`
+   662→  and fail on count !== 1.
+   663→- [MODERATE] Admin override has no concurrency protection at all.
+   664→  admin/meals/[instanceId]/override/route.ts:86-97 — no expectedVersion in the body
+   665→  schema (:25-29) and the update is by id only; two admins overriding the same meal
+   666→  concurrently silently last-write-wins (both 200, both audited as if applied). Spec
+   667→  §32 explicitly requires concurrency protection for admin override after lock. Fix:
+   668→  accept+verify expectedVersion the same way the resident toggle should.
+   669→- [MODERATE] Task submission is accepted from ACCEPTED (skips IN_PROGRESS).
+   670→  tasks/[id]/submission/route.ts:105-111 allows task.status IN_PROGRESS OR ACCEPTED →
+   671→  ACCEPTED→SUBMITTED is an illegal jump in spec §61's state machine (ASSIGNED→ACCEPTED→
+   672→  IN_PROGRESS→SUBMITTED). Unlike the reject route (which documents its ASSIGNED/ACCEPTED
+   673→  deviation), this one is undocumented. Fix: allow only IN_PROGRESS (or document the
+   674→  deviation).
+   675→- [MODERATE] Guest meal creation has no idempotency (spec §71 requires it for "guest
+   676→  meal creation"). guest-meals/route.ts POST has no Idempotency-Key handling (the
+   677→  IdempotencyRecord machinery exists and is used by payments, payments/route.ts:74-110).
+   678→  A double-tap on "Add guest meal" creates two GuestMealRequest rows → double guest
+   679→  charge to the resident. Fix: replicate the payments idempotency-key pattern
+   680→  (scope GUEST_MEAL_CREATE).
+   681→- [MODERATE] Leave approval vs cutoff semantics are inconsistent between the approve
+   682→  route and the engine. admin/leave-requests/[id]/approve/route.ts:48-54 only re-touches
+   683→  instances with cutoffAt > now, and the resident preview (leave-requests/route.ts:29-47,
+   684→  141-156) counts cutoffAt <= now as "already locked meals will not change
+   685→  automatically" (§154). But meal-engine.ts refreshAndLock:479-481+494-568 re-evaluates
+   686→  every UNLOCKED row — including rows whose cutoff has passed — with LIVE leave facts at
+   687→  the next read, so a leave approved AFTER a meal's cutoff can still flip that past meal
+   688→  to ON_LEAVE (and out of the billed ON count) as long as nobody read it before. Same
+   689→  facts produce different outcomes depending on read timing; residents are cutoff-blocked
+   690→  from toggling while leave is not. Fix: in refreshAndLock/refreshUnlockedEffective,
+   691→  exclude leave (and other facts) that were approved after the instance's cutoffAt — or
+   692→  lock rows at cutoff time deterministically instead of lazily.
+   693→- [MINOR] Override badge baseline wrong (spec §29: compare against
+   694→  "baseline_without_admin_override"). meals/route.ts:84, admin/meals/route.ts:140 and
+   695→  override route response :144 compute overridden = adminOverrideState != null &&
+   696→  adminOverrideState !== rm.baselineState — should compare against
+   697→  (residentSelectedState ?? baselineState). If the resident selected OFF and the admin
+   698→  overrides OFF, the badge shows although the outcome equals the no-override state.
+   699→- [MINOR] Guest meal lifecycle statuses LOCKED and CONSUMED are never set anywhere (only
+   700→  admin cancel writes status CANCELLED + lockedAt, admin/guest-meals/[id]/cancel/route.ts:33-36;
+   701→  resident POST writes CONFIRMED directly). Status filter sets also diverge:
+   702→  admin/meals/route.ts:75 counts ["CONFIRMED","LOCKED"] while billing.ts:36 and
+   703→  period-variables.ts:83 use ["CONFIRMED","CONSUMED"] — a status that is currently dead
+   704→  but would be counted in one place and not the other. Also: admin cancel has no time
+   705→  window — a guest meal can be cancelled after the service and even after the period was
+   706→  billed (billing snapshots freeze at generation, so pre-billing cancellations silently
+   707→  change formula inputs). §34 lifecycle is only partially implemented.
+   708→- [MINOR] nextExpenseNumber reads via the global db client, not the caller's transaction
+   709→  (lib/ids.ts:15-37, called from task-submissions/[id]/approve/route.ts:67 inside the
+   710→  tx). Two concurrent approvals of DIFFERENT submissions can pick the same
+   711→  displayNumber; the P2002 is then caught at approve:116-125 and mis-reported as "An
+   712→  expense already exists for this submission." Not double money (unique guards hold) but
+   713→  a spurious 409 + wrong message. The comment "under the caller's transaction" is false.
+   714→- [MINOR] dateKeySchema (lib/validation.ts:54-56) is regex-only, so impossible dates like
+   715→  2026-02-30 pass validation and localDateMidnightUtc() silently rolls them over
+   716→  (2026-03-02) — leave windows / calendar events / guest meal dates shift by days with
+   717→  no error. Fix: validate the calendar date (round-trip the key).
+   718→- [MINOR] computeInstanceStatus (meal-engine.ts:66-70) never emits SCHEDULED or
+   719→  SERVICE_ACTIVE from spec §32's instance state machine (OPEN→LOCKED→COMPLETED only).
+   720→  Display-level simplification; no money impact.
+   721→- [MINOR] Institution settings are cached 60s (lib/institution.ts:23-29): a change to
+   722→  guestMealPriceMinor can produce guest meal rows priced with the old rate (and a bill
+   723→  generated with a stale guestPriceMinor) for up to a minute. invalidateInstitutionCache
+   724→  exists but is only called from the settings route.
+   725→- [MINOR] Resident meals GET month counters (meals/route.ts:90-100) count effectiveState
+   726→  ON/OFF over the whole current month INCLUDING unlocked future rows that can still
+   727→  change — a "month-to-date" label that is actually "month-to-date plus projections".
+   728→  Display-only.
+   729→- [MINOR] leave-requests POST accepts start dates in the past and overlapping windows
+   730→  (no guard); LeaveRequest status CANCELLED (§35 state machine) has no code path —
+   731→  residents cannot cancel a pending leave. Spec is ambiguous here; documenting.
+   732→
+   733→CLEAN (verified, no bugs found):
+   734→- TIME/TIMEZONE MATH (time.ts): zonedTimeToUtc two-pass offset is exact for +5:30 (no
+   735→  DST); computeCutoffAt handles SAME_DAY/PREVIOUS_DAY/CUSTOM offsets correctly; every
+   736→  "today" derivation uses dateKeyInTz(new Date(), tz); serviceDate is consistently a
+   737→  local-date-midnight-UTC marker; no UTC-vs-Kolkata day-boundary errors found.
+   738→- CUTOFF ENFORCEMENT: resident toggle (toggle/route.ts:54-62) and guest meal creation
+   739→  (guest-meals/route.ts:42-49) both compare server new Date() to instance.cutoffAt and
+   740→  reject past-cutoff changes (409 MEAL_CUTOFF_PASSED); past meals cannot be edited by
+   741→  residents; admin override after cutoff is deliberately allowed (§32) with reason,
+   742→  audit and lock.
+   743→- NO DOUBLE-COUNT / DUPLICATE ROWS: ResidentMeal unique (residentId, mealInstanceId)
+   744→  plus P2002-skip loops in ensureResidentMeals/ensureInstancesForRange; ON→OFF→ON
+   745→  updates the same row (no duplicate attendance, no double count). Billing readiness
+   746→  re-verifies duplicate instances/rows.
+   747→- PRECEDENCE (§28): evaluateResidentMeal order matches spec (visible → calendar →
+   748→  membership/joinedAfterCutoff → onLeave → restricted → adminOverride → selection →
+   749→  baseline); admin override wins over resident selection; ON_LEAVE and NOT_AVAILABLE
+   750→  rows are rejected in the toggle (toggle/route.ts:81-87) — ON_LEAVE residents cannot
+   751→  toggle; mid-month join (§30) handled via joinedAfterCutoff → NOT_AVAILABLE.
+   752→- TASK STATE MACHINE (otherwise): accept ASSIGNED→ACCEPTED only; start ACCEPTED→
+   753→  IN_PROGRESS only; reject guarded to ASSIGNED/ACCEPTED (documented deviation); admin
+   754→  review only from submission status SUBMITTED; double-submission blocked by
+   755→  TaskSubmission.taskId @unique + explicit existing check (submission/route.ts:112-115).
+   756→- TASK DUP-MONEY GUARD (§62) WORKS: Expense.sourceTaskSubmissionId @unique
+   757→  (schema.prisma:441) + submission.status/expensesId pre-checks + P2002→409 inside one
+   758→  transaction; totals recomputed server-side from items via multiplyRoundHalfUp (claimed
+   759→  total never trusted); journal Dr MESS_EXPENSE / Cr CASH is balanced (postJournal
+   760→  validates debit==credit before writing). Approving twice cannot create two expenses.
+   761→- LEAVE STATE MACHINE: only PENDING→APPROVED/REJECTED in both admin routes (409
+   762→  otherwise), reviewedBy/reviewedAt/reason recorded, audited, resident notified; reject
+   763→  never touches meals (no un-approve path, per §35).
+   764→- CALENDAR IMPACT IS REAL, not display-only: disableMeals events feed
+   765→  CALENDAR_DISABLED in buildEvalContext (meal-engine.ts:205-216), ensureResidentMeals
+   766→  (:389-391,421), refreshAndLock (:516-521,549) and refreshUnlockedEffective (:619-624);
+   767→  locked rows stay frozen (§36 "freeze at lock time").
+   768→- QUERY SCOPING: every audited route scopes by ctx.institutionId (from the session) and
+   769→  residents are additionally scoped to their own rows; sessions require status ACTIVE
+   770→  (session.ts:114-115), so inactive residents cannot toggle/guest-book; the inverted
+   771→  User↔UserProfile relation (FK on User.userProfileId) is used correctly everywhere
+   772→  audited (include profile / batch user lookups), no inverted filters found.
+   773→- MONEY PARSING: parseDecimalToMinor rejects >2 decimals and non-safe integers;
+   774→  multiplyRoundHalfUp is the single rounding point.
+   775→
+   776→Next actions (for orchestrator): 1) unify guest unit price between creation and billing
+   777→(CRITICAL); 2) make toggle/override writes version-conditional; 3) add idempotency key
+   778→to guest meal creation; 4) restrict submission to IN_PROGRESS; 5) decide and align
+   779→leave-after-cutoff semantics between approve route and refreshAndLock; 6) validate
+   780→calendar dates in dateKeySchema; 7) pass tx into nextExpenseNumber.
+   781→
+   782→---
+   783→Task ID: 9-c
+   784→Agent: logic-auditor (payments/funds/residents)
+   785→Task: Audit payments, refunds, expenses, funds, residents approval logic
+   786→
+   787→Work Log:
+   788→- Read worklog.md (Tasks 0-8) for contracts: chart of accounts (RESIDENT_FUNDS = liability, credit-positive), kernel decisions from 1-e, inverted User↔UserProfile FK, Task 8 bearer/cookie session work.
+   789→- Read spec §19-21 (journals/immutable history), §37-44 (payment/refund/expense/funds/deficit), §62 (market expense approval), §63-73 (comms/outbox), plus §2347/§2403 (idempotency, notification non-blocking).
+   790→- Audited all listed files fully: payments submit + admin payments (list/detail/approve/reject/void), admin refunds, admin expenses (list/create/approve/reject/void), admin funds, admin residents (list/360/approve/reject/request-changes/deactivate/activate/membership), task-submissions approve (double-money guard), lib/domain/funds.ts (resident balance math), ledger.ts, notify.ts, outbox.ts, storage.ts, rate-limit.ts, ids.ts, money.ts, domain/http.ts, auth/guard.ts, auth/session.ts, files/[id], bills/[id]/adjustment, billing.ts bill-generation section, prisma/schema.prisma (Payment/Refund/Expense/Bill/Outbox models), Caddyfile, login route.
+   791→- Verified sign conventions across consumers (admin funds, residents list/360, payments review, me/dashboard all use residentFundsSummary → same math).
+   792→- Verified transaction boundaries: every journal posting is inside the same prisma.$transaction as the status flip; CAS guards (updateMany where status=…) on payment/expense transitions.
+   793→- Confirmed X-Forwarded-For handling against the actual Caddyfile (header_up X-Forwarded-For {remote_host} → header replaced, not appended).
+   794→
+   795→Findings:
+   796→- CRITICAL — refund credit check includes PENDING (unapproved) payments: src/app/api/v1/admin/refunds/route.ts:92 `creditable = summary.availableMinor + summary.pendingPaymentsMinor`. An admin can ISSUE_REFUND (journal Dr RESIDENT_FUNDS / Cr REFUND_PAYABLE, status COMPLETED, cash payout) against money that was never approved; if the payment is then rejected the institution has paid out funds it never received (ledger ends up showing a receivable from the resident). Contradicts the frozen kernel invariant in src/lib/domain/funds.ts:15 ("PENDING payments do NOT add funds until approved") and spec §39 ("determine available resident credit"). Fix: creditable = availableMinor only (or allow pending for CARRY_FORWARD only, never ISSUE_REFUND).
+   797→- CRITICAL — CARRY_FORWARD refunds erase the resident's credit: src/lib/domain/funds.ts:93 `available = credits − charges − refundsIssued − carryForward` (with refunds/route.ts:14-20 documenting this). Spec §39 "Carry Forward" means the excess stays available for future bills; here it is subtracted from available with no journal, so a resident with ₹2,000 excess credit who receives a ₹2,000 CARRY_FORWARD has available 0, and next month's ₹1,500 bill puts them at −₹1,500 (deficit, possible meal RESTRICTION) despite having paid. Ledger RESIDENT_FUNDS still carries the credit → permanent ledger-vs-read-model divergence. Fix: treat carryForwardMinor as informational (do not subtract), or don't create a refund row for it at all.
+   798→- MODERATE — completed refunds never leave CASH; REFUND_PAYABLE is never settled: refunds/route.ts:102-133 posts Dr RESIDENT_FUNDS / Cr REFUND_PAYABLE and marks the refund COMPLETED immediately — but nothing ever posts Dr REFUND_PAYABLE / Cr CASH. The route comment ("cash leaves the books") is wrong; CASH is untouched, so admin expenses KPI "remainingFunds" (src/app/api/v1/admin/expenses/route.ts:259-272 = CASH balance) is overstated by every completed refund, REFUND_PAYABLE grows forever, and reconcileInstitution (src/lib/domain/ledger.ts:146-163) does not reconcile refunds at all. Also deviates from the worklog 1-e kernel decision ("ISSUE_REFUND posts Dr RESIDENT_FUNDS / Cr CASH") and spec §39's example. Fix: post the settlement leg (Dr REFUND_PAYABLE / Cr CASH) or credit CASH directly at completion; add refunds to the reconcile checks.
+   799→- MODERATE — refund credit check is a TOCTOU race (no CAS/lock): refunds/route.ts:90-99 reads residentFundsSummary inside the tx then creates the refund; with SQLite deferred BEGIN the reads are not locked, so two concurrent refund requests can both pass the stale credit check and both commit COMPLETED refunds (over-refund). Payment/expense routes protect with updateMany status-CAS; refunds have no equivalent. Fix: re-verify the summary after a first write inside the tx, or claim via a guarded updateMany (version column / resident funds stamp) before creating.
+   800→- MODERATE — bills never settle after generation: payment approval (src/app/api/v1/admin/payments/[id]/approve/route.ts) does not touch bills, and bill generation only applies payments with status APPROVED and submittedAt INSIDE the period (src/lib/domain/billing.ts:512-520, 663-666). Payments submitted after month-end but before generation, or approved after generation, never update bill.paymentsMinor/totalDueMinor/status — there is no GENERATED→PARTIALLY_PAID/PAID transition path except manual adjustments, so amountToPayMinor (Σ unsettled totalDue) stays overstated forever while the wallet view (available) is correct. Fix: apply wallet credit against unsettled bills at payment approval (or a settlement step / recompute amountToPay as max(0, totalDue − available)).
+   801→- MODERATE — login email rate limit is global per email and counts successful logins: src/app/api/v1/auth/login/route.ts:42 `rateLimit(\`login:email:${email}\`, 5, 15min)` (IP limit at :31). Any tester/attacker from ANY IP burns the real user's quota for 15 min (already hit in practice — worklog Task 8 note), and the counter increments before credential verification, so 5 legitimate sign-ins in 15 min (rotation makes re-login common) lock the user out. Fix: count only FAILED attempts with a composite key `login:fail:${ip}:${email}` and keep a high per-email global cap for brute-force (e.g. 50/15min).
+   802→- MODERATE — expense date has no closed-period guard: src/app/api/v1/admin/expenses/route.ts:54-55 validates only the date format; an expense dated inside an already-BILLED period is invisible to that period's immutable snapshot yet still posts a real journal on approval → the cost is never recovered from residents (money silently eats CASH). The membership route HAS this guard (residents/[id]/membership/route.ts:61-80) — expenses need the same. Fix: reject dates earlier than any BILLED period start (use the same zonedTimeToUtc comparison).
+   803→- MINOR — expense date tz inconsistency between creation paths: direct expenses store UTC midnight of the date key (expenses/route.ts:116) while task expenses store tz-local midnight (task-submissions/[id]/approve/route.ts:59), and period aggregation uses UTC-midnight bounds (period-variables.ts:55-56). For Asia/Kolkata, a market task approved 00:00-05:29 IST on the 1st stores the last day of the previous month UTC → excluded from the new month's billing window (and from the previous month if already billed). Fix: use one construction (UTC midnight of the business date) on both paths.
+   804→- MINOR — Payment REFUNDED/PARTIALLY_REFUNDED statuses are never set anywhere (refunds don't update the linked payment; only creator of Refund rows is refunds/route.ts:120). The void-route guard for them (payments/[id]/void/route.ts:30-36) is dead code; fully-refunded payments still display APPROVED; refundPendingCount in payments GET meta (payments/route.ts:230) is always 0 because refunds are born COMPLETED (also skips spec §39's PENDING/PROCESSING states and "recent admin authentication" requirement). Fix: flip payment status + refunded amount bookkeeping on refund creation, or remove the dead states.
+   805→- MINOR — sweepOutbox duplicate-delivery race + no background processor: src/lib/outbox.ts:23-63 does findMany(PENDING) → create notification → update status with no claim/lock; two concurrent sweeps can both process an event (duplicate notifications; no money impact). Delivery piggybacks on request traffic only (post-mutation sweeps + notifications GET) — with no traffic, notifications sit PENDING indefinitely; EMAIL/EXPORT outbox types are never processed (dead enum values). Fix: claim rows with updateMany({status: PENDING}→PROCESSING) before creating, and add a periodic sweep.
+   806→- MINOR — rate-limit.ts details: (a) implementation is a fixed window though the header says "sliding window" (2× burst possible at the boundary); (b) the buckets Map is never pruned → unbounded memory growth; (c) clientKey() takes the FIRST X-Forwarded-For value — safe behind this Caddyfile (header_up X-Forwarded-For {remote_host} replaces it) but spoofable on direct :3000 access or behind an appending proxy; prefer the last trusted hop / X-Real-IP.
+   807→- MINOR — residents lifecycle transitions lack CAS guards (read-then-update without status predicate in the UPDATE): approve/reject/request-changes/deactivate/activate (e.g. residents/[id]/approve/route.ts:34-41, activate/route.ts:28-35) can race and write duplicate status-history rows + duplicate notifications (no money impact; payment/expense routes do this correctly). activate also sends no notification, unlike every other transition. voiding a payment that was already refunded leaves the resident at negative available (ledger stays consistent as receivable-vs-payable, but expect support load).
+   808→- MINOR — payment submit / expense create prepare proof file + display number OUTSIDE the transaction with the global client (payments/route.ts:83-86, expenses/route.ts:112-115): a rollback leaves an orphan file and a number gap (documented/harmless); ids.ts:19 comment claims "under the caller's transaction" but uses the global db. Also readFormData buffers the whole multipart body before the 2MB check (domain/http.ts:9-17) — no request-size cap on Route Handlers (memory DoS vector).
+   809→- MINOR — bill adjustments post no journal and clamp negative credit at zero: bills/[id]/adjustment/route.ts:52-61 (totalDue = max(0, …); excess credit lives only in adjustment rows, wallet unchanged) — documented in the route header but creates ledger-vs-bill divergence like the CARRY_FORWARD case.
+   810→
+   811→CLEAN (verified, no action):
+   812→- Payment approve/reject/void: journal direction Dr CASH / Cr RESIDENT_FUNDS matches the app's liability convention (spec §19 "Cr Resident Balance" analog); CAS updateMany({status:"PENDING"}) + journal + status history + audit + outbox all in ONE $transaction; double-approve / reject-after-approve / re-approve-after-void all correctly 409; void posts an exact reversal journal.
+   813→- Resident payment submit: residentId always from session; idempotency via pre-check + unique claim inside tx + P2002 replay/409; amount parsing (>0, ≤₹10L sanity); proof = magic bytes + 2MB + random hex keys (no path traversal; download route sanitizes filename, 404s without leaking existence, institution-scoped).
+   814→- Expense approve/reject/void: same CAS + same-tx journal pattern; line totals and total ALWAYS server-recomputed; approved expenses immutable.
+   815→- Task-submission approve: single transaction; sourceTaskSubmissionId is a real DB unique (dup-money guard) plus status+expenseId pre-checks; server-recomputed totals; zero-total submissions skip the journal safely.
+   816→- Residents approval state machine (PENDING_APPROVAL→ACTIVE / CHANGES_REQUESTED→ACTIVE / REJECT / INACTIVE⇄ACTIVE) is enforced with history+audit+outbox in-tx; deactivate/reject revoke all sessions AND getSessionUser independently rejects non-ACTIVE users (defense in depth — session.ts:115); register creates the profile in-tx under the inverted User.userProfileId FK so approve needs no backfill; membership closed-period guard correct.
+   817→- Funds read model sign conventions are consistent everywhere (admin funds, payments review, residents list/360, resident dashboard all call residentFundsSummary); deficit threshold/grace/exemption logic coherent; meal restriction honors restrictMealsOnDeficit + deficitPolicyEnabled at the engine level (meal-engine.ts:184, 525, 627).
+   818→- Login: generic errors + timing equalizer + account-status gates; email normalized to lowercase.
+   819→
+   820→Next actions (for orchestrator):
+   821→1. Fix refunds: remove pendingPaymentsMinor from creditable (line 92) and stop subtracting carryForwardMinor in funds.ts:93 — both are resident-money correctness issues.
+   822→2. Add refund settlement leg (Cr CASH) + refund reconciliation, and a CAS/lock for refund creation.
+   823→3. Add bill settlement on payment approval (or amountToPay recompute) so bills stop going stale after generation.
+   824→4. Re-key the login email limit to per-IP+email failures-only.
+   825→5. Add closed-period + tz-consistent date guard for expenses; prune rate-limit buckets.
+   826→
+   827→---
+   828→Task ID: 9-a
+   829→Agent: logic-auditor (billing/ledger)
+   830→Task: Audit billing, formula, and ledger domain logic for bugs
+   831→
+   832→Work Log:
+   833→- Read worklog.md fully (context: money = Int paise, double-entry kernel in ledger.ts frozen by Task 1-e,
+   834→  seed wrote Aug-2026 BILLED period directly; spec sections §17-21, §39, §42-44, §45-59 consulted).
+   835→- Read every listed audit file end-to-end: billing.ts (920 L), ledger.ts, funds.ts, formula/{evaluator,
+   836→  period-variables,variables,ast,parser,versions}.ts, serialize.ts, all billing/bills API routes,
+   837→  prisma/schema.prisma (839 L). Supporting reads: money.ts, time.ts, http.ts, guest-meals, refunds,
+   838→  payments/expenses approve+void, bills adjustment, formulas preview routes.
+   839→- EMPIRICAL VERIFICATION (no files modified):
+   840→  * node + bun import of the live src/lib/money.ts → divideMinorRoundHalfUp(1734000, 352) = 492600
+   841→    (correct = 4926). Reproduced the evaluator "/" path against the live DB formula AST and Sep-2026
+   842→    variables: live result −15100 paise vs true quotient −151 paise (factor 100).
+   843→  * Queried db/custom.db: Aug-2026 snapshot mealChargeMinor = 4926 == TRUE quotient of
+   844→    (1767000−33000)/352, and the snapshot payload top-level keys are
+   845→    {residents,guestMeals,eligibleExpenses,approvedPayments,formula,policies} — NOT the payload shape
+   846→    generateBilling builds — proving the seeded BILLED period bypassed the live evaluator (masking the
+   847→    ×100 bug in E2E demos).
+   848→  * Grepped every postJournal call site (6) and verified Dr=Cr balance at each.
+   849→- Cross-checked spec §52-59 (readiness list, generation txn, snapshot contents, bill states) and
+   850→  §39/§42-44 (refund journal requirement, funds derivation) against the implementation.
+   851→
+   852→Findings (severity ordered):
+   853→
+   854→1. CRITICAL — WRONG MONEY MATH: divideMinorRoundHalfUp returns 100× the true quotient.
+   855→   File: src/lib/money.ts:48-60.
+   856→   Evidence: `const base = Math.floor(q / 10) * MINOR_FACTOR;` … `rounded = remainderDigit >= 5 ?
+   857→   base + MINOR_FACTOR : base;` — after computing the quotient in deci-paise (q = 10·|n|/|d|), the
+   858→   integer-paise result is `floor(q/10)` (+1 on half-up), but the code multiplies by MINOR_FACTOR=100.
+   859→   Also `const r = num % den;` is dead code. Verified live: divideMinorRoundHalfUp(10000,3)=333300
+   860→   (correct 3333); (1734000,352)=492600 (correct 4926 — exactly the seeded snapshot's true charge).
+   861→   Why it's wrong: every formula "/" (evaluator.ts:94) yields a per-meal charge 100× too large — bills,
+   862→   journals (Dr RESIDENT_FUNDS / Cr MEAL_CHARGE_INCOME), readiness summary, resident /api/v1/billing
+   863→   estimate, and admin formulas/preview (route.ts:53 resultPerMealMinor) all inherit the 100× error.
+   864→   The seed masked it (snapshot written directly, not via generateBilling).
+   865→   Fix: `const base = Math.floor(q / 10); const rounded = remainderDigit >= 5 ? base + 1 : base;
+   866→   return sign * rounded;` (drop ×MINOR_FACTOR, delete dead `r`).
+   867→
+   868→2. CRITICAL — Guest meal bills reprice at CURRENT settings price instead of the confirmed amounts.
+   869→   File: src/lib/domain/billing.ts:661, 687-694 (guestAmount = multiplyRoundHalfUp(guest.quantity,
+   870→   guestPriceMinor) where guestPriceMinor = inst.settings.guestMealPriceMinor at generation time, line
+   871→   365/470). Guest rows are collected WITH totalPriceMinor/unitPriceMinor (lines 495-502) and the
+   872→   snapshot stores the Σ totalPriceMinor per resident (line 556 guestAmountMinor) — but the bill line,
+   873→   bill.guestChargeMinor and the Cr GUEST_INCOME journal use quantity × current settings price.
+   874→   Why wrong: GuestMealRequest freezes unitPriceMinor at booking (guest-meals/route.ts:51-55 — may be a
+   875→   FIXED instance price snapshot, or the settings price at the time). Any mid-month settings change or
+   876→   any FIXED-price instance (festival meals) makes bills charge a different amount than residents were
+   877→   quoted/confirmed, diverges from the snapshot's own guestAmountMinor (provenance contradicts the
+   878→   bill), and makes Cr GUEST_INCOME disagree with the formula input total_guest_income (Σ stored
+   879→   totalPriceMinor). Readiness check 8 only re-verifies stored=qty×stored-unit, so it never catches this.
+   880→   Fix: bill the Σ totalPriceMinor (guest.amountMinor); if a qty×unit line is required, group requests
+   881→   by unit price or emit one line per distinct price.
+   882→
+   883→3. MODERATE — No guard against NEGATIVE meal charge / negative bill amounts.
+   884→   Files: src/lib/domain/billing.ts:176-196 (readiness check 4 only tests mealChargeMinor != null),
+   885→   656-734 (no sign checks on mealAmount/subtotal; status: totalDue===0?"PAID":"GENERATED" line 731;
+   886→   journal only when subtotal>0, line 740).
+   887→   Why wrong: the default formula (cost − guest income)/meals goes negative whenever guest income
+   888→   exceeds approved expenses (true in the CURRENT DB state for the OPEN Sep-2026 period: (0−11000)/73
+   889→   = −151). Generation then creates bills with negative lines, Math.min(subtotal, payments) can go
+   890→   negative producing a POSITIVE "Payments applied" line, and no journal is posted.
+   891→   Fix: readiness must require mealChargeMinor > 0 (block, human-readable reason); generateBilling
+   892→   should re-assert charge > 0 inside the transaction.
+   893→
+   894→4. MODERATE — QUERY: readiness "submitted tasks" check is not institution-scoped (cross-tenant).
+   895→   File: src/lib/domain/billing.ts:306 `client.taskSubmission.count({ where: { status: "SUBMITTED" } })`.
+   896→   Why wrong: TaskSubmission has NO institutionId column (schema.prisma:684-701) — the count spans ALL
+   897→   institutions. In the multi-institution-ready schema, another tenant's pending task submissions block
+   898→   this tenant's billing readiness (spec §53 "required task expenses processed" is per-institution).
+   899→   Fix: `count({ where: { status: "SUBMITTED", task: { institutionId: period.institutionId } } })`.
+   900→
+   901→5. MODERATE — Bill lifecycle hole: payments made AFTER generation never settle a bill.
+   902→   Files: src/app/api/v1/admin/payments/[id]/approve/route.ts (posts Dr CASH / Cr RESIDENT_FUNDS only —
+   903→   zero bill references, grep-verified), billing.ts:731 (only GENERATED/PAID written at creation),
+   904→   funds.ts:94 (amountToPay = Σ totalDue of unsettled bills), billing.ts:514-516 (payments applied at
+   905→   generation only count submittedAt within [startInstant, endInstant)).
+   906→   Why wrong: dueDate is month-end + billingDueDays (billing.ts:641) — AFTER generation — so payments
+   907→   for a bill inevitably arrive post-generation, yet nothing updates bill.paymentsMinor / totalDueMinor /
+   908→   status → PARTIALLY_PAID/PAID (spec §57 states exist but are unreachable); residents are told
+   909→   "Due"/"Overdue" forever (derivePaymentStatus, billing.ts:915-920), funds.amountToPay stays stale.
+   910→   Additionally a payment submitted BEFORE the period (prepayment) is never applied to ANY bill.
+   911→   Fix: allocate approved payments to oldest unsettled bills FIFO in the approval transaction
+   912→   (update paymentsMinor/totalDueMinor/status), and let carry-forward credit settle bills.
+   913→
+   914→6. MODERATE — DOUBLE-ENTRY: ISSUE_REFUND never clears REFUND_PAYABLE → CASH permanently overstated.
+   915→   File: src/app/api/v1/admin/refunds/route.ts:102-117 (journal Dr RESIDENT_FUNDS / Cr REFUND_PAYABLE,
+   916→   refund immediately COMPLETED; no payout journal anywhere — grep of all 6 postJournal sites).
+   917→   Why wrong: the paid-out cash never leaves the CASH account on the ledger; REFUND_PAYABLE liability
+   918→   grows forever with each refund. getAccountBalances (ledger.ts:122-140) therefore reports inflated
+   919→   cash. (Worklog 1-e even specified "ISSUE_REFUND posts Dr RESIDENT_FUNDS / Cr CASH".)
+   920→   Fix: post the payout leg on completion (Dr REFUND_PAYABLE / Cr CASH), or post
+   921→   Dr RESIDENT_FUNDS / Cr CASH directly.
+   922→
+   923→7. MODERATE — Refund creditable includes PENDING payments; CARRY_FORWARD strands credit with no journal.
+   924→   Files: refunds/route.ts:92 (`creditable = availableMinor + pendingPaymentsMinor` — a refund can
+   925→   consume unapproved money; if that payment is later rejected, the refund journal Dr RESIDENT_FUNDS
+   926→   has no backing credit → phantom deficit). funds.ts:93 (availableMinor subtracts carryForwardMinor
+   927→   while the ledger still holds the liability; bills never apply carry-forward credit → the money can
+   928→   never be spent; spec §39 requires a balanced journal for refunds and CARRY_FORWARD posts none).
+   929→   Fix: exclude PENDING from creditable (or hold refunds PENDING until the payment is approved); for
+   930→   CARRY_FORWARD keep the amount in availableMinor (it is, by definition, credit kept for future bills)
+   931→   or post a memo journal and apply it at next generation.
+   932→
+   933→8. MODERATE — Bill adjustments mutate totalDue/status with no journal and no funds-model effect.
+   934→   File: src/app/api/v1/admin/bills/[id]/adjustment/route.ts:52-79.
+   935→   Why wrong: after a discount/surcharge, bill.totalDueMinor (and funds.amountToPay) diverges from
+   936→   subtotalMinor (funds.charges) and from the ledger — the two money projections disagree with each
+   937→   other and with RESIDENT_FUNDS; income accounts never reflect the correction. (Route header documents
+   938→   the decision, but the ledger-is-source-of-truth invariant is broken.)
+   939→   Fix: post an adjustment journal (discount: Dr MEAL_CHARGE_INCOME / Cr RESIDENT_FUNDS; surcharge
+   940→   mirrored) and include adjustmentsMinor in the funds derivation.
+   941→
+   942→9. MINOR — Arithmetic confirmation is fully client-supplied (bypass).
+   943→   Files: billing.ts:418-427 + generate/route.ts:15-19 only verify answer == a+b for CLIENT-CHOSEN a,b
+   944→   (range 2-9). The readiness-issued challenge (readiness/route.ts:25-26) is never tied to the generate
+   945→   call. Spec §54 says it "prevents accidental clicks. It is not authentication", so impact is low, but
+   946→   the gate is decorative for scripted clients. Fix: have the server issue/sign the challenge and
+   947→   verify the same pair on generate.
+   948→
+   949→10. MINOR — Overdue comparisons flip at UTC midnight (05:30 IST).
+   950→    Files: dueDate stored as a UTC-midnight date marker (billing.ts:641) but compared to wall-clock
+   951→    `new Date()` in billing.ts:917, bills/route.ts:42, admin/bills/route.ts:85,
+   952→    bills/[id]/adjustment/route.ts:60 — a bill shows overdue 5.5h late in Asia/Kolkata. Fix: compare
+   953→    against the zoned end-of-day instant or store dueDate as a tz instant.
+   954→
+   955→11. MINOR — Unbilled leavers & empty bills.
+   956→    Files: billing.ts:477-486 (residents = status ACTIVE only) — a resident deactivated after consuming
+   957→    meals never gets a bill (their meals still lower the per-meal charge via the formula divisor, cost
+   958→    never recovered); conversely an ACTIVE resident with 0 meals + 0 guests gets an empty PAID bill
+   959→    (billing.ts:656-734, no zero-subtotal skip). Fix: bill any resident with ON meals in the period
+   960→    regardless of current status; skip (or explicitly mark) zero-subtotal bills.
+   961→
+   962→12. MINOR — derivePaymentStatus labels any past-due PARTIALLY_PAID bill "Overdue" (display only,
+   963→    billing.ts:915-920).
+   964→
+   965→VERIFIED CLEAN (no bugs found):
+   966→- postJournal (ledger.ts:70-109): Dr=Cr enforced before write, zero/negative/both-sides lines rejected,
+   967→  tx-aware; all 6 call sites post balanced journals; reversal journals for payment/expense voids are
+   968→  correct mirrored entries.
+   969→- Generation idempotency & concurrency: status OPEN + generationState:null guard (updateMany), Bill
+   970→  @@unique([residentId, billingPeriodId]), bill-number findUnique collision skip, readiness re-run
+   971→  inside the transaction with rollback — running generation twice fails cleanly with
+   972→  BILLING_ALREADY_BILLED; reopening is restricted (BILLED only, 48h window, audit-only, bills stay
+   973→  authoritative; REOPENED periods can't regenerate).
+   974→- Formula parser precedence (expression→term→primary, left-assoc), whitelist, arity checks, node/depth
+   975→  budgets, divide-by-zero → FORMULA_DIVIDE_BY_ZERO (blocks billing), unknown node types throw.
+   976→- period-variables month boundaries: serviceDate/expense.date compared as UTC-midnight markers,
+   977→  payment submittedAt as tz instants — both conventions applied consistently; no off-by-one found.
+   978→- User↔UserProfile inverted relation: every audited billing query uses the correct side
+   979→  (user.profile include / userProfile.userId lookups); institutionId scoping present on all other
+   980→  billing queries and list endpoints.
+   981→- Readiness checks 1-9, 11 (period open, pending payments/expenses, formula version, ledger reconcile,
+   982→  duplicate meals/instances, guest total recompute) all correctly scoped and computed.
+   983→
+   984→Next actions (for orchestrator): fix #1 first (one-line, unblocks correct pricing everywhere),
+   985→then #2/#3 before any real billing run; #4-#8 before multi-tenant/production use. Re-run E2E
+   986→generation through the LIVE path after fixing #1 and verify the generated meal charge equals
+   987→(snapshot.total market cost − guest income)/meals rounded to paise.
+   988→
+   989→---
+   990→Task ID: 10
+   991→Agent: Main Orchestrator (Z.ai Code)
+   992→Task: User report "fix the logics" — full domain-logic audit + fixes across money, billing, meals, payments, refunds
+   993→
+   994→Work Log:
+   995→- User had signed in successfully (post Task-8 auth fix) and browsed all admin views; no runtime
+   996→  errors in their traffic → ran 3 PARALLEL audit agents (9-a billing/ledger, 9-b meals/tasks,
+   997→  9-c payments/funds) over the domain code; their findings are appended above under Task IDs 9-a/9-b/9-c.
+   998→- CRITICAL FIX 1 — money.ts divideMinorRoundHalfUp returned 100× the true quotient (empirically
+   999→  verified: 1734000/352 → 492600 instead of 4926). EVERY division (formula preview/evaluator,
+  1000→  billing generation, per-meal estimates) overcharged 100×. Fixed integer math (base=floor(q/10),
+  1001→  bump ONE minor unit on half-up); 11-case test table passes; live formula preview now −₹1.51
+  1002→  for (0−11000)/73 where it would have been −₹151.00.
+  1003→- CRITICAL FIX 2 — billing.ts billed guest meals at CURRENT settings price instead of the
+  1004→  per-request totalPriceMinor frozen at booking (fixed-price instances diverged). Bills now use
+  1005→  Σ stored totals with an "as booked" provenance label.
+  1006→- CRITICAL FIX 3 — negative per-meal charge could generate negative bills/lines (Sep data is
+  1007→  exactly this: (0−11000)/73). Readiness check 4 now fails with an explanatory message.
+  1008→- CRITICAL FIX 4 — refunds were payable against PENDING (unapproved) money
+  1009→  (creditable=available+pending). Now approved funds only; post-condition re-verifies
+  1010→  available ≥ 0 inside the tx (concurrent over-refund rolls back).
+  1011→- CRITICAL FIX 5 — CARRY_FORWARD refunds erased real credit from availableMinor (subtract with
+  1012→  no journal). carryForwardMinor is now informational; available = credits − charges − refundsIssued.
+  1013→- CRITICAL FIX 6 — bills never settled after generation. New deterministic
+  1014→  recomputeBillSettlement(tx, residentId) in funds.ts: pool = Σ APPROVED payments allocated FIFO
+  1015→  to live bills (oldest due first, capped at subtotal+adjustments, status PAID/PARTIALLY_PAID/
+  1016→  OVERDUE derived). Called in payment approve AND void (recompute excludes/includes the payment —
+  1017→  no attribution drift; an incremental un-apply over-reversed during testing, which motivated the
+  1018→  full-recompute design). Verified: meera approve → bill PAID; true-up pass fixed sahid's stale
+  1019→  state; riya PAID with 109532 unapplied credit (minus 50000 refund = funds kernel available).
+  1020→- MODERATE FIXES: ISSUE_REFUND journal now Dr RESIDENT_FUNDS / Cr CASH directly (was Cr
+  1021→  REFUND_PAYABLE, never settled → CASH overstated); readiness submitted-tasks count scoped via
+  1022→  task.institutionId (was global); meal toggle + admin override writes are now version-conditional
+  1023→  updateMany (atomic optimistic concurrency, RESOURCE_CHANGED on race — verified 409 wrong-version
+  1024→  / 200 correct-version); task submission only legal from IN_PROGRESS (spec §61); login rate
+  1025→  limits reworked to failures-only per IP+email (10 fails/15min) + 30/15min IP cap — successes no
+  1026→  longer self-lockout and one tester can't block a real user (rateLimitCount/rateLimitCheck added
+  1027→  to rate-limit.ts); guest-meal creation is idempotent (IdempotencyRecord scope GUEST_MEAL_ADD,
+  1028→  client sends crypto.randomUUID per dialog open — verified same key replays same row, 1 DB row);
+  1029→  pay-dialog now sends idempotencyKey (payments route already supported it); expense POST rejects
+  1030→  dates inside BILLED periods (BILLING_PERIOD_CLOSED 409); dateKeySchema rejects impossible
+  1031→  calendar dates (2026-02-30); refreshAndLock honors freeze-at-cutoff semantics — leave approved
+  1032→  or calendar event created AFTER a meal's cutoff can no longer retroactively flip that meal
+  1033→  (only facts known at cutoff participate in the frozen evaluation).
+  1034→
+  1035→Verification (all live):
+  1036→- lint clean; dev server healthy; no console errors.
+  1037→- Formula preview: correct paise math; readiness Sep fails on negative charge + pending items (correct).
+  1038→- Payment approve → journal balanced Dr CASH 200000/Cr RESIDENT_FUNDS; bill settled to PAID.
+  1039→- Refund 1500 > available 1095.32 → INSUFFICIENT_REFUND_CREDIT with exact amount; refund 500 →
+  1040→  available 595.32, journal Dr RESIDENT_FUNDS/Cr CASH balanced.
+  1041→- Void + recompute + true-up: all 5 Aug bills correct (2 PAID, 3 PARTIALLY_PAID).
+  1042→- Browser E2E: admin dashboard KPIs (−₹1.51 per-meal now truthful), resident sahid dashboard
+  1043→  balance −₹156.72 + amount-to-pay ₹156.72 + billing page "BILL-202608-0001 PARTIALLY_PAID
+  1044→  Total ₹3,656.72 Left ₹156.72"; meal toggle version-guard verified via UI + curl.
+  1045→- Old 500s in dev.log (task-submissions ?status filter, generate for period cmtkm9gpu…) traced to
+  1046→  the PRE-re-seed database generation (institution cmtkm9ftg…) — both endpoints return 200 now.
+  1047→
+  1048→Stage Summary:
+  1049→- 6 critical + ~10 moderate logic bugs fixed across money.ts, billing.ts, funds.ts, refunds,
+  1050→  payments approve/void, meals toggle, admin override, task submission, login rate limits,
+  1051→  guest-meals idempotency, expenses closed-period guard, date validation, meal-engine freeze.
+  1052→- Money integrity restored: divisions correct, guest billing matches confirmed bookings, refunds
+  1053→  only pay out approved funds, bills settle FIFO from the approved pool, ledger stays balanced.
+  1054→- Files touched: src/lib/money.ts, src/lib/domain/billing.ts, src/lib/domain/funds.ts,
+  1055→  src/lib/domain/meal-engine.ts, src/lib/rate-limit.ts, src/lib/validation.ts,
+  1056→  api/v1/admin/refunds/route.ts, api/v1/admin/payments/[id]/approve + void routes,
+  1057→  api/v1/meals/[instanceId]/toggle, api/v1/admin/meals/[instanceId]/override,
+  1058→  api/v1/tasks/[id]/submission, api/v1/auth/login, api/v1/guest-meals,
+  1059→  api/v1/admin/expenses, resident _shared/pay-dialog.tsx + guest-leave-dialogs.tsx.
+  1060→

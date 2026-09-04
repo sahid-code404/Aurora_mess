@@ -1,0 +1,808 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * AuthScreen — sign in / create account (Liquid Glass II).
+     5→ * Floating glass card over the animated aurora canopy. Split brand panel on
+     6→ * desktop with a liquid-gradient headline and staggered feature list; the
+     7→ * form fields cascade in with springs and the two modes cross-fade.
+     8→ * Sign-in surfaces domain error codes with plain copy; register collects
+     9→ * profile fields + policy acceptances (graceful when policies aren't
+    10→ * deployed) and ends on an "application submitted" screen. A clearly-marked
+    11→ * development seed panel (spec §191) offers one-tap credential fills.
+    12→ */
+    13→
+    14→import { useMemo, useState } from "react";
+    15→import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+    16→import {
+    17→  AlertCircle,
+    18→  CheckCircle2,
+    19→  Eye,
+    20→  EyeOff,
+    21→  ListChecks,
+    22→  Mail,
+    23→  Sparkles,
+    24→  Terminal,
+    25→  UtensilsCrossed,
+    26→  Wallet,
+    27→  type LucideIcon,
+    28→} from "lucide-react";
+    29→import { api, ApiClientError, persistSessionToken } from "@/lib/api";
+    30→import { useApiQuery } from "@/hooks/use-api-query";
+    31→import GlassCard from "@/components/glass/GlassCard";
+    32→import GlassButton from "@/components/glass/GlassButton";
+    33→import SegmentedControl from "@/components/glass/SegmentedControl";
+    34→import { SPRING_SOFT, riseIn } from "@/lib/motion";
+    35→import { cn } from "@/lib/utils";
+    36→
+    37→type Mode = "signin" | "register";
+    38→
+    39→const SIGNIN_ERROR_COPY: Record<string, string> = {
+    40→  INVALID_CREDENTIALS: "Email or password is incorrect.",
+    41→  ACCOUNT_PENDING: "Your account is waiting for admin approval.",
+    42→  ACCOUNT_REJECTED: "Your registration was declined. Please contact the admin.",
+    43→  ACCOUNT_INACTIVE: "This account is inactive. Please contact the admin.",
+    44→  NETWORK: "We couldn't reach the server. Check your connection and try again.",
+    45→};
+    46→
+    47→const GENERIC_ERROR =
+    48→  "Something went wrong. Please try again — if it keeps happening, contact the admin.";
+    49→
+    50→interface PolicyInfo {
+    51→  policyId: string;
+    52→  policyVersionId: string;
+    53→  title: string;
+    54→  version?: string;
+    55→}
+    56→
+    57→function normalizePolicies(data: unknown): PolicyInfo[] {
+    58→  const obj = data as { items?: unknown } | null;
+    59→  const raw = Array.isArray(data)
+    60→    ? data
+    61→    : Array.isArray(obj?.items)
+    62→      ? (obj.items as unknown[])
+    63→      : [];
+    64→  const out: PolicyInfo[] = [];
+    65→  for (const p of raw) {
+    66→    if (!p || typeof p !== "object") continue;
+    67→    const o = p as Record<string, unknown>;
+    68→    const policyId = [o.policyId, o.id].find((v): v is string => typeof v === "string");
+    69→    const policyVersionId = [o.policyVersionId, o.versionId, o.id].find(
+    70→      (v): v is string => typeof v === "string"
+    71→    );
+    72→    if (!policyId || !policyVersionId) continue;
+    73→    out.push({
+    74→      policyId,
+    75→      policyVersionId,
+    76→      title:
+    77→        [o.title, o.name].find((v): v is string => typeof v === "string") ??
+    78→        "Community policy",
+    79→      version:
+    80→        typeof o.version === "string" || typeof o.version === "number"
+    81→          ? String(o.version)
+    82→          : undefined,
+    83→    });
+    84→  }
+    85→  return out;
+    86→}
+    87→
+    88→/* ------------------------------------------------------------------ bits */
+    89→
+    90→function Field({
+    91→  label,
+    92→  error,
+    93→  children,
+    94→  htmlFor,
+    95→}: {
+    96→  label: string;
+    97→  error?: string;
+    98→  htmlFor: string;
+    99→  children: React.ReactNode;
+   100→}) {
+   101→  return (
+   102→    <div>
+   103→      <label htmlFor={htmlFor} className="mb-1.5 block text-[13px] font-medium text-muted-foreground">
+   104→        {label}
+   105→      </label>
+   106→      {children}
+   107→      <AnimatePresence>
+   108→        {error && (
+   109→          <motion.p
+   110→            role="alert"
+   111→            initial={{ opacity: 0, y: -4, height: 0 }}
+   112→            animate={{ opacity: 1, y: 0, height: "auto" }}
+   113→            exit={{ opacity: 0, y: -4, height: 0 }}
+   114→            transition={{ duration: 0.2 }}
+   115→            className="mt-1.5 overflow-hidden text-xs text-danger"
+   116→          >
+   117→            {error}
+   118→          </motion.p>
+   119→        )}
+   120→      </AnimatePresence>
+   121→    </div>
+   122→  );
+   123→}
+   124→
+   125→const inputClass =
+   126→  "glass-inset h-12 w-full rounded-xl px-4 text-[15px] outline-none transition-[box-shadow,border-color,background-color] placeholder:text-muted-foreground/55 hover:border-glass-border-strong focus-visible:border-primary/45 focus-visible:bg-white/[0.03] focus-visible:shadow-[0_0_0_4px_color-mix(in_oklab,var(--primary)_16%,transparent),inset_0_1px_2px_rgba(0,0,0,0.22)]";
+   127→
+   128→function ErrorSurface({ message }: { message: string }) {
+   129→  return (
+   130→    <motion.div
+   131→      role="alert"
+   132→      initial={{ opacity: 0, scale: 0.97, y: -6 }}
+   133→      animate={{ opacity: 1, scale: 1, y: 0 }}
+   134→      transition={SPRING_SOFT}
+   135→      className="liquid-sheen flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger/10 p-3 text-[13px] leading-relaxed text-danger"
+   136→    >
+   137→      <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+   138→      <span>{message}</span>
+   139→    </motion.div>
+   140→  );
+   141→}
+   142→
+   143→function PasswordInput({
+   144→  id,
+   145→  value,
+   146→  onChange,
+   147→  placeholder,
+   148→  autoComplete,
+   149→  error,
+   150→}: {
+   151→  id: string;
+   152→  value: string;
+   153→  onChange: (v: string) => void;
+   154→  placeholder?: string;
+   155→  autoComplete?: string;
+   156→  error?: boolean;
+   157→}) {
+   158→  const [show, setShow] = useState(false);
+   159→  return (
+   160→    <div className="relative">
+   161→      <input
+   162→        id={id}
+   163→        type={show ? "text" : "password"}
+   164→        value={value}
+   165→        onChange={(e) => onChange(e.target.value)}
+   166→        placeholder={placeholder}
+   167→        autoComplete={autoComplete}
+   168→        required
+   169→        className={cn(inputClass, "pr-12", error && "border-danger/40")}
+   170→      />
+   171→      <motion.button
+   172→        type="button"
+   173→        aria-label={show ? "Hide password" : "Show password"}
+   174→        whileTap={{ scale: 0.86 }}
+   175→        transition={{ type: "spring", stiffness: 500, damping: 24 }}
+   176→        onClick={() => setShow((s) => !s)}
+   177→        className="absolute inset-y-0 right-0 flex w-12 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+   178→      >
+   179→        <AnimatePresence mode="wait" initial={false}>
+   180→          <motion.span
+   181→            key={show ? "off" : "on"}
+   182→            initial={{ scale: 0.6, opacity: 0, rotate: -20 }}
+   183→            animate={{ scale: 1, opacity: 1, rotate: 0 }}
+   184→            exit={{ scale: 0.6, opacity: 0, rotate: 20 }}
+   185→            transition={{ duration: 0.18 }}
+   186→          >
+   187→            {show ? <EyeOff className="size-4.5" aria-hidden /> : <Eye className="size-4.5" aria-hidden />}
+   188→          </motion.span>
+   189→        </AnimatePresence>
+   190→      </motion.button>
+   191→    </div>
+   192→  );
+   193→}
+   194→
+   195→function BrandFeature({ icon: Icon, children, index }: { icon: LucideIcon; children: React.ReactNode; index: number }) {
+   196→  return (
+   197→    <motion.li
+   198→      variants={riseIn}
+   199→      custom={index}
+   200→      className="flex items-center gap-3.5 text-sm text-foreground/85"
+   201→    >
+   202→      <span className="glass-inset flex size-9 shrink-0 items-center justify-center rounded-pill text-primary shadow-[0_4px_14px_-6px_color-mix(in_oklab,var(--primary)_60%,transparent)] [&_svg]:size-4.5">
+   203→        <Icon aria-hidden />
+   204→      </span>
+   205→      {children}
+   206→    </motion.li>
+   207→  );
+   208→}
+   209→
+   210→const SEED_ACCOUNTS = [
+   211→  { role: "Admin", email: "admin@messtest.in", password: "Admin#12345" },
+   212→  { role: "Resident", email: "sahid@messtest.in", password: "Resident#12345" },
+   213→];
+   214→
+   215→/* ---------------------------------------------------- animated brand mark */
+   216→
+   217→function BrandMark({ size = 44, floating = true }: { size?: number; floating?: boolean }) {
+   218→  return (
+   219→    <span
+   220→      className={cn(
+   221→        "glass-strong glow-breathe flex items-center justify-center rounded-2xl",
+   222→        floating && "float-y"
+   223→      )}
+   224→      style={{ width: size + 16, height: size + 16 }}
+   225→    >
+   226→      <img
+   227→        src="/logo-mark.png"
+   228→        alt=""
+   229→        width={size}
+   230→        height={size}
+   231→        className="rounded-xl object-cover"
+   232→        style={{ width: size, height: size }}
+   233→      />
+   234→    </span>
+   235→  );
+   236→}
+   237→
+   238→/* -------------------------------------------------------------- the screen */
+   239→
+   240→export interface AuthScreenProps {
+   241→  /** Called after a successful sign-in so the session query refetches. */
+   242→  onSuccess: () => void;
+   243→}
+   244→
+   245→export function AuthScreen({ onSuccess }: AuthScreenProps) {
+   246→  const reduced = useReducedMotion();
+   247→  const [mode, setMode] = useState<Mode>("signin");
+   248→
+   249→  const entrance = reduced
+   250→    ? {}
+   251→    : {
+   252→        initial: { opacity: 0, y: 26, scale: 0.97 },
+   253→        animate: { opacity: 1, y: 0, scale: 1 },
+   254→        transition: { type: "spring" as const, stiffness: 200, damping: 24, mass: 1 },
+   255→      };
+   256→
+   257→  return (
+   258→    <div className="relative flex min-h-screen w-full flex-col lg:grid lg:grid-cols-[1.05fr_1fr]">
+   259→      {/* ---- brand panel (desktop) ---- */}
+   260→      <div className="relative hidden flex-col justify-between overflow-hidden p-12 lg:flex">
+   261→        <div className="auth-bg" aria-hidden />
+   262→        <div
+   263→          aria-hidden
+   264→          className="absolute inset-0"
+   265→          style={{
+   266→            background:
+   267→              "radial-gradient(720px 480px at 18% 8%, color-mix(in oklab, var(--primary) 16%, transparent), transparent 62%), radial-gradient(560px 420px at 88% 82%, rgba(219,186,134,0.14), transparent 60%)",
+   268→          }}
+   269→        />
+   270→        <div className="relative z-10 flex items-center gap-4">
+   271→          <BrandMark size={40} />
+   272→          <div>
+   273→            <p className="font-display text-lg font-bold tracking-tight">Aurora Mess</p>
+   274→            <p className="text-xs text-muted-foreground">Aurora Residency</p>
+   275→          </div>
+   276→        </div>
+   277→        <motion.div
+   278→          initial={reduced ? undefined : { opacity: 0, y: 24 }}
+   279→          animate={{ opacity: 1, y: 0 }}
+   280→          transition={{ ...SPRING_SOFT, delay: 0.15 }}
+   281→          className="relative z-10 max-w-md"
+   282→        >
+   283→          <motion.div
+   284→            initial={reduced ? undefined : { scale: 0.8, opacity: 0 }}
+   285→            animate={{ scale: 1, opacity: 1 }}
+   286→            transition={{ delay: 0.35, type: "spring", stiffness: 300, damping: 18 }}
+   287→            className="glass-inset mb-6 inline-flex items-center gap-2 rounded-pill px-3.5 py-1.5 text-[11px] font-semibold tracking-wide text-primary"
+   288→          >
+   289→            <Sparkles className="size-3.5" aria-hidden />
+   290→            LIQUID GLASS EDITION
+   291→          </motion.div>
+   292→          <h2 className="font-display text-[34px] font-bold leading-[1.15] tracking-tight">
+   293→            Meals, money &amp; operations —{" "}
+   294→            <span className="text-liquid">beautifully kept.</span>
+   295→          </h2>
+   296→          <motion.ul
+   297→            initial="hidden"
+   298→            animate="show"
+   299→            variants={{ hidden: {}, show: { transition: { staggerChildren: 0.12, delayChildren: 0.3 } } }}
+   300→            className="mt-8 space-y-4"
+   301→          >
+   302→            <BrandFeature icon={UtensilsCrossed} index={0}>
+   303→              Meals with honest, server-side cutoffs
+   304→            </BrandFeature>
+   305→            <BrandFeature icon={Wallet} index={1}>
+   306→              Every rupee traced through a double-entry ledger
+   307→            </BrandFeature>
+   308→            <BrandFeature icon={ListChecks} index={2}>
+   309→              Tasks that turn into approved payouts
+   310→            </BrandFeature>
+   311→          </motion.ul>
+   312→        </motion.div>
+   313→        <p className="relative z-10 text-xs text-muted-foreground">
+   314→          Aurora Residency Mess · INR · Asia/Kolkata
+   315→        </p>
+   316→      </div>
+   317→
+   318→      {/* ---- form side ---- */}
+   319→      <div className="relative flex min-h-screen flex-col items-center justify-center px-4 py-10 sm:px-8">
+   320→        {/* compact brand header (mobile) */}
+   321→        <motion.div
+   322→          initial={reduced ? undefined : { opacity: 0, y: -14 }}
+   323→          animate={{ opacity: 1, y: 0 }}
+   324→          transition={SPRING_SOFT}
+   325→          className="anim-rise mb-7 flex items-center gap-3.5 lg:hidden"
+   326→        >
+   327→          <BrandMark size={36} floating={false} />
+   328→          <div>
+   329→            <p className="font-display text-base font-bold tracking-tight">Aurora Mess</p>
+   330→            <p className="text-[11px] text-muted-foreground">Meals, money &amp; operations — beautifully kept.</p>
+   331→          </div>
+   332→        </motion.div>
+   333→
+   334→        <motion.div {...entrance} className="w-full max-w-md">
+   335→          <GlassCard strong className="liquid-sheen p-6 pb-7 sm:p-8">
+   336→            <div className="mb-5">
+   337→              <h1 className="font-display text-[22px] font-bold tracking-tight sm:text-2xl">
+   338→                {mode === "signin" ? "Welcome back" : "Create your account"}
+   339→              </h1>
+   340→              <p className="mt-1.5 text-[13px] text-muted-foreground">
+   341→                {mode === "signin"
+   342→                  ? "Sign in to your mess account."
+   343→                  : "Apply to join — the admin reviews every application."}
+   344→              </p>
+   345→            </div>
+   346→
+   347→            <SegmentedControl
+   348→              options={[
+   349→                { value: "signin", label: "Sign in" },
+   350→                { value: "register", label: "Create account" },
+   351→              ]}
+   352→              value={mode}
+   353→              onChange={(v) => setMode(v as Mode)}
+   354→              aria-label="Authentication mode"
+   355→              className="mb-6"
+   356→            />
+   357→
+   358→            <AnimatePresence mode="wait" initial={false}>
+   359→              <motion.div
+   360→                key={mode}
+   361→                initial={reduced ? undefined : { opacity: 0, x: mode === "signin" ? -18 : 18, scale: 0.99 }}
+   362→                animate={{ opacity: 1, x: 0, scale: 1 }}
+   363→                exit={reduced ? undefined : { opacity: 0, x: mode === "signin" ? 18 : -18, scale: 0.99 }}
+   364→                transition={{ type: "spring", stiffness: 320, damping: 30 }}
+   365→              >
+   366→                {mode === "signin" ? (
+   367→                  <SignInForm onSuccess={onSuccess} />
+   368→                ) : (
+   369→                  <RegisterForm onDone={() => setMode("signin")} />
+   370→                )}
+   371→              </motion.div>
+   372→            </AnimatePresence>
+   373→          </GlassCard>
+   374→
+   375→          {mode === "signin" && <DevSeedPanel />}
+   376→        </motion.div>
+   377→      </div>
+   378→    </div>
+   379→  );
+   380→}
+   381→
+   382→/* ---------------------------------------------------------------- sign in */
+   383→
+   384→function SignInForm({ onSuccess }: { onSuccess: () => void }) {
+   385→  const [email, setEmail] = useState("");
+   386→  const [password, setPassword] = useState("");
+   387→  const [pending, setPending] = useState(false);
+   388→  const [error, setError] = useState<string | null>(null);
+   389→
+   390→  async function submit(e: React.FormEvent) {
+   391→    e.preventDefault();
+   392→    if (pending) return;
+   393→    setPending(true);
+   394→    setError(null);
+   395→    try {
+   396→      const data = await api<{ sessionToken?: string }>("/api/v1/auth/login", {
+   397→        method: "POST",
+   398→        json: { email: email.trim(), password },
+   399→      });
+   400→      // Cookie-blocked contexts (preview iframe) rely on the Bearer fallback:
+   401→      // keep the raw token so subsequent /auth/me calls can authenticate.
+   402→      if (data?.sessionToken) {
+   403→        persistSessionToken(data.sessionToken);
+   404→      }
+   405→      onSuccess();
+   406→    } catch (err) {
+   407→      if (err instanceof ApiClientError) {
+   408→        setError(SIGNIN_ERROR_COPY[err.code] ?? err.message);
+   409→      } else {
+   410→        setError(SIGNIN_ERROR_COPY.NETWORK);
+   411→      }
+   412→    } finally {
+   413→      setPending(false);
+   414→    }
+   415→  }
+   416→
+   417→  return (
+   418→    <form onSubmit={submit} className="space-y-4.5" noValidate>
+   419→      <motion.div
+   420→        initial={{ opacity: 0, y: 14 }}
+   421→        animate={{ opacity: 1, y: 0 }}
+   422→        transition={SPRING_SOFT}
+   423→      >
+   424→        <Field label="Email" htmlFor="signin-email">
+   425→          <input
+   426→            id="signin-email"
+   427→            type="email"
+   428→            inputMode="email"
+   429→            autoComplete="email"
+   430→            value={email}
+   431→            onChange={(e) => setEmail(e.target.value)}
+   432→            placeholder="you@messtest.in"
+   433→            required
+   434→            className={inputClass}
+   435→          />
+   436→        </Field>
+   437→      </motion.div>
+   438→      <motion.div
+   439→        initial={{ opacity: 0, y: 14 }}
+   440→        animate={{ opacity: 1, y: 0 }}
+   441→        transition={{ ...SPRING_SOFT, delay: 0.08 }}
+   442→      >
+   443→        <Field label="Password" htmlFor="signin-password">
+   444→          <PasswordInput
+   445→            id="signin-password"
+   446→            value={password}
+   447→            onChange={setPassword}
+   448→            autoComplete="current-password"
+   449→          />
+   450→        </Field>
+   451→      </motion.div>
+   452→      <AnimatePresence>{error && <ErrorSurface message={error} />}</AnimatePresence>
+   453→      <motion.div
+   454→        initial={{ opacity: 0, y: 14 }}
+   455→        animate={{ opacity: 1, y: 0 }}
+   456→        transition={{ ...SPRING_SOFT, delay: 0.16 }}
+   457→      >
+   458→        <GlassButton type="submit" size="lg" fullWidth loading={pending} className="mt-1">
+   459→          Sign in
+   460→        </GlassButton>
+   461→      </motion.div>
+   462→    </form>
+   463→  );
+   464→}
+   465→
+   466→/* -------------------------------------------------------------- register */
+   467→
+   468→interface RegisterForm {
+   469→  fullName: string;
+   470→  email: string;
+   471→  phone: string;
+   472→  room: string;
+   473→  password: string;
+   474→  confirm: string;
+   475→}
+   476→
+   477→const EMPTY_REGISTER: RegisterForm = {
+   478→  fullName: "",
+   479→  email: "",
+   480→  phone: "",
+   481→  room: "",
+   482→  password: "",
+   483→  confirm: "",
+   484→};
+   485→
+   486→function passwordProblemText(pw: string): string | null {
+   487→  const problems: string[] = [];
+   488→  if (pw.length < 10) problems.push("at least 10 characters");
+   489→  if (!/[a-z]/.test(pw)) problems.push("a lowercase letter");
+   490→  if (!/[A-Z]/.test(pw)) problems.push("an uppercase letter");
+   491→  if (!/[0-9]/.test(pw)) problems.push("a number");
+   492→  return problems.length ? `Password needs ${problems.join(", ")}.` : null;
+   493→}
+   494→
+   495→function RegisterForm({ onDone }: { onDone: () => void }) {
+   496→  const [form, setForm] = useState<RegisterForm>(EMPTY_REGISTER);
+   497→  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof RegisterForm, string>>>({});
+   498→  const [accepted, setAccepted] = useState<Record<string, boolean>>({});
+   499→  const [fallbackAccepted, setFallbackAccepted] = useState(false);
+   500→  const [pending, setPending] = useState(false);
+   501→  const [error, setError] = useState<string | null>(null);
+   502→  const [submitted, setSubmitted] = useState(false);
+   503→
+   504→  const policiesQuery = useApiQuery<unknown>("/api/v1/auth/policies");
+   505→  const policies = useMemo(
+   506→    () => (policiesQuery.data ? normalizePolicies(policiesQuery.data) : []),
+   507→    [policiesQuery.data]
+   508→  );
+   509→  const policiesUnavailable =
+   510→    policiesQuery.isError || (policiesQuery.isSuccess && policies.length === 0);
+   511→
+   512→  const set = (key: keyof RegisterForm) => (v: string) =>
+   513→    setForm((f) => ({ ...f, [key]: v }));
+   514→
+   515→  function validate(): boolean {
+   516→    const errs: Partial<Record<keyof RegisterForm, string>> = {};
+   517→    if (form.fullName.trim().length < 2) errs.fullName = "Enter your full name.";
+   518→    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim()))
+   519→      errs.email = "Enter a valid email address.";
+   520→    if (form.phone.trim() !== "" && !/^[+0-9 ()-]{6,18}$/.test(form.phone.trim()))
+   521→      errs.phone = "Enter a valid phone number.";
+   522→    const pwProblem = passwordProblemText(form.password);
+   523→    if (pwProblem) errs.password = pwProblem;
+   524→    if (form.confirm !== form.password) errs.confirm = "Passwords don't match.";
+   525→    if (!policiesUnavailable && policies.some((p) => !accepted[p.policyId])) {
+   526→      setError("Please accept the community policies to continue.");
+   527→    } else if (policiesUnavailable && !fallbackAccepted) {
+   528→      setError("Please confirm you agree to the mess rules to continue.");
+   529→    }
+   530→    setFieldErrors(errs);
+   531→    return Object.keys(errs).length === 0;
+   532→  }
+   533→
+   534→  async function submit(e: React.FormEvent) {
+   535→    e.preventDefault();
+   536→    if (pending) return;
+   537→    setError(null);
+   538→    if (!validate()) return;
+   539→    setPending(true);
+   540→    try {
+   541→      await api("/api/v1/auth/register", {
+   542→        method: "POST",
+   543→        json: {
+   544→          fullName: form.fullName.trim(),
+   545→          email: form.email.trim().toLowerCase(),
+   546→          phone: form.phone.trim() || undefined,
+   547→          room: form.room.trim() || undefined,
+   548→          password: form.password,
+   549→          acceptances: policies.map((p) => ({
+   550→            policyId: p.policyId,
+   551→            policyVersionId: p.policyVersionId,
+   552→          })),
+   553→        },
+   554→      });
+   555→      setSubmitted(true);
+   556→    } catch (err) {
+   557→      if (err instanceof ApiClientError) {
+   558→        if (err.fields) {
+   559→          const errs: Partial<Record<keyof RegisterForm, string>> = {};
+   560→          for (const [k, v] of Object.entries(err.fields)) {
+   561→            const key = k as keyof RegisterForm;
+   562→            if (key in EMPTY_REGISTER) errs[key] = v;
+   563→          }
+   564→          setFieldErrors((prev) => ({ ...prev, ...errs }));
+   565→          if (Object.keys(errs).length === 0) setError(err.message);
+   566→        } else {
+   567→          setError(err.message);
+   568→        }
+   569→      } else {
+   570→        setError(SIGNIN_ERROR_COPY.NETWORK);
+   571→      }
+   572→    } finally {
+   573→      setPending(false);
+   574→    }
+   575→  }
+   576→
+   577→  if (submitted) {
+   578→    return (
+   579→      <motion.div
+   580→        initial={{ opacity: 0, scale: 0.94, y: 14 }}
+   581→        animate={{ opacity: 1, scale: 1, y: 0 }}
+   582→        transition={SPRING_SOFT}
+   583→        className="flex flex-col items-center py-6 text-center"
+   584→      >
+   585→        <motion.span
+   586→          initial={{ scale: 0, rotate: -30 }}
+   587→          animate={{ scale: 1, rotate: 0 }}
+   588→          transition={{ type: "spring", stiffness: 400, damping: 16, delay: 0.15 }}
+   589→          className="flex size-16 items-center justify-center rounded-pill border border-success/35 bg-success/14 text-success shadow-[0_10px_30px_-10px_color-mix(in_oklab,var(--success)_60%,transparent)] [&_svg]:size-7"
+   590→        >
+   591→          <CheckCircle2 aria-hidden />
+   592→        </motion.span>
+   593→        <h3 className="font-display mt-5 text-lg font-bold">Application submitted</h3>
+   594→        <p className="mt-2 max-w-xs text-[13px] leading-relaxed text-muted-foreground">
+   595→          Waiting for approval — the admin will review your application. You&apos;ll be
+   596→          able to sign in once it&apos;s approved.
+   597→        </p>
+   598→        <GlassButton variant="secondary" className="mt-6" onClick={onDone}>
+   599→          Back to sign in
+   600→        </GlassButton>
+   601→      </motion.div>
+   602→    );
+   603→  }
+   604→
+   605→  return (
+   606→    <form onSubmit={submit} className="space-y-4.5" noValidate>
+   607→      <div className="grid grid-cols-1 gap-4.5 min-[480px]:grid-cols-2">
+   608→        <Field label="Full name" htmlFor="reg-name" error={fieldErrors.fullName}>
+   609→          <input
+   610→            id="reg-name"
+   611→            type="text"
+   612→            autoComplete="name"
+   613→            value={form.fullName}
+   614→            onChange={(e) => set("fullName")(e.target.value)}
+   615→            placeholder="Sahid Khan"
+   616→            className={inputClass}
+   617→          />
+   618→        </Field>
+   619→        <Field label="Room (optional)" htmlFor="reg-room">
+   620→          <input
+   621→            id="reg-room"
+   622→            type="text"
+   623→            value={form.room}
+   624→            onChange={(e) => set("room")(e.target.value)}
+   625→            placeholder="B-204"
+   626→            className={inputClass}
+   627→          />
+   628→        </Field>
+   629→      </div>
+   630→      <Field label="Email" htmlFor="reg-email" error={fieldErrors.email}>
+   631→        <input
+   632→          id="reg-email"
+   633→          type="email"
+   634→          inputMode="email"
+   635→          autoComplete="email"
+   636→          value={form.email}
+   637→          onChange={(e) => set("email")(e.target.value)}
+   638→          placeholder="you@example.com"
+   639→          className={inputClass}
+   640→        />
+   641→      </Field>
+   642→      <Field label="Phone (optional)" htmlFor="reg-phone" error={fieldErrors.phone}>
+   643→        <input
+   644→          id="reg-phone"
+   645→          type="tel"
+   646→          autoComplete="tel"
+   647→          value={form.phone}
+   648→          onChange={(e) => set("phone")(e.target.value)}
+   649→          placeholder="+91 98765 43210"
+   650→          className={inputClass}
+   651→        />
+   652→      </Field>
+   653→      <Field label="Password" htmlFor="reg-password" error={fieldErrors.password}>
+   654→        <PasswordInput
+   655→          id="reg-password"
+   656→          value={form.password}
+   657→          onChange={set("password")}
+   658→          autoComplete="new-password"
+   659→          error={!!fieldErrors.password}
+   660→        />
+   661→      </Field>
+   662→      <Field label="Confirm password" htmlFor="reg-confirm" error={fieldErrors.confirm}>
+   663→        <PasswordInput
+   664→          id="reg-confirm"
+   665→          value={form.confirm}
+   666→          onChange={set("confirm")}
+   667→          autoComplete="new-password"
+   668→          error={!!fieldErrors.confirm}
+   669→        />
+   670→      </Field>
+   671→
+   672→      {/* policy acceptance */}
+   673→      <div className="glass-inset liquid-sheen space-y-2.5 rounded-xl p-4">
+   674→        <p className="text-xs font-semibold text-muted-foreground">Policies</p>
+   675→        {policiesQuery.isLoading && <div className="glass-skeleton h-4 w-3/4" />}
+   676→        {policiesQuery.isError && (
+   677→          <p className="text-[13px] leading-relaxed text-warning">
+   678→            We couldn&apos;t load the community policies right now. You can still apply —
+   679→            the admin reviews every application.
+   680→          </p>
+   681→        )}
+   682→        {policiesUnavailable && !policiesQuery.isError && (
+   683→          <p className="text-[13px] leading-relaxed text-warning">
+   684→            No published policies yet. A general acknowledgement is collected instead.
+   685→          </p>
+   686→        )}
+   687→        {policies.map((p) => (
+   688→          <label key={p.policyId} className="flex cursor-pointer items-start gap-2.5 text-[13px]">
+   689→            <input
+   690→              type="checkbox"
+   691→              checked={!!accepted[p.policyId]}
+   692→              onChange={(e) =>
+   693→                setAccepted((a) => ({ ...a, [p.policyId]: e.target.checked }))
+   694→              }
+   695→              className="mt-0.5 size-4 shrink-0 accent-[var(--primary)]"
+   696→            />
+   697→            <span className="leading-snug">
+   698→              I accept the {p.title}
+   699→              {p.version ? (
+   700→                <span className="ml-1 text-[11px] text-muted-foreground">v{p.version}</span>
+   701→              ) : null}
+   702→              .
+   703→            </span>
+   704→          </label>
+   705→        ))}
+   706→        {policiesUnavailable && (
+   707→          <label className="flex cursor-pointer items-start gap-2.5 text-[13px]">
+   708→            <input
+   709→              type="checkbox"
+   710→              checked={fallbackAccepted}
+   711→              onChange={(e) => setFallbackAccepted(e.target.checked)}
+   712→              className="mt-0.5 size-4 shrink-0 accent-[var(--primary)]"
+   713→            />
+   714→            <span className="leading-snug">
+   715→              I agree to follow the mess rules and payment policy.
+   716→            </span>
+   717→          </label>
+   718→        )}
+   719→      </div>
+   720→
+   721→      <AnimatePresence>{error && <ErrorSurface message={error} />}</AnimatePresence>
+   722→      <GlassButton type="submit" size="lg" fullWidth loading={pending}>
+   723→        Submit application
+   724→      </GlassButton>
+   725→    </form>
+   726→  );
+   727→}
+   728→
+   729→/* ------------------------------------------------------------- dev seed */
+   730→
+   731→function DevSeedPanel() {
+   732→  return (
+   733→    <motion.details
+   734→      initial={{ opacity: 0, y: 10 }}
+   735→      animate={{ opacity: 1, y: 0 }}
+   736→      transition={{ ...SPRING_SOFT, delay: 0.3 }}
+   737→      className="glass liquid-sheen group mt-5 rounded-xl border-dashed border-warning/45 px-4 py-3"
+   738→    >
+   739→      <summary className="flex cursor-pointer list-none items-center gap-2 text-[11px] font-medium tracking-wide text-warning select-none">
+   740→        <Terminal className="size-3.5 shrink-0" aria-hidden />
+   741→        Development seed
+   742→        <span className="rounded-pill border border-warning/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-widest">
+   743→          dev only
+   744→        </span>
+   745→        <motion.span
+   746→          aria-hidden
+   747→          className="ml-auto text-muted-foreground transition-transform group-open:rotate-90"
+   748→        >
+   749→          ›
+   750→        </motion.span>
+   751→      </summary>
+   752→      <div className="mt-3 space-y-2">
+   753→        {SEED_ACCOUNTS.map((acc) => (
+   754→          <div
+   755→            key={acc.email}
+   756→            className="flex items-center justify-between gap-3 rounded-md bg-foreground/4 px-3 py-2 dark:bg-white/5"
+   757→          >
+   758→            <div className="min-w-0 font-mono text-[11px] leading-relaxed">
+   759→              <p className="truncate text-foreground/85">
+   760→                <span className="text-muted-foreground">{acc.role}:</span> {acc.email}
+   761→              </p>
+   762→              <p className="truncate text-muted-foreground">{acc.password}</p>
+   763→            </div>
+   764→            <SeedFillButton email={acc.email} password={acc.password} />
+   765→          </div>
+   766→        ))}
+   767→        <p className="px-1 pt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+   768→          Seed data for development only — never present in production (spec §191).
+   769→        </p>
+   770→      </div>
+   771→    </motion.details>
+   772→  );
+   773→}
+   774→
+   775→function SeedFillButton({ email, password }: { email: string; password: string }) {
+   776→  const [filled, setFilled] = useState(false);
+   777→  const reduced = useReducedMotion();
+   778→
+   779→  function fill() {
+   780→    const emailInput = document.getElementById("signin-email") as HTMLInputElement | null;
+   781→    const pwInput = document.getElementById("signin-password") as HTMLInputElement | null;
+   782→    if (emailInput) {
+   783→      emailInput.value = email;
+   784→      emailInput.dispatchEvent(new Event("input", { bubbles: true }));
+   785→    }
+   786→    if (pwInput) {
+   787→      pwInput.value = password;
+   788→      pwInput.dispatchEvent(new Event("input", { bubbles: true }));
+   789→    }
+   790→    setFilled(true);
+   791→    window.setTimeout(() => setFilled(false), 1600);
+   792→  }
+   793→
+   794→  return (
+   795→    <GlassButton
+   796→      variant="ghost"
+   797→      size="sm"
+   798→      onClick={fill}
+   799→      icon={filled ? <CheckCircle2 className="text-success" /> : <Mail />}
+   800→      className="h-8 shrink-0 rounded-pill px-3 text-[11px]"
+   801→    >
+   802→      {filled ? "Filled" : "Fill"}
+   803→    </GlassButton>
+   804→  );
+   805→}
+   806→
+   807→export default AuthScreen;
+   808→

@@ -1,0 +1,5821 @@
+# =====================================================================
+# BOARDOPS NEXT — COMPLETE PRODUCTION REBUILD MASTER PROMPT
+# BOARDOPS-FRESH INFORMATION ARCHITECTURE
+# + LIQUID_POLISH VISUAL MATERIAL LANGUAGE
+# + NEW SECURE DATABASE/BACKEND ARCHITECTURE
+# =====================================================================
+
+You are responsible for building this application FROM SCRATCH as a
+production-quality system.
+
+Act simultaneously as:
+
+- Principal Software Architect
+- Staff Backend Engineer
+- PostgreSQL Database Architect
+- Financial Systems Engineer
+- Application Security Engineer
+- Staff Frontend Engineer
+- Senior Product Designer
+- Senior Interaction/Motion Designer
+- Accessibility Engineer
+- Performance Engineer
+- DevOps/SRE Engineer
+- QA Architect
+- Release Engineer
+
+This is NOT a prototype.
+
+This is NOT a demo.
+
+This is NOT a simple CRUD dashboard.
+
+This is NOT a visual-only reconstruction.
+
+This is a real operational and financial system where incorrect business
+logic could produce incorrect meals, incorrect balances or incorrect bills.
+
+The finished application must combine:
+
+BOARDOPS-FRESH'S:
+- information architecture
+- straightforward page hierarchy
+- mobile navigation approach
+- desktop sidebar approach
+- compact operational screens
+- page-flow simplicity
+- understandable cards/rows
+- role-specific experiences
+
+WITH LIQUID_POLISH'S:
+- frosted material language
+- real backdrop blur
+- OKLCH-based palette
+- rounded geometry
+- premium light/dark modes
+- liquid controls
+- spring animations
+- specular glass highlights
+- floating navigation material
+- tactile interaction
+
+BUT:
+
+DO NOT copy either project's old architecture blindly.
+
+DO NOT merge either repository into this project.
+
+DO NOT copy old bugs.
+
+DO NOT preserve obsolete role models.
+
+DO NOT preserve oversized components.
+
+DO NOT preserve old single-route SPA architecture.
+
+DO NOT preserve old technology simply because the reference used it.
+
+REBUILD FROM SCRATCH.
+
+The repositories are DESIGN/BEHAVIOR REFERENCES ONLY:
+
+REFERENCE A:
+sahid-code404/BoardOps-Fresh
+
+Use primarily for:
+- page composition
+- navigation
+- layout
+- information hierarchy
+- interaction patterns
+- workflow references
+
+REFERENCE B:
+sahid-code404/liquid_polish
+
+Use primarily for:
+- color/material direction
+- glass primitives
+- blur
+- transparency
+- lighting
+- motion
+- rounded geometry
+- premium visual personality
+
+=====================================================================
+PART 1 — FIRST THING YOU MUST DO
+=====================================================================
+
+DO NOT immediately write code.
+
+Before implementation:
+
+1. Read this complete specification word-by-word.
+2. Inspect BOTH reference repositories deeply.
+3. Do not inspect only README files.
+4. Use repository search and inspect actual implementation.
+5. Run the reference frontends if practical.
+6. Capture screenshots at mobile, tablet and desktop if possible.
+7. Understand the existing UX before designing the replacement.
+8. Produce a requirement matrix.
+9. Produce a complete hierarchical TODO tree.
+10. Produce the final architecture.
+11. Produce the PostgreSQL ERD.
+12. Produce domain state machines.
+13. Produce the authorization matrix.
+14. Produce critical transaction definitions.
+15. Produce API contracts.
+16. Produce the final page map.
+17. Produce mobile/tablet/desktop wireframes.
+18. Produce the design-token system.
+19. Produce the motion system.
+20. Produce the test plan.
+21. Only then begin implementation.
+
+Inspect at minimum from BoardOps-Fresh:
+
+apps/web/src/components/layout/
+- top-bar
+- desktop-sidebar
+- mobile-sidebar
+- mobile-bottom-nav
+- nav-config
+- nav-groups
+- app-shell/lazy-view-router where applicable
+
+Inspect feature implementations including:
+
+- dashboard
+- meal counts/kitchen
+- resident meals
+- payments
+- users
+- funds
+- expenses
+- billing
+- meal configuration
+- formula/monthly closing
+- notifications
+- settings/profile
+
+Inspect BoardOps-Fresh's source-audit documentation too.
+
+Inspect at minimum from liquid_polish:
+
+src/app/globals.css
+
+components/glass/*
+
+and relevant implementations/documentation covering:
+
+- GlassCard
+- GlassButton
+- LiquidToggle
+- AnimatedNumber
+- BottomNav
+- TopBar
+- PageMotion
+- StaggerGroup
+- theme/accent handling
+- information architecture
+- frontend specification
+
+Extract the GOOD concepts.
+
+Reimplement cleanly.
+
+=====================================================================
+PART 2 — ABSOLUTE PRIORITY
+=====================================================================
+
+When priorities conflict, preserve them in this exact order:
+
+1. Database integrity
+2. Financial correctness
+3. Security
+4. Historical correctness
+5. Deterministic business rules
+6. Reliability
+7. Auditability
+8. Maintainability
+9. User comprehension
+10. Accessibility
+11. Performance
+12. Responsive quality
+13. Visual polish
+14. Motion polish
+
+Never trade financial/database correctness for animation.
+
+Never make database integrity depend on the frontend.
+
+Never make security depend on hidden UI.
+
+=====================================================================
+PART 3 — ONLY TWO ROLES
+=====================================================================
+
+THE ENTIRE NEW PRODUCT HAS EXACTLY:
+
+ADMIN
+RESIDENT
+
+Nothing else.
+
+DO NOT create:
+
+SUPER_ADMIN
+MANAGER
+ACCOUNTANT
+STAFF
+MODERATOR
+EDITOR
+OPERATOR
+
+even if old reference code contains those concepts.
+
+Any old BoardOps reference to USER means RESIDENT in the new product.
+
+Authentication determines role.
+
+Never provide a "Choose Admin" login toggle that grants Admin privileges.
+
+=====================================================================
+PART 4 — CURRENT TECHNOLOGY BASELINE
+=====================================================================
+
+Use currently supported STABLE releases.
+
+Baseline as of September 2026:
+
+Runtime:
+- Node.js 24.20.x LTS
+
+Frontend:
+- Next.js 16.3.3 Active LTS or latest security-patched 16.x
+- React 19.2.x
+- TypeScript latest stable compatible release
+- Tailwind CSS 4.3.x
+- latest stable Motion for React
+- TanStack Query
+- React Hook Form
+- Zod / Standard-Schema-compatible validation
+- Radix/headless accessible primitives
+- Lucide or equivalent consistent icon family
+- next-themes or equivalent robust theme handling
+
+Backend:
+- NestJS 12
+- Fastify adapter
+- TypeScript
+- Pino
+- OpenTelemetry
+- OpenAPI
+
+Database:
+- PostgreSQL 18.6 or latest supported PostgreSQL 18 patch
+- Prisma ORM 8, if compatibility verification passes
+- native PostgreSQL SQL migrations/features whenever Prisma is insufficient
+
+Infrastructure:
+- Redis 8.8 or latest security-patched compatible Redis 8
+- BullMQ or equivalent Redis-backed worker
+- private S3-compatible object storage
+- MinIO for local development
+- reverse proxy / ingress with TLS
+
+Testing:
+- Vitest
+- Playwright
+- Testcontainers
+- fast-check
+- axe-core or equivalent accessibility tests
+
+BEFORE INSTALLING ANY PACKAGE:
+
+verify its current official stable/security-patched version.
+
+DO NOT use:
+- alpha
+- beta
+- RC
+- canary
+
+unless explicitly unavoidable and documented.
+
+"Latest" means latest SAFE production release,
+not newest experimental release.
+
+=====================================================================
+PART 5 — MONOREPO
+=====================================================================
+
+Use pnpm workspaces + Turborepo.
+
+Suggested structure:
+
+/
+├── apps/
+│   ├── web/
+│   ├── api/
+│   └── worker/
+│
+├── packages/
+│   ├── database/
+│   ├── contracts/
+│   ├── validation/
+│   ├── design-system/
+│   ├── config/
+│   ├── observability/
+│   └── shared/
+│
+├── infrastructure/
+│   ├── docker/
+│   └── reverse-proxy/
+│
+├── docs/
+│   ├── architecture/
+│   ├── adr/
+│   ├── database/
+│   ├── security/
+│   └── product/
+│
+├── tests/
+├── scripts/
+├── pnpm-workspace.yaml
+├── turbo.json
+└── package.json
+
+DO NOT over-split packages.
+
+Each package must have a real boundary.
+
+=====================================================================
+PART 6 — ARCHITECTURE
+=====================================================================
+
+Build a MODULAR MONOLITH.
+
+Architecture:
+
+Browser / Installable PWA
+          │
+          ▼
+Next.js Web
+          │
+          │ /api/v1
+          ▼
+NestJS API
+          │
+     ┌────┼───────────────┐
+     │    │               │
+     ▼    ▼               ▼
+Postgres Redis        Object Storage
+     │    │
+     │    └──── Worker / BullMQ
+     │
+     └──── Transactional Outbox
+
+DO NOT introduce:
+
+- microservices
+- Kafka
+- Kubernetes
+- event sourcing everywhere
+- GraphQL
+- multiple operational databases
+- Elasticsearch
+
+without a real measured reason.
+
+Keep deployment straightforward.
+
+=====================================================================
+PART 7 — REAL URL ROUTES
+=====================================================================
+
+Do NOT reproduce liquid_polish's old single-route Zustand tab architecture.
+
+Use real Next.js App Router routes.
+
+Suggested route groups:
+
+/login
+/register
+/register/pending
+/register/changes-requested
+
+/admin/dashboard
+/admin/meal-count
+/admin/payments
+/admin/residents
+/admin/residents/[residentId]
+/admin/funds
+/admin/expenses
+/admin/meal-configuration
+/admin/meal-configuration/new
+/admin/meal-configuration/[mealId]
+/admin/formula-engine
+/admin/billing
+/admin/billing/[periodId]
+/admin/notifications
+/admin/announcements
+/admin/tasks
+/admin/tasks/[taskId]
+/admin/calendar
+/admin/settings
+/admin/audit
+
+/app/dashboard
+/app/meals
+/app/billing
+/app/billing/[billId]
+/app/payments
+/app/tasks
+/app/tasks/[taskId]
+/app/notifications
+/app/profile
+
+A mobile-only "More" hub may exist as navigation presentation,
+but actual modules still have real URLs.
+
+Deep-linking must work.
+
+Browser back/forward must work.
+
+Refreshing the page must preserve the same route.
+
+=====================================================================
+PART 8 — AUTHENTICATION
+=====================================================================
+
+For this browser application prefer secure opaque server sessions.
+
+Do NOT store authorization tokens in localStorage.
+
+Recommended:
+
+Secure
+HttpOnly
+SameSite cookie
+__Host- prefix where deployment permits.
+
+Store only hashed session-token material server-side.
+
+Password storage:
+
+Argon2id.
+
+Admin MFA:
+
+prefer WebAuthn/passkeys.
+
+Allow TOTP fallback where necessary.
+
+Support:
+
+- login throttling
+- logout
+- logout all sessions
+- session rotation
+- session revocation
+- password reset
+- account deactivation invalidation
+- recent-authentication checks for critical Admin actions
+
+Critical Admin operations requiring recent auth include:
+
+- billing generation
+- billing reopen
+- formula activation
+- refund
+- full data export
+- security settings
+
+=====================================================================
+PART 9 — POSTGRESQL IS AUTHORITATIVE
+=====================================================================
+
+PostgreSQL is the source of truth.
+
+Not React state.
+
+Not Zustand.
+
+Not TanStack Query cache.
+
+Not Redis.
+
+Not localStorage.
+
+Redis is disposable infrastructure.
+
+Losing Redis must NOT lose:
+
+payments
+expenses
+bills
+meals
+balances
+audit history
+formula versions
+user records.
+
+=====================================================================
+PART 10 — MONEY
+=====================================================================
+
+NEVER use floating-point numbers as authoritative money.
+
+Use integer minor units.
+
+Example:
+
+₹2,500.75
+=
+250075 paise.
+
+Fields should clearly use names such as:
+
+amount_minor
+price_minor
+total_minor
+balance_minor.
+
+Frontend can display formatted rupees.
+
+Backend calculates official numbers.
+
+Centralize currency and rounding.
+
+Initial currency:
+
+INR
+
+Minor digits:
+
+2
+
+=====================================================================
+PART 11 — IMMUTABLE FINANCIAL LEDGER
+=====================================================================
+
+Implement an internal double-entry financial ledger.
+
+Core:
+
+ledger_accounts
+ledger_journals
+ledger_entries
+
+A posted journal must satisfy:
+
+sum(debits) == sum(credits)
+
+Posted transactions are immutable.
+
+Wrong transaction:
+
+create reversal/correction.
+
+Never change ₹2,000 into ₹1,500 by editing the old record.
+
+Preserve:
+
+who
+when
+why
+original value
+correction.
+
+=====================================================================
+PART 12 — CORE DATABASE ENTITIES
+=====================================================================
+
+Design normalized tables around these concepts.
+
+AUTH/INSTITUTION:
+
+institutions
+institution_settings
+users
+user_profiles
+user_status_history
+sessions
+mfa_credentials
+policy_versions
+policy_acceptances
+
+MEALS:
+
+meal_definitions
+meal_definition_versions
+meal_instances
+resident_meals
+guest_meals
+leave_requests
+calendar_events
+
+FINANCE:
+
+ledger_accounts
+ledger_journals
+ledger_entries
+
+payments
+payment_proofs
+refunds
+
+expense_categories
+expenses
+expense_items
+expense_proofs
+
+financial_policies
+policy_exemptions
+
+FORMULAS/BILLING:
+
+formula_definitions
+formula_versions
+
+billing_periods
+billing_snapshots
+billing_snapshot_items
+
+bills
+bill_lines
+bill_adjustments
+
+TASKS:
+
+tasks
+task_items
+task_assignments
+task_submissions
+task_submission_items
+task_submission_proofs
+
+COMMUNICATION:
+
+notifications
+announcements
+announcement_targets
+
+SYSTEM:
+
+stored_files
+audit_events
+outbox_events
+idempotency_records
+deletion_requests
+
+=====================================================================
+PART 13 — DATABASE CONSTRAINTS
+=====================================================================
+
+Database must enforce important invariants.
+
+Examples:
+
+payment.amount_minor > 0
+
+refund.amount_minor > 0
+
+guest_meal.quantity >= 1
+
+expense_item.quantity > 0
+
+expense_item.unit_price_minor >= 0
+
+UNIQUE(
+ resident_id,
+ meal_instance_id
+)
+
+UNIQUE(
+ meal_definition_id,
+ service occurrence
+)
+
+UNIQUE(
+ resident_id,
+ billing_period_id,
+ revision
+)
+
+UNIQUE(
+ source_task_submission_id
+)
+
+Foreign keys must be explicit.
+
+Avoid destructive ON DELETE CASCADE for historical financial records.
+
+Use database constraints even if backend already validates.
+
+=====================================================================
+PART 14 — TRANSACTIONS AND CONCURRENCY
+=====================================================================
+
+Critical business operations must be transactional.
+
+Payment approval:
+
+BEGIN
+lock payment
+validate state
+mark approved
+create balanced ledger journal
+create audit event
+create outbox event
+COMMIT
+
+Task purchase approval:
+
+BEGIN
+lock task submission
+verify not already converted
+create official expense
+create items
+create relationship
+create financial posting as applicable
+audit
+outbox
+COMMIT
+
+Billing:
+
+lock billing period
+perform readiness
+take snapshot
+generate deterministic bills
+post required entries
+close period
+audit
+outbox
+commit/recover safely.
+
+Protect against:
+
+- double clicks
+- browser retries
+- network retries
+- two Admins
+- two tabs
+- duplicate worker execution
+
+Use:
+
+- idempotency keys
+- row locks
+- optimistic versions
+- unique constraints
+- advisory locks where appropriate
+
+=====================================================================
+PART 15 — MEAL DATA MODEL
+=====================================================================
+
+DO NOT store historical meals directly against mutable configuration.
+
+Use:
+
+MealDefinition
+        │
+        ▼
+MealDefinitionVersion
+        │
+        ▼
+MealInstance
+        │
+        ▼
+ResidentMeal
+
+Example:
+
+MealDefinition:
+Lunch
+
+Version 1:
+service 12:30
+cutoff 09:00
+
+Version 2:
+service 12:30
+cutoff 10:00
+
+Yesterday's instance remains linked to Version 1.
+
+Future instances use Version 2.
+
+Historical behavior must NEVER change because Admin edited configuration.
+
+=====================================================================
+PART 16 — RESIDENT MEAL RESOLUTION
+=====================================================================
+
+One deterministic backend resolver calculates effective state.
+
+Conceptual inputs:
+
+baseline/default
+membership eligibility
+calendar event
+approved leave
+financial policy
+resident selection
+cutoff
+lock
+Admin override
+closed billing state.
+
+Output:
+
+effective_state
+effective_reason.
+
+Never let multiple frontend components independently invent state.
+
+=====================================================================
+PART 17 — OVERRIDE BEHAVIOR
+=====================================================================
+
+Requirement:
+
+Default Lunch = ON
+
+Admin overrides:
+
+ON → OFF
+
+Display:
+
+OFF
+ADMIN OVERRIDE
+
+If Admin later changes:
+
+OFF → ON
+
+and ON matches normal baseline:
+
+do not show current override label anymore.
+
+BUT:
+
+audit history keeps both changes.
+
+Override visibility is derived from difference against effective baseline,
+not simply "an override happened sometime in history."
+
+=====================================================================
+PART 18 — MID-MONTH RESIDENT
+=====================================================================
+
+Resident membership has:
+
+membership_effective_from.
+
+Example:
+
+Resident activated at 3:30 PM.
+
+Lunch cutoff:
+9:00 AM
+
+→ no automatic Lunch.
+
+Dinner cutoff:
+5:00 PM
+
+→ Dinner may receive normal configured default.
+
+Never automatically turn past meals ON.
+
+If Admin later records a meal they actually consumed:
+
+explicit historical override
++
+reason
++
+audit.
+
+=====================================================================
+PART 19 — PERIOD IMMUTABILITY
+=====================================================================
+
+Once billing for August is closed:
+
+September settings cannot change August.
+
+Changing:
+
+meal
+formula
+policy
+resident details
+pricing
+
+must not rewrite historical billing.
+
+Use immutable snapshots/version references.
+
+=====================================================================
+PART 20 — FORMULA ENGINE
+=====================================================================
+
+This is security-critical.
+
+Support two Admin input modes:
+
+1. Natural Language
+2. Formula / Excel-like
+
+Both compile to ONE validated internal AST.
+
+NEVER:
+
+eval()
+Function()
+execute user JavaScript
+execute raw user SQL
+execute shell commands.
+
+Whitelist variables.
+
+Examples:
+
+total_market_cost
+total_guest_income
+total_consumed_resident_meals
+total_guest_meals
+total_approved_expenses.
+
+Safe operators initially:
+
++
+-
+*
+/
+()
+SUM
+MIN
+MAX
+ROUND
+IF
+
+Do not implement a full spreadsheet application.
+
+=====================================================================
+PART 21 — NATURAL LANGUAGE FORMULA UX
+=====================================================================
+
+Admin writes:
+
+"Subtract guest income from market cost and divide by resident consumed meals."
+
+System produces:
+
+I understood this as:
+
+(Total Market Cost - Guest Income)
+÷ Resident Consumed Meals
+
+Current example:
+
+Market cost         ₹42,000
+Guest income        -₹2,000
+                    --------
+Resident cost       ₹40,000
+
+Resident meals       1,000
+
+Meal charge         ₹40.00
+
+Admin sees:
+
+Cancel
+Save Formula
+
+Natural-language output is NEVER directly executed.
+
+It is compiled, validated, previewed and explicitly saved.
+
+=====================================================================
+PART 22 — FORMULA VERSIONS
+=====================================================================
+
+Never overwrite formula history.
+
+Store:
+
+version
+source expression
+compiled AST
+created_by
+created_at
+effective_from
+effective_until
+reason
+checksum.
+
+A historical bill references the exact formula version used.
+
+=====================================================================
+PART 23 — BILLING SNAPSHOT
+=====================================================================
+
+Generating a bill period must capture an immutable snapshot containing
+the relevant resolved information for:
+
+residents
+resident meals
+guest meals
+expenses
+payments
+refunds
+formula
+pricing
+policies
+adjustments.
+
+Later configuration changes do not modify the snapshot.
+
+=====================================================================
+PART 24 — DESIGN PRINCIPLE
+=====================================================================
+
+DESIGN THE NEW FRONTEND AS:
+
+BoardOps-Fresh structural DNA
++
+liquid_polish material DNA.
+
+BoardOps-Fresh contributes:
+
+- recognizable app shell
+- concise top bar
+- mobile bottom navigation
+- More navigation for secondary areas
+- grouped desktop navigation
+- card/list based mobile workflows
+- restrained dashboard
+- straightforward operational pages
+
+liquid_polish contributes:
+
+- actual frosted blur
+- OKLCH color system
+- translucent surfaces
+- glass sheen
+- liquid toggles
+- spring movement
+- rounded containers
+- floating glass controls
+- rich dark mode
+- material layering
+
+DO NOT reproduce old HTML blindly.
+
+Create a much more polished generation.
+
+=====================================================================
+PART 25 — PRIMARY VISUAL GOAL
+=====================================================================
+
+The UI must look like a multi-million-dollar premium consumer application.
+
+NOT like:
+
+- default shadcn
+- Material UI
+- Bootstrap
+- admin template
+- generic SaaS dashboard
+- crypto dashboard
+- bank enterprise portal
+- ERP software
+- AI-generated purple gradient UI
+
+Keywords:
+
+quiet
+premium
+soft
+precise
+tactile
+rounded
+frosted
+confident
+spacious
+clean
+fast
+understandable.
+
+=====================================================================
+PART 26 — GLASS OPACITY
+=====================================================================
+
+IMPORTANT:
+
+liquid_polish's visual character is the reference,
+BUT the new version must be LESS TRANSPARENT.
+
+Do not make text float over an unreadable background.
+
+Starting design targets:
+
+LIGHT / NORMAL GLASS:
+
+background approximately:
+oklch(1 0 0 / 78% to 86%)
+
+backdrop-filter:
+blur(20px–26px)
+saturate(145%–165%)
+
+LIGHT / STRONG GLASS:
+
+background approximately:
+oklch(1 0 0 / 86% to 93%)
+
+backdrop-filter:
+blur(26px–34px)
+saturate(150%–175%)
+
+DARK / NORMAL GLASS:
+
+background approximately:
+oklch(0.19–0.23 ... / 78%–88%)
+
+DARK / STRONG GLASS:
+
+background approximately:
+oklch(0.20–0.25 ... / 86%–93%)
+
+Exact final values must be tuned from actual screenshots.
+
+The objective:
+
+actual blur is CLEARLY visible
+
+BUT
+
+content remains solid and immediately readable.
+
+=====================================================================
+PART 27 — GLASS MATERIAL ANATOMY
+=====================================================================
+
+Major glass surfaces should combine:
+
+1. dense translucent base
+2. real backdrop blur
+3. mild saturation
+4. 1px material border
+5. top/upper-left specular sheen
+6. subtle inner highlight
+7. low-amplitude ambient shadow
+8. optional tiny accent reflection
+
+Never combine:
+
+- giant glow
+- giant shadow
+- 30% unreadable opacity
+- rainbow border
+- neon outline.
+
+=====================================================================
+PART 28 — GLASS PERFORMANCE
+=====================================================================
+
+Do not nest backdrop filters everywhere.
+
+BAD:
+
+GlassCard
+  └ GlassSection
+      └ GlassButton
+          └ GlassBadge
+
+all using backdrop-filter.
+
+Use true backdrop blur for:
+
+- main nav
+- top bar
+- major card/panel
+- dialogs
+- sheets
+- important floating control
+
+Use semi-opaque material fills for nested controls.
+
+Avoid repeatedly animating `backdrop-filter`.
+
+Animate transform/opacity instead.
+
+=====================================================================
+PART 29 — BACKGROUND
+=====================================================================
+
+Create a subtle ambient background similar in spirit to liquid_polish.
+
+Use:
+
+- neutral cloudy base
+- 2–3 extremely soft accent fields
+- very low visual contrast
+- optional slow ambient positional drift
+
+The content must remain the star.
+
+NO:
+
+bright aurora wallpaper
+neon blobs
+busy gradients
+large distracting mesh.
+
+Dark mode can use deep graphite/navy-neutral material with subdued
+emerald/blue/violet atmospheric tint.
+
+=====================================================================
+PART 30 — COLORS
+=====================================================================
+
+Use perceptually consistent OKLCH tokens.
+
+Create semantic tokens:
+
+--background
+--foreground
+
+--surface
+--surface-raised
+
+--glass
+--glass-strong
+--glass-soft
+
+--glass-border
+--glass-highlight
+
+--primary
+--primary-foreground
+
+--secondary
+--muted
+--muted-foreground
+
+--success
+--warning
+--danger
+--info
+
+Retain liquid_polish's tasteful emerald-ish premium direction unless
+actual visual testing reveals another accent works better.
+
+Do not use five strong accent colors simultaneously.
+
+=====================================================================
+PART 31 — RADIUS
+=====================================================================
+
+Use large but systematic roundness.
+
+Example:
+
+control-sm       12px
+control          16px
+card-sm          18px
+card             22px
+card-lg          26px
+navigation       28px
+sheet            30px
+large-panel      32px
+pill             999px
+
+Do not assign random border-radius values per component.
+
+=====================================================================
+PART 32 — SPACING
+=====================================================================
+
+Use 4px-derived scale:
+
+4
+8
+12
+16
+20
+24
+32
+40
+48
+64.
+
+Typical mobile page gutter:
+
+16px.
+
+Small phone:
+
+14–16px.
+
+Tablet:
+
+20–24px.
+
+Desktop:
+
+24–32px.
+
+Keep consistent vertical rhythm.
+
+=====================================================================
+PART 33 — TYPOGRAPHY
+=====================================================================
+
+Use system-first premium typography.
+
+Do not distribute proprietary Apple font files.
+
+Use platform system font stack.
+
+Optionally use a high-quality open variable fallback such as Inter
+where platform consistency is needed.
+
+Semantic scale:
+
+Display
+Page Title
+Section Title
+Card Title
+Body
+Body Strong
+Label
+Caption
+Financial Numeric
+Micro Status.
+
+Financial numerals:
+
+tabular numerals.
+
+Avoid giant marketing-style headings inside operational pages.
+
+=====================================================================
+PART 34 — ICONOGRAPHY
+=====================================================================
+
+Use one consistent icon family.
+
+Lucide is acceptable if visually tuned.
+
+Keep:
+
+stroke width
+optical size
+container geometry
+selected state
+
+consistent.
+
+Do not mix:
+
+filled emoji icons
+outline Lucide
+Material icons
+random SVG libraries
+
+without deliberate reason.
+
+Meal icon itself may use a curated food-symbol system where configured.
+
+=====================================================================
+PART 35 — MOTION PHILOSOPHY
+=====================================================================
+
+EVERY CLICKABLE/TAPPABLE INTERACTION MUST RESPOND.
+
+But:
+
+not every element should constantly move.
+
+Motion communicates:
+
+press
+selection
+navigation
+success
+state change
+hierarchy
+continuity.
+
+No decorative bouncing.
+
+=====================================================================
+PART 36 — BUTTON MOTION
+=====================================================================
+
+Pointer down / touch down:
+
+scale roughly:
+0.97–0.985
+
+Shadow compresses slightly.
+
+Highlight shifts subtly.
+
+Release:
+
+spring back immediately.
+
+Hover:
+
+1–2px perceived elevation
+or very subtle luminance change.
+
+Never wait for animation before performing action.
+
+=====================================================================
+PART 37 — ACTIVE NAV ANIMATION
+=====================================================================
+
+Take inspiration from liquid_polish / BoardOps.
+
+Use one shared-layout active material indicator.
+
+When changing navigation:
+
+active background glides between destinations.
+
+Icon:
+
+small spring response.
+
+Label:
+
+color/weight transition.
+
+No exaggerated bouncing.
+
+=====================================================================
+PART 38 — PAGE TRANSITIONS
+=====================================================================
+
+Route change:
+
+quick opacity
++
+~6px directional/vertical translation.
+
+Rough visual duration:
+
+180–240ms.
+
+Deep navigation may use subtle directional transition.
+
+Back navigation can reverse direction where technically reliable.
+
+Do NOT delay actual route navigation.
+
+=====================================================================
+PART 39 — LIST MOTION
+=====================================================================
+
+Approval/rejection/status changes:
+
+item settles into new state.
+
+Removal from current filter:
+
+brief status transition
+then layout closes smoothly.
+
+Use shared-layout animation where valuable.
+
+Do not animate 200 list rows at once.
+
+=====================================================================
+PART 40 — LIQUID TOGGLE
+=====================================================================
+
+Meal ON/OFF is a signature interaction.
+
+Build a premium `LiquidToggle`.
+
+Behavior:
+
+- spring thumb
+- soft track tint
+- small internal highlight
+- slight press compression
+- immediate visual state
+- server confirmation
+- rollback if rejected
+
+If cutoff passed:
+
+toggle springs back.
+
+Inline message:
+
+"Changes closed at 9:00 AM."
+
+Do not show a generic error toast only.
+
+=====================================================================
+PART 41 — INPUTS
+=====================================================================
+
+Inputs should use dense frosted material.
+
+Use:
+
+- proper label
+- high contrast
+- subtle inset
+- clear focus ring
+- animated border/material transition
+- generous touch height
+
+Never rely on placeholder as label.
+
+=====================================================================
+PART 42 — SHEETS
+=====================================================================
+
+Mobile secondary workflows:
+
+bottom sheet.
+
+Examples:
+
+filters
+resident action menu
+payment review summary
+date choices
+quick override
+more navigation.
+
+Glass sheet:
+
+dense enough to read.
+
+Rounded top corners.
+
+Spring entrance.
+
+Drag handle only if dismissible by drag.
+
+=====================================================================
+PART 43 — DIALOGS
+=====================================================================
+
+Use dialog only for:
+
+confirmation
+danger
+small decision.
+
+Do not put giant creation forms into tiny modals.
+
+Long forms:
+
+dedicated route or full-height sheet.
+
+=====================================================================
+PART 44 — TOASTS
+=====================================================================
+
+Use compact high-quality glass toast.
+
+Examples:
+
+Payment approved
+Meal updated
+Expense added
+Announcement published.
+
+Toast must never be the only place an important error appears.
+
+=====================================================================
+PART 45 — RESPONSIVE BREAKPOINT PHILOSOPHY
+=====================================================================
+
+DESIGN MOBILE FIRST.
+
+But:
+
+mobile does not mean "desktop squeezed smaller."
+
+And:
+
+desktop does not mean "mobile stretched wider."
+
+Use container queries and fluid CSS.
+
+Approximate behavior:
+
+PHONE:
+< 768px
+
+TABLET:
+768–1199px
+
+DESKTOP:
+>= 1200px
+
+LARGE:
+>= 1600px
+
+Do not build entirely separate application implementations.
+
+=====================================================================
+PART 46 — "DO NOT COLLAPSE PAGES"
+=====================================================================
+
+This requirement is NON-NEGOTIABLE.
+
+Do NOT hide functionality because viewport is small.
+
+Do NOT turn an entire page into accordion after accordion.
+
+Do NOT remove:
+
+fields
+filters
+actions
+totals
+records
+important details.
+
+Instead:
+
+REFLOW.
+
+Examples:
+
+desktop table
+→ mobile structured rows
+
+desktop side-by-side
+→ mobile vertical sequence
+
+desktop detail pane
+→ mobile detail route/sheet
+
+desktop inline filters
+→ mobile Filter sheet.
+
+All capabilities remain accessible.
+
+=====================================================================
+PART 47 — MOBILE APP SHELL
+=====================================================================
+
+Take strong structural inspiration from BoardOps-Fresh.
+
+Mobile shell:
+
+┌───────────────────────────┐
+│ Frosted Sticky Top Bar    │
+├───────────────────────────┤
+│                           │
+│ Page Content              │
+│                           │
+│                           │
+│ bottom safe padding       │
+├───────────────────────────┤
+│ Floating Liquid BottomNav │
+└───────────────────────────┘
+
+Top bar:
+
+left:
+page context/back where necessary
+
+middle:
+page title
+
+right:
+search where appropriate
+notification
+avatar/profile.
+
+Do not expose five unrelated utility buttons in the mobile top bar.
+
+=====================================================================
+PART 48 — MOBILE ADMIN NAVIGATION
+=====================================================================
+
+Use maximum five bottom destinations.
+
+Recommended:
+
+Home
+Meals
+Money
+Residents
+More
+
+"Money" is a navigation hub/group, not a new business domain.
+
+Money opens/accesses:
+
+Payments
+Funds
+Expenses
+Billing
+
+More:
+
+Meal Configuration
+Formula Engine
+Tasks
+Calendar
+Announcements
+Notifications
+Settings
+Audit where authorized.
+
+If actual UX testing shows another grouping is clearer,
+adjust labels without changing underlying features.
+
+=====================================================================
+PART 49 — MOBILE RESIDENT NAVIGATION
+=====================================================================
+
+Recommended:
+
+Home
+Meals
+Billing
+Payments
+Tasks
+
+Notifications/profile accessed from top bar.
+
+Keep Resident navigation extremely simple.
+
+=====================================================================
+PART 50 — TABLET SHELL
+=====================================================================
+
+Do NOT simply keep phone navigation forever.
+
+At tablet width:
+
+use compact navigation rail when it improves space.
+
+Concept:
+
+┌──────┬──────────────────────┐
+│ Rail │ Top Bar              │
+│      ├──────────────────────┤
+│      │ Content              │
+│      │                      │
+└──────┴──────────────────────┘
+
+Rail:
+
+~72–84px.
+
+Icons + short labels where room allows.
+
+Active item uses liquid material pill.
+
+=====================================================================
+PART 51 — DESKTOP SHELL
+=====================================================================
+
+Take inspiration from BoardOps-Fresh's grouped glass sidebar.
+
+Desktop:
+
+┌──────────────┬──────────────────────────────────┐
+│ Glass        │ Top Bar                          │
+│ Sidebar      ├──────────────────────────────────┤
+│              │                                  │
+│ Overview     │ Main Content                     │
+│ Meals        │                                  │
+│ Finance      │ Optional context pane            │
+│ Operations   │                                  │
+│ Comms        │                                  │
+│ System       │                                  │
+│              │                                  │
+│ User/Profile │                                  │
+└──────────────┴──────────────────────────────────┘
+
+Sidebar approximately:
+
+256–280px.
+
+Do not use excessive width.
+
+Group navigation clearly.
+
+=====================================================================
+PART 52 — DESKTOP NAV GROUPS
+=====================================================================
+
+Suggested:
+
+OVERVIEW
+- Dashboard
+
+MEALS
+- Meal Count
+- Meal Configuration
+
+FINANCE
+- Payments
+- Funds
+- Expenses
+- Billing
+- Formula Engine
+
+PEOPLE
+- Residents
+
+OPERATIONS
+- Tasks
+- Calendar
+
+COMMUNICATION
+- Notifications
+- Announcements
+
+SYSTEM
+- Settings
+- Audit
+
+Only show destinations available to the role.
+
+=====================================================================
+PART 53 — TOP BAR
+=====================================================================
+
+BoardOps-Fresh's sticky glass top-bar concept is a strong reference.
+
+New top bar should include only useful affordances.
+
+Desktop:
+
+page title/context
+
+optional:
+global search
+
+then:
+
+notifications
+theme/appearance quick control if useful
+profile/avatar.
+
+Mobile:
+
+back/menu context only where required
+page title
+notifications
+profile.
+
+Do not repeat sidebar branding unnecessarily in top bar.
+
+=====================================================================
+PART 54 — GLOBAL SEARCH
+=====================================================================
+
+Use Command-K / Ctrl-K on desktop.
+
+Search button on mobile/tablet.
+
+Search:
+
+Residents
+Payments
+Bills
+Expenses
+Tasks.
+
+Result grouping:
+
+Residents
+─────────
+Sahid Haque
+Active
+
+Payments
+────────
+PAY-202609-0042
+₹2,000 • Approved
+
+Bills
+─────
+BILL-202608-0127
+₹1,761 • Paid
+
+Search authorization must be enforced on backend.
+
+Resident global search should be heavily scoped to their own records
+or omitted if it provides little value.
+
+=====================================================================
+PART 55 — SHARED AUTH: LOGIN PAGE
+=====================================================================
+
+DESIGN:
+
+minimal and premium.
+
+Do not create a giant marketing landing page.
+
+Mobile:
+
+centered vertically within safe area.
+
+One strong frosted auth panel.
+
+Brand mark
+Product name
+Short useful sentence
+Email/identifier
+Password
+Sign In
+Forgot password
+
+Below:
+
+New resident?
+Create account.
+
+DO NOT show:
+
+"Admin / Resident" role selector for authentication authority.
+
+Role comes from account.
+
+Desktop:
+
+same auth panel with subtle ambient backdrop.
+
+Do not add irrelevant illustration unless it materially improves design.
+
+=====================================================================
+PART 56 — RESIDENT REGISTRATION
+=====================================================================
+
+Registration should be easy for non-technical residents.
+
+Use one route with clear grouped steps.
+
+Suggested:
+
+1. Account
+2. Personal details
+3. Membership details if required
+4. Policies
+5. Review
+
+Show progress subtly.
+
+Do not create six giant independent cards.
+
+Policy acceptance:
+
+specific version.
+
+Submit:
+
+"Send for approval"
+
+After submit:
+
+redirect to Pending Approval page.
+
+=====================================================================
+PART 57 — PENDING APPROVAL PAGE
+=====================================================================
+
+Simple status screen.
+
+Visual:
+
+compact premium status icon/material.
+
+Text:
+
+"Your account is waiting for approval."
+
+Show:
+
+submitted date
+current status
+
+Useful actions:
+
+Refresh status
+Sign out.
+
+Do NOT expose internal Admin review information.
+
+=====================================================================
+PART 58 — CHANGES REQUESTED
+=====================================================================
+
+If Admin requests changes:
+
+show exactly which information needs correction.
+
+Editable form focuses those fields.
+
+Admin message visible.
+
+Submit corrected details.
+
+State returns for review.
+
+=====================================================================
+PART 59 — ADMIN DASHBOARD
+=====================================================================
+
+FOLLOW THE USER REQUIREMENT CLOSELY.
+
+Do not add charts.
+
+Do not add unrelated sections.
+
+ORDER:
+
+1. Greeting
+2. KPI summary
+3. Recent Activity
+
+Nothing unnecessary between them.
+
+MOBILE WIREFRAME:
+
+┌───────────────────────────┐
+│ Good Evening, Admin 🌙    │
+│ Thursday, 3 September     │
+└───────────────────────────┘
+
+┌────────────┐ ┌────────────┐
+│ Residents  │ │ Meals      │
+│ 48         │ │ 92         │
+└────────────┘ └────────────┘
+
+┌────────────┐ ┌────────────┐
+│ Remaining  │ │ Meal Rate  │
+│ ₹42,560    │ │ ₹38.18     │
+└────────────┘ └────────────┘
+
+Recent Activity
+
+Payment approved...
+Resident joined...
+Meal override...
+...
+
+Required KPIs:
+
+Total Users/Residents
+Total Meals
+Remaining Funds
+Per Meal Charge.
+
+Make KPI cards compact.
+
+Do not use huge cards.
+
+Each KPI can be tappable to relevant route where meaningful.
+
+Use animated numbers only once on entry/change.
+
+TABLET:
+
+4 KPIs may fit in 4 columns or 2×2 depending container.
+
+DESKTOP:
+
+4 compact KPIs in one row.
+
+Recent activity uses readable max-width,
+not a giant stretched table.
+
+=====================================================================
+PART 60 — ADMIN MEAL COUNT PAGE
+=====================================================================
+
+Goal:
+
+Admin instantly understands:
+
+- today's configured meals
+- locked counts
+- guests
+- OFF counts
+- individual resident meal state
+- where override is required.
+
+PAGE ORDER:
+
+Header:
+Meal Count
+
+Date control:
+Today by default.
+
+Then required KPIs:
+
+Total Meals This Month
+Guest Meals This Month
+Meals OFF This Month
+
+Then meal summary blocks.
+
+Example:
+
+Lunch
+──────────────
+Confirmed      42
+Guests          5
+OFF             2
+Locked     9:00 AM
+
+Dinner
+──────────────
+Confirmed      46
+Guests          2
+OFF             3
+Open until 5 PM
+
+Only locked/confirmed values count into authoritative "today meal count"
+according to business rule.
+
+Then:
+
+Residents
+
+Search resident
+
+Filter if genuinely needed.
+
+Resident row:
+
+Sahid Haque
+50 meals this month
+
+Lunch         ON   Locked
+Dinner        OFF  Open
+                           >
+
+The original requested collapsible resident pills can be preserved as
+compact disclosure rows on mobile.
+
+This is an entity-level disclosure,
+NOT responsive page collapsing.
+
+When opened:
+
+show configured meals and current states.
+
+ADMIN OVERRIDE:
+
+Tap locked meal.
+
+Open focused bottom sheet/mobile or context pane/desktop:
+
+Lunch
+Sahid Haque
+
+Baseline:
+ON
+
+Current:
+ON
+
+Locked:
+9:00 AM
+
+[Turn Off]
+
+If Admin overrides:
+
+require reason when historical/locked.
+
+Show:
+
+OFF
+Admin Override
+
+If returned to baseline:
+
+remove current override badge.
+
+Keep audit history.
+
+DESKTOP:
+
+use resident list/table + optional right detail pane.
+
+Do not force Admin to navigate away for every resident.
+
+=====================================================================
+PART 61 — ADMIN PAYMENTS PAGE
+=====================================================================
+
+ORDER:
+
+Page title
+
+Required summary values:
+
+Received This Month
+Pending Payments
+Refunded This Month
+
+Primary action:
+
+Refund
+
+But Refund should open an eligibility workflow,
+not blindly create refund.
+
+Then:
+
+Search payments/resident
+
+Filter
+
+Then transaction records.
+
+MOBILE PAYMENT ROW:
+
+Sahid Haque
+₹2,000
+UPI • 3 Sep 2026
+
+Pending                      >
+
+Status visually obvious.
+
+Tap opens full review sheet/detail.
+
+REVIEW:
+
+Resident
+Amount
+Method
+Reference
+Date/time
+Notes
+Proof preview
+
+Then valid actions.
+
+PENDING:
+
+Approve
+Reject
+
+APPROVED:
+
+No Edit.
+
+Possible actions:
+Void / Refund
+only if business state permits.
+
+REJECTED:
+
+read-only history.
+
+DELETION:
+
+Do not hard-delete financial records that affected accounting.
+
+If deletion queue is required by original UX,
+restrict it to legally/technically disposable unposted records.
+
+Financial history remains.
+
+DESKTOP:
+
+master list/table on left/main area.
+
+Selecting payment may open side detail panel.
+
+Avoid repeated modal opening.
+
+=====================================================================
+PART 62 — ADMIN RESIDENTS PAGE
+=====================================================================
+
+Required summary:
+
+Total Residents
+Active
+Pending
+
+Total excludes:
+
+Admins
+pending approvals
+
+according to requirement.
+
+Then:
+
+Search residents.
+
+Filter:
+
+All
+Pending
+Active
+Inactive
+Changes Requested
+Deletion Queue
+
+Do not show every filter as permanent mobile pills.
+
+Mobile:
+
+Search
+[Filter]
+
+Resident row:
+
+SH
+Sahid Haque
+
+Active
+Joined 14 Aug
+
+                         >
+
+Pending row:
+
+SH
+Arif Rahman
+
+Pending approval
+
+[Review]       [Approve]
+
+Do not expose:
+
+Approve
+Reject
+Edit
+Activate
+Deactivate
+Delete
+Request Changes
+
+all simultaneously on one row.
+
+Use context-aware primary action + overflow.
+
+=====================================================================
+PART 63 — ADMIN RESIDENT 360 PAGE
+=====================================================================
+
+Dedicated real route:
+
+/admin/residents/[id]
+
+Header:
+
+Avatar
+Resident name
+status
+join date
+
+Useful concise financial state:
+
+Available Balance
+or
+Amount to Pay.
+
+Sections/tabs:
+
+Overview
+Meals
+Funds
+Payments
+Bills
+Tasks
+Activity
+
+MOBILE:
+
+tabs may horizontally scroll inside their own control.
+
+Page itself must not horizontally scroll.
+
+TABLET:
+
+master/detail where useful.
+
+DESKTOP:
+
+resident context header
++
+tab content
++
+optional action pane.
+
+Admin actions belong in:
+
+[Actions]
+
+with context menu/sheet:
+
+Edit profile
+Request changes
+Deactivate
+Activate
+Deletion request.
+
+Dangerous actions separated.
+
+=====================================================================
+PART 64 — ADMIN FUNDS PAGE
+=====================================================================
+
+Required summary:
+
+Deposits This Month
+Total Available Amount
+Total Deficit
+
+Then:
+
+Search resident
+
+Filter:
+
+All
+Deficit
+Grace Period
+Restricted
+Exempted
+
+Resident row:
+
+Sahid Haque
+Deposit this month       ₹3,000
+Consumed                 ₹2,150
+Available                  ₹850
+
+or:
+
+Arif Rahman
+Amount to Pay            ₹1,200
+Grace until              5 Sep
+
+Status:
+Grace Period
+
+Tap for detail.
+
+Admin financial-policy controls:
+
+Apply/inspect restriction
+Create exemption
+End exemption
+View financial breakdown.
+
+Do not present a simple dangerous:
+
+"Disable All Meals"
+
+without policy context.
+
+=====================================================================
+PART 65 — DEFICIT POLICY UI
+=====================================================================
+
+Policy states:
+
+AVAILABLE
+GRACE_PERIOD
+RESTRICTED
+EXEMPTED
+
+Resident detail should explain:
+
+Current deficit
+Threshold
+Grace expiry
+Restriction outcome.
+
+Example:
+
+Amount to pay
+₹1,200
+
+Grace period
+Ends 5 September
+
+After grace period:
+Meals may be restricted.
+
+Admin can:
+
+Grant temporary exemption
+
+Exemption requires:
+
+reason
+expiry date.
+
+=====================================================================
+PART 66 — ADMIN EXPENSES PAGE
+=====================================================================
+
+Required summary:
+
+Expenses This Month
+Entries This Month
+Remaining Funds
+
+Primary action:
+
+Add Expense
+
+Then:
+
+Search
+
+Filter:
+
+All
+Pending
+Approved
+Voided
+Category
+
+History.
+
+MOBILE ROW:
+
+Grocery
+₹1,850
+3 Sep • Approved
+                           >
+
+Tap detail.
+
+APPROVED expense:
+
+NO Delete.
+
+Can:
+
+Void
+with reason.
+
+Draft/unposted expense:
+
+may be deleted if business rules permit.
+
+=====================================================================
+PART 67 — ADD EXPENSE
+=====================================================================
+
+Use dedicated route or full-height workflow.
+
+NOT tiny modal.
+
+Fields:
+
+Date
+
+Category
+
+Items:
+
+Item
+Quantity
+Unit
+Unit Price
+Calculated line total
+
+Allow:
+Add another item
+
+Then:
+
+Proof
+optional/required by category policy
+
+Comment
+
+Calculated expense total
+
+[Save Expense]
+
+Frontend calculation is preview.
+
+Backend independently recalculates.
+
+Proof:
+
+JPEG/PNG/PDF
+max 2MB.
+
+=====================================================================
+PART 68 — MEAL CONFIGURATION PAGE
+=====================================================================
+
+Required summary:
+
+Total Configured
+Active
+Inactive/Archived as appropriate.
+
+Primary:
+
+Create Meal
+
+Then:
+
+Search
+
+Filter:
+
+All
+Active
+Inactive
+Archived
+Deletion Queue
+
+Meal row/card:
+
+🍛
+Lunch
+
+Regular
+Daily
+
+12:30 PM–2:00 PM
+
+Cutoff
+9:00 AM same day
+
+Default
+ON
+
+Active                         >
+
+Do not use giant colorful cards.
+
+Configured meal color appears as:
+
+small icon tint
+thin accent edge
+or subtle visual indicator.
+
+=====================================================================
+PART 69 — CREATE / EDIT MEAL
+=====================================================================
+
+Use one understandable stepped workflow.
+
+STEP 1 — BASICS
+
+Meal name
+Description
+Food icon
+Accent color
+Meal type
+
+Type:
+
+Regular
+Special
+Guest Only
+Festival
+Custom
+
+STEP 2 — SERVICE SCHEDULE
+
+Daily recurring
+
+Selected weekdays if supported
+
+Specific Date / One Time
+
+Service start time
+Service end time
+
+STEP 3 — CUTOFF
+
+Same Day
+Previous Day
+Custom Offset
+
+Time
+
+Show human preview:
+
+"Residents can change Lunch until 9:00 AM on the same day."
+
+STEP 4 — PRICING
+
+Auto from Meal Charge Formula
+
+or
+
+Fixed price per meal
+
+₹ ______
+
+STEP 5 — RESIDENT DEFAULTS
+
+Default state:
+ON / OFF
+
+Visible to Residents:
+ON / OFF
+
+STEP 6 — INTERNAL
+
+Notes
+
+STEP 7 — REVIEW
+
+Show everything in plain language.
+
+[Create Meal]
+
+Do not show raw enum values.
+
+=====================================================================
+PART 70 — MEAL ARCHIVE / DELETE UX
+=====================================================================
+
+Archive action:
+
+explain:
+
+"Historical meals remain unchanged.
+Future Lunch services stop after the effective date."
+
+Delete:
+
+explain deletion-queue behavior.
+
+Example:
+
+Requested:
+10 August
+
+Stops future services:
+11 August
+
+Eligible cleanup:
+5 September
+
+Historical references remain.
+
+Do not physically purge referenced history.
+
+=====================================================================
+PART 71 — FORMULA ENGINE PAGE
+=====================================================================
+
+This should be one of the clearest pages in the product.
+
+Not a developer tool.
+
+Top:
+
+Meal Charge Formula
+
+Current Formula
+
+(Total Market Cost - Guest Income)
+÷ Resident Consumed Meals
+
+Current Estimate
+
+₹38.18 / meal
+
+Below:
+
+How this is calculated
+
+Market expenses       ₹184,200
+Guest income          -₹10,000
+                      --------
+Resident cost          ₹174,200
+
+Resident meals             4,563
+
+Meal charge              ₹38.18
+
+Primary:
+
+Edit Formula
+
+Secondary:
+
+Version History
+
+=====================================================================
+PART 72 — FORMULA EDITOR
+=====================================================================
+
+Use segmented mode:
+
+Plain Language
+Formula
+
+PLAIN LANGUAGE:
+
+large friendly input:
+
+"Describe how meal charge should be calculated…"
+
+AI/parser converts to safe AST.
+
+FORMULA MODE:
+
+do NOT expose code execution.
+
+Provide:
+
+available variables
+safe operators
+syntax helper
+validation.
+
+Preview updates after debounce.
+
+Before save:
+
+show:
+
+Current formula
+Proposed formula
+Current result
+Proposed result
+Difference.
+
+If current billing period affected:
+
+show impact.
+
+Save creates new VERSION.
+
+=====================================================================
+PART 73 — ADMIN BILLING PAGE
+=====================================================================
+
+Required summary:
+
+Total Billed
+Total Collected
+Overdue
+
+Primary:
+
+Generate Bills
+
+Then:
+
+Current/previous billing period overview.
+
+Bill list.
+
+Search resident/bill.
+
+Filter:
+
+All
+Unpaid
+Partially Paid
+Paid
+Overdue
+Adjusted
+
+No future billing period.
+
+=====================================================================
+PART 74 — GENERATE BILL FLOW
+=====================================================================
+
+Use dedicated focused workflow.
+
+STEP 1:
+Select eligible month/year.
+
+STEP 2:
+Due date.
+
+STEP 3:
+Readiness checks.
+
+Example:
+
+August 2026
+
+Residents                 48
+Resident meals         1,462
+Guest meals               91
+Eligible expenses     ₹55,820
+Approved payments     ₹41,500
+Meal rate               ₹38.18
+
+Readiness:
+
+✓ Meals reconciled
+✓ Payments reconciled
+✓ Expenses reconciled
+✓ Formula valid
+✓ Task expenses resolved
+✓ Snapshot ready
+
+If something fails:
+
+do NOT permit generation.
+
+Show exactly what needs fixing.
+
+STEP 4:
+Critical confirmation.
+
+Use strong warning material,
+not an enormous alarming red page.
+
+Example:
+
+"Generating bills closes August's accounting snapshot.
+Normal historical values cannot be edited afterward."
+
+Then arithmetic anti-misclick:
+
+2 + 9 = [     ]
+
+[Cancel]
+
+[Generate & Close August]
+
+Require recent Admin authentication.
+
+=====================================================================
+PART 75 — BILLING SUCCESS
+=====================================================================
+
+Do not use confetti.
+
+Use restrained success transition.
+
+Example:
+
+✓ August billing completed
+
+48 bills generated
+Snapshot locked
+
+[View Bills]
+
+=====================================================================
+PART 76 — ADMIN BILL DETAILS
+=====================================================================
+
+Bill should explain itself.
+
+Resident:
+Sahid Haque
+
+Period:
+August 2026
+
+Resident Meals
+43 × ₹38.18          ₹1,641.74
+
+Guest Meals
+4 × ₹55.00             ₹220.00
+
+Adjustments            -₹100.00
+
+Total                 ₹1,761.74
+
+Payments             -₹1,500.00
+
+Amount to Pay           ₹261.74
+
+Show:
+
+formula/version reference
+generation date
+payment state
+adjustment history.
+
+=====================================================================
+PART 77 — ADMIN NOTIFICATIONS
+=====================================================================
+
+Default:
+
+current relevant timeframe.
+
+Group:
+
+Today
+Yesterday
+Earlier This Month
+
+Filters:
+
+All
+Unread
+Info
+Success
+Warning
+Alert
+
+Mobile:
+
+do not show six permanent pills if cramped.
+
+Use compact Filter control.
+
+Notification:
+
+icon
+title/action
+short description
+time
+read/unread indication.
+
+=====================================================================
+PART 78 — ADMIN ANNOUNCEMENTS
+=====================================================================
+
+Page has:
+
+Published/Recent announcements
++
+Create Announcement action.
+
+On desktop:
+
+list and compose/detail may coexist side-by-side if space allows.
+
+Mobile:
+
+list
+then dedicated create route/sheet.
+
+Fields:
+
+Title
+Message
+
+Type:
+Alert
+Warning
+Maintenance
+Event
+Info
+
+Priority:
+Normal
+High
+Urgent
+Critical
+
+Target:
+Everyone
+Residents
+Admins
+
+Publish date/time
+
+Optional expiry
+
+Pin to Dashboard
+
+[Preview]
+
+[Publish]
+
+Critical announcements require clear preview.
+
+=====================================================================
+PART 79 — ADMIN TASKS PAGE
+=====================================================================
+
+Do NOT build a cluttered Kanban unless actual UX testing proves it superior.
+
+Prefer:
+
+status summary
++
+search/filter
++
+clean task list.
+
+States:
+
+Assigned
+Accepted
+In Progress
+Submitted
+Needs Review
+Completed
+Rejected
+Cancelled
+
+Primary:
+
+Assign Task
+
+Task row:
+
+Market Shopping
+Assigned to Sahid
+4 Sep
+
+Submitted
+Needs Review                    >
+
+=====================================================================
+PART 80 — CREATE MARKET TASK
+=====================================================================
+
+Fields:
+
+Resident
+Date/deadline
+Description
+
+Shopping items:
+
+Item
+Quantity
+Unit
+Expected amount if useful
+
+Add item
+
+Notes
+
+[Assign Task]
+
+Resident receives notification.
+
+=====================================================================
+PART 81 — VERIFY MARKET PURCHASE
+=====================================================================
+
+Admin sees:
+
+task
+resident
+requested items
+actual submitted items
+quantities
+prices
+proofs
+comments
+submitted total.
+
+Actions:
+
+Approve Purchase
+
+or
+
+Reject / Request Correction
+with reason.
+
+APPROVAL:
+
+creates official expense exactly once.
+
+=====================================================================
+PART 82 — ADMIN CALENDAR
+=====================================================================
+
+Mobile:
+
+month strip/calendar
++
+agenda list below.
+
+Tablet/Desktop:
+
+month calendar
++
+selected-event/details area.
+
+Primary:
+
+Create Event.
+
+Fields:
+
+Name
+Description
+Start Date
+End Date
+
+Type:
+
+Holiday
+Festival
+Maintenance
+Custom
+
+Disable Meals During Period:
+ON/OFF
+
+Before save:
+
+show impact:
+
+"This event will affect 6 meal services."
+
+[Create Event]
+
+=====================================================================
+PART 83 — ADMIN SETTINGS
+=====================================================================
+
+Do not create one huge undifferentiated Settings page.
+
+Sections:
+
+Institution
+Meals & Policies
+Billing
+Notifications
+Appearance
+Security
+Data & Export
+
+MOBILE:
+
+settings section list.
+
+Tap opens dedicated settings subsection.
+
+Do not accordion-collapse everything inside one page.
+
+DESKTOP:
+
+left settings navigation
++
+right setting content.
+
+=====================================================================
+PART 84 — INSTITUTION SETTINGS
+=====================================================================
+
+Fields conceptually:
+
+Institution name
+Contact information where required
+Timezone
+Currency
+Relevant profile details.
+
+Timezone is authoritative.
+
+Show:
+
+Asia/Kolkata
+IST
+
+Changing timezone is sensitive if historical schedules exist.
+
+Do not silently reinterpret old timestamps.
+
+=====================================================================
+PART 85 — APPEARANCE SETTINGS
+=====================================================================
+
+Support:
+
+System
+Light
+Dark
+
+Accent selection only if desired.
+
+Optional density:
+
+Comfortable
+Compact
+
+Show live preview.
+
+Do NOT create full theme builder.
+
+Keep Liquid Polish visual identity consistent.
+
+=====================================================================
+PART 86 — SECURITY SETTINGS
+=====================================================================
+
+Admin:
+
+password
+MFA/passkey
+active sessions
+logout all devices.
+
+Resident:
+
+profile security
+password
+sessions where supported.
+
+=====================================================================
+PART 87 — DATA & EXPORT
+=====================================================================
+
+Admin selects:
+
+scope
+date range
+format.
+
+Formats:
+
+CSV
+JSON
+PDF only where human-readable report is useful.
+
+Re-authenticate before full export.
+
+Export runs asynchronously.
+
+Private download.
+
+Expiration.
+
+Audit export event.
+
+=====================================================================
+PART 88 — AUDIT PAGE
+=====================================================================
+
+Audit is essential but should NOT clutter main Admin navigation.
+
+Place under System/Settings/More.
+
+Admin can inspect:
+
+Actor
+Action
+Entity
+Time
+Reason
+Old state
+New state.
+
+Filters:
+
+date
+actor
+action type
+entity.
+
+Audit data is read-only.
+
+Mobile:
+
+structured event rows.
+
+Desktop:
+
+dense table/list with detail pane.
+
+No Edit.
+
+No Delete.
+
+=====================================================================
+PART 89 — RESIDENT DASHBOARD
+=====================================================================
+
+Follow original requirement closely.
+
+ORDER:
+
+1. Greeting
+2. Required summary/KPIs
+3. Recent Activity
+
+Greeting:
+
+Good Evening, Sahid 🌙
+
+Use institution-local time.
+
+Required high-level values:
+
+Meals ON Today
+Total Deposit
+Pending Bills
+Payment Status
+
+Do not show other residents.
+
+Recent Activity:
+
+only:
+
+resident's own activity
+Admin/system actions affecting them.
+
+No charts.
+
+No institution-wide finance information.
+
+=====================================================================
+PART 90 — RESIDENT MEALS PAGE
+=====================================================================
+
+This is the Resident's most important daily page.
+
+Top summary:
+
+Meals ON This Month
+Meals OFF This Month
+Locked Confirmed Meals
+
+Actions:
+
+Guest Meal
+Apply for Leave
+
+Then view selector:
+
+Agenda
+Calendar
+Day
+
+Use liquid shared active indicator.
+
+Do not implement as three unrelated pages.
+
+=====================================================================
+PART 91 — AGENDA VIEW
+=====================================================================
+
+Default Resident meal view.
+
+Auto-position near current date once.
+
+Do NOT fight user's scroll afterward.
+
+Date section:
+
+TODAY
+3 September
+
+Lunch
+12:30–2:00 PM
+
+ON
+
+Change until 9:00 AM
+
+Dinner
+8:00–9:30 PM
+
+ON
+
+Change until 5:00 PM
+
+Guest meals integrated clearly:
+
+Lunch
+Your meals            1
+Guest meals           2
+Total                 3
+
+Locked:
+
+show lock icon/text.
+
+Admin override:
+
+explicit label.
+
+=====================================================================
+PART 92 — CALENDAR VIEW
+=====================================================================
+
+Month calendar.
+
+Each day may use tiny semantic indicators for:
+
+ON meals
+OFF meals
+leave
+guest
+override
+
+without becoming rainbow/confusing.
+
+Tap date:
+
+transition to Day view or open day's details.
+
+Do not stuff meal names into tiny calendar cells.
+
+=====================================================================
+PART 93 — DAY VIEW
+=====================================================================
+
+Focused selected date.
+
+Header:
+
+Tuesday
+8 September
+
+Meals listed chronologically.
+
+Each meal shows:
+
+name
+service time
+cutoff
+current state
+lock
+guest count
+Admin override
+availability reason.
+
+=====================================================================
+PART 94 — RESIDENT MEAL CONTROL
+=====================================================================
+
+If editable:
+
+LiquidToggle.
+
+ON
+OFF.
+
+Below:
+
+"Change until 5:00 PM"
+
+If locked:
+
+toggle is not interactive.
+
+Show:
+
+Locked at 5:00 PM.
+
+If Admin override:
+
+Admin Override label
++
+state.
+
+Do not allow visual control to imply resident can override Admin.
+
+=====================================================================
+PART 95 — GUEST MEAL FLOW
+=====================================================================
+
+Tap:
+
+Guest Meal
+
+Fields:
+
+Date
+Meal
+Guest Quantity
+Optional Note
+
+Live preview:
+
+Lunch
+Your meal               1
+Guest meals             2
+Total meals             3
+
+Estimated guest charge
+₹110
+
+Cutoff
+Today, 9:00 AM
+
+[Add Guest Meals]
+
+Backend rechecks cutoff and availability.
+
+=====================================================================
+PART 96 — LEAVE REQUEST FLOW
+=====================================================================
+
+Fields:
+
+Start Date
+End Date
+Reason
+
+Applies To:
+
+All Meals
+
+or selected meals if supported.
+
+Before submit:
+
+"12 future unlocked meals may be turned OFF if this leave is approved.
+
+2 already locked meals will not change automatically."
+
+[Request Leave]
+
+After:
+
+Pending Approval.
+
+When Admin approves:
+
+meal engine applies automatically.
+
+=====================================================================
+PART 97 — RESIDENT BILLING PAGE
+=====================================================================
+
+Required summary should focus on what Resident needs.
+
+Show:
+
+Total Billed This Month
+Amount to Pay / outstanding
+Overdue
+Payment state
+
+if each is materially distinct.
+
+Primary unsettled bill presented clearly.
+
+Example:
+
+August 2026
+Amount to Pay
+
+₹261.74
+
+Due 10 September
+
+[Pay Bill]
+[View Calculation]
+
+Below:
+
+Billing History for selected month.
+
+Period selector allows navigating months.
+
+Do not load years of records at once.
+
+=====================================================================
+PART 98 — PAY BILL
+=====================================================================
+
+Resident selects/fetches bill.
+
+Show:
+
+Bill
+Outstanding amount.
+
+Fields:
+
+Amount
+Method
+Reference
+Proof
+Notes.
+
+Methods:
+
+UPI
+Cash
+Bank Transfer
+Other
+
+Submission status:
+
+Pending Approval.
+
+Do NOT immediately mark bill paid until authoritative payment approval
+and allocation rules complete.
+
+=====================================================================
+PART 99 — RESIDENT PAYMENT PAGE
+=====================================================================
+
+Required summary:
+
+Deposits This Month
+Pending Approvals
+Refund Pending
+
+Primary:
+
+Submit Payment.
+
+Then:
+
+Search own transactions where useful.
+
+Filter:
+
+All
+Pending
+Approved
+Rejected
+Voided
+Refunded.
+
+Resident transaction row:
+
+PAY-202609-0042
+
+₹2,000
+
+UPI
+Pending
+
+3 Sep, 8:42 PM              >
+
+No Edit after submission unless a specifically safe pending correction
+workflow exists.
+
+=====================================================================
+PART 100 — SUBMIT PAYMENT
+=====================================================================
+
+Simple form:
+
+Amount
+Method
+Reference
+Proof
+Notes
+
+Proof max 2MB.
+
+Display upload progress.
+
+Validate signature/MIME server-side.
+
+[Submit Payment]
+
+Avoid large multi-step payment wizard.
+
+=====================================================================
+PART 101 — RESIDENT TASKS PAGE
+=====================================================================
+
+Show only assigned resident tasks.
+
+Task:
+
+Market Shopping
+
+Due:
+4 September
+
+Rice             10 kg
+Oil               5 L
+Vegetables        ...
+
+[Accept]
+[Reject]
+
+Reject:
+
+reason required.
+
+After Accept:
+
+status becomes:
+
+In Progress.
+
+Button:
+
+Submit Purchase.
+
+=====================================================================
+PART 102 — RESIDENT PURCHASE SUBMISSION
+=====================================================================
+
+For accepted market task:
+
+show requested item.
+
+Allow actual:
+
+item
+quantity
+unit
+price
+
+proof
+
+comment.
+
+Total preview.
+
+[Submit for Admin Review]
+
+IMPORTANT:
+
+This does NOT create official expense yet.
+
+After submission:
+
+Waiting for Admin Review.
+
+Resident cannot make it official.
+
+=====================================================================
+PART 103 — RESIDENT NOTIFICATIONS
+=====================================================================
+
+Simple personal feed.
+
+Examples:
+
+Payment approved
+Leave approved
+New bill generated
+Market task assigned
+Refund issued
+Announcement published.
+
+No other resident data.
+
+=====================================================================
+PART 104 — RESIDENT PROFILE
+=====================================================================
+
+Show:
+
+profile information
+membership status
+policy acceptance
+security/session options
+appearance
+logout.
+
+Resident can edit only permitted fields.
+
+Changing identity-critical information may require Admin review
+depending on business policy.
+
+=====================================================================
+PART 105 — SEARCH + FILTER RULE
+=====================================================================
+
+PHONE:
+
+[ Search...                         ] [Filter]
+
+Do not permanently display:
+
+All Pending Approved Rejected Voided Refunded ...
+
+across entire screen.
+
+Filter opens bottom sheet.
+
+TABLET/DESKTOP:
+
+show most important filters inline.
+
+Use overflow for secondary.
+
+=====================================================================
+PART 106 — KPI DESIGN
+=====================================================================
+
+The original business specification explicitly asks for KPIs on
+several pages.
+
+Use them.
+
+BUT:
+
+do not make them huge.
+
+Mobile:
+
+usually compact 2-column grid.
+
+Tablet:
+
+2–4 columns based on number.
+
+Desktop:
+
+one row where appropriate.
+
+KPI anatomy:
+
+small semantic icon
+label
+large but restrained value
+small supporting context only when useful.
+
+Do not add decorative mini charts unless needed.
+
+=====================================================================
+PART 107 — LIST ROW DESIGN
+=====================================================================
+
+Create one reusable premium `EntityRow`.
+
+Anatomy:
+
+optional icon/avatar
+
+primary title
+
+secondary metadata
+
+status
+
+optional amount/count
+
+chevron/action.
+
+Mobile rows use large touch area.
+
+Desktop rows can become denser.
+
+Avoid card-for-every-row when simple separated glass list is cleaner.
+
+=====================================================================
+PART 108 — GLASS LISTS
+=====================================================================
+
+Prefer one outer glass container with internal rows.
+
+Do NOT create:
+
+GlassCard
+Gap
+GlassCard
+Gap
+GlassCard
+Gap
+
+for every 100 transactions.
+
+Better:
+
+GlassPanel
+ ├ Row
+ ├ subtle divider
+ ├ Row
+ ├ subtle divider
+ └ Row
+
+This improves:
+
+performance
+density
+visual calm.
+
+=====================================================================
+PART 109 — STATUS SYSTEM
+=====================================================================
+
+Centralize statuses.
+
+Examples:
+
+Pending
+Approved
+Rejected
+Locked
+Admin Override
+Overdue
+Paid
+Active
+Inactive
+Needs Review
+Grace Period
+Restricted
+Exempted.
+
+Status design:
+
+small icon where useful
++
+plain text
++
+subtle semantic tint.
+
+Never rely on color alone.
+
+=====================================================================
+PART 110 — DANGEROUS ACTIONS
+=====================================================================
+
+Danger red only for:
+
+Delete
+Void
+Reject
+Deactivate
+Close Billing
+Reopen Billing
+other genuinely destructive actions.
+
+Routine warnings use amber.
+
+Do not make entire application red whenever something requires attention.
+
+=====================================================================
+PART 111 — CONFIRMATIONS
+=====================================================================
+
+Bad:
+
+"Are you sure?"
+
+Good:
+
+"Void this ₹1,850 expense?
+
+The original expense will remain in financial history,
+but it will no longer contribute to active expense totals.
+
+Reason
+[________________]
+
+Cancel
+Void Expense"
+
+Tell Admin exactly what will happen.
+
+=====================================================================
+PART 112 — LOADING STATES
+=====================================================================
+
+Every route:
+
+initial loading
+background refreshing
+empty
+error
+permission failure
+network failure
+
+must be intentionally designed.
+
+Use skeleton matching actual layout.
+
+Avoid giant centered spinner.
+
+Do not wipe existing data while background query refetches.
+
+=====================================================================
+PART 113 — EMPTY STATES
+=====================================================================
+
+Examples:
+
+"No payments need review."
+
+"Residents' submitted payments will appear here."
+
+Do not use giant decorative illustrations.
+
+Provide relevant CTA only if useful.
+
+=====================================================================
+PART 114 — ERROR STATES
+=====================================================================
+
+Specific:
+
+"This meal locked at 9:00 AM. Your change was not saved."
+
+"This payment was already reviewed by another Admin."
+
+"This billing period has already been closed."
+
+Not:
+
+"Something went wrong."
+
+Unexpected error:
+
+show request/support ID.
+
+=====================================================================
+PART 115 — OPTIMISTIC UI
+=====================================================================
+
+Allowed selectively.
+
+Meal toggle:
+
+optimistically animate if desired.
+
+But backend remains authoritative.
+
+Rollback on rejection.
+
+Financial approval:
+
+do not show final success before server transaction commits.
+
+=====================================================================
+PART 116 — OFFLINE BEHAVIOR
+=====================================================================
+
+PWA may cache static assets.
+
+Do NOT silently queue:
+
+meal cutoff mutations
+payments
+refunds
+billing
+expense approval
+
+for later replay.
+
+If network fails:
+
+tell user it was NOT saved.
+
+This is essential for cutoff/financial correctness.
+
+=====================================================================
+PART 117 — CLIENT STATE
+=====================================================================
+
+TanStack Query:
+
+server state.
+
+React/local state:
+
+component interaction.
+
+Do not duplicate every API object into:
+
+Zustand
+Context
+TanStack Query
+localState
+
+simultaneously.
+
+Global UI state only when genuinely cross-cutting.
+
+=====================================================================
+PART 118 — FORMS
+=====================================================================
+
+Use React Hook Form.
+
+Frontend validates for UX.
+
+Backend validates independently.
+
+Database protects final invariants.
+
+Never send frontend-computed total and blindly trust it.
+
+Backend recalculates.
+
+=====================================================================
+PART 119 — FILE SECURITY
+=====================================================================
+
+Allowed:
+
+JPEG
+PNG
+PDF
+
+Initial size:
+
+max 2 MB.
+
+Validate:
+
+file signature
+MIME
+size
+authorization.
+
+Use:
+
+random object key
+private S3 bucket
+checksum
+malware scanning where available
+quarantine
+short-lived access URL.
+
+No public receipts directory.
+
+=====================================================================
+PART 120 — AUDIT
+=====================================================================
+
+Append-only audit events.
+
+Record high-risk operations:
+
+WHO
+WHAT
+WHEN
+ENTITY
+BEFORE
+AFTER
+REASON
+REQUEST ID.
+
+Audit:
+
+Admin overrides
+Formula changes
+Resident approvals
+Resident deactivation
+Payment decisions
+Refunds
+Expense voids
+Billing
+Policy exemptions
+Task approvals
+Deletion requests.
+
+Normal app runtime must not update/delete audit history.
+
+=====================================================================
+PART 121 — OUTBOX
+=====================================================================
+
+Use Transactional Outbox.
+
+Example:
+
+Payment Approval transaction stores:
+
+payment state
+ledger journal
+audit
+outbox event
+
+together.
+
+After commit:
+
+worker sends notification.
+
+If notification service fails:
+
+payment remains correctly approved.
+
+=====================================================================
+PART 122 — NOTIFICATION DELIVERY
+=====================================================================
+
+In-app notification history is primary.
+
+Email/push optional secondary delivery.
+
+Do not make:
+
+payment approval
+billing
+expense posting
+
+depend on third-party email success.
+
+=====================================================================
+PART 123 — BACKGROUND JOBS
+=====================================================================
+
+Worker handles:
+
+notifications
+emails
+exports
+file scanning
+scheduled meal generation
+deletion retention
+periodic integrity checks
+non-critical billing follow-ups.
+
+Do not put simple UI mutations into queue unnecessarily.
+
+=====================================================================
+PART 124 — INTEGRITY CHECKER
+=====================================================================
+
+Periodically verify:
+
+ledger journals balance
+approved payments have ledger journal
+approved expenses have ledger relationship
+refunds reconcile
+billing snapshots match checksums
+duplicate meal risk
+orphan references.
+
+Do not auto-rewrite financial history to fix errors.
+
+Alert/report.
+
+=====================================================================
+PART 125 — BILLING RECONCILIATION
+=====================================================================
+
+Billing readiness must reconcile:
+
+Approved payments ↔ Ledger
+
+Approved expenses ↔ Ledger
+
+Refunds ↔ Ledger
+
+Resident meal totals ↔ ResidentMeal
+
+Guest totals ↔ GuestMeal
+
+Formula ↔ active FormulaVersion
+
+Task expense submissions ↔ official expenses where approved.
+
+Block billing on critical mismatch.
+
+=====================================================================
+PART 126 — DATABASE INDEXING
+=====================================================================
+
+Design indexes based on real queries.
+
+Likely patterns:
+
+resident_meals:
+resident_id + meal_instance_id
+
+meal_instances:
+service_date + meal_definition_id
+
+payments:
+resident_id + status + submitted_at
+
+expenses:
+status + date
+
+bills:
+resident_id + billing_period_id
+
+tasks:
+assigned_resident_id + status
+
+notifications:
+user_id + read_at + created_at
+
+audit:
+entity_type + entity_id + occurred_at.
+
+But:
+
+inspect EXPLAIN ANALYZE.
+
+Do not create every possible index.
+
+=====================================================================
+PART 127 — PAGINATION
+=====================================================================
+
+Growing data uses pagination.
+
+Prefer cursor pagination for:
+
+payments
+expenses
+activity
+notifications
+audit
+tasks.
+
+Never fetch 10,000 records to browser and hide most.
+
+=====================================================================
+PART 128 — N+1
+=====================================================================
+
+No list screen may execute one SQL query per row.
+
+Inspect:
+
+Meal Count
+Residents
+Resident 360
+Payments
+Expenses
+Bills
+Tasks.
+
+Use:
+
+efficient joins
+batched reads
+projections.
+
+=====================================================================
+PART 129 — OPENAPI
+=====================================================================
+
+Nest generates OpenAPI.
+
+Frontend typed client is generated from contract.
+
+Do not hand-maintain duplicate API type definitions.
+
+Use contract CI checks.
+
+=====================================================================
+PART 130 — API STYLE
+=====================================================================
+
+Examples:
+
+GET /api/v1/admin/dashboard
+
+GET /api/v1/meal-instances
+
+POST /api/v1/resident-meals/:id/toggle
+
+POST /api/v1/resident-meals/:id/override
+
+GET /api/v1/payments
+
+POST /api/v1/payments
+
+POST /api/v1/payments/:id/approve
+
+POST /api/v1/payments/:id/reject
+
+POST /api/v1/refunds
+
+POST /api/v1/expenses
+
+POST /api/v1/expenses/:id/void
+
+POST /api/v1/billing-periods/:id/generate
+
+Use explicit command endpoints for high-value state transitions.
+
+=====================================================================
+PART 131 — API ERRORS
+=====================================================================
+
+Return codes such as:
+
+MEAL_CUTOFF_PASSED
+
+MEAL_ALREADY_LOCKED
+
+PAYMENT_ALREADY_REVIEWED
+
+RESOURCE_CHANGED
+
+BILLING_PERIOD_CLOSED
+
+FORMULA_DIVIDE_BY_ZERO
+
+FORMULA_INVALID
+
+INSUFFICIENT_REFUND_CREDIT
+
+PERMISSION_DENIED.
+
+Frontend maps these to plain language.
+
+=====================================================================
+PART 132 — OBJECT AUTHORIZATION
+=====================================================================
+
+Resident calling:
+
+GET /api/v1/bills/{another-user-bill}
+
+must fail.
+
+Even if ID is valid.
+
+Resident cannot:
+
+approve own payment
+edit role
+edit balance
+override meal
+see other resident
+access Admin endpoints.
+
+Test all of these.
+
+=====================================================================
+PART 133 — MASS ASSIGNMENT
+=====================================================================
+
+Never pass raw body to ORM update.
+
+BAD:
+
+db.user.update(req.body)
+
+Map explicit fields.
+
+Resident body containing:
+
+role: "ADMIN"
+
+must be ignored/rejected.
+
+=====================================================================
+PART 134 — SECURITY
+=====================================================================
+
+Implement:
+
+CSRF protection
+CSP
+HSTS
+secure headers
+rate limits
+MFA
+password hashing
+session revocation
+secure cookies
+upload validation
+IDOR protection
+mass-assignment prevention
+SQL injection prevention
+secret management.
+
+No:
+
+unsafe-eval
+
+unless an audited unavoidable framework requirement exists.
+
+=====================================================================
+PART 135 — LOGGING
+=====================================================================
+
+Use structured Pino.
+
+Every request:
+
+request_id
+trace_id
+route
+duration
+status
+sanitized actor.
+
+Never log:
+
+password
+session token
+MFA secret
+Authorization header
+full proof documents.
+
+=====================================================================
+PART 136 — OBSERVABILITY
+=====================================================================
+
+OpenTelemetry.
+
+Measure:
+
+API p50
+API p95
+API p99
+
+database latency
+pool saturation
+error rate
+queue depth
+failed jobs
+billing generation duration
+reconciliation failure
+login failure
+object storage errors.
+
+=====================================================================
+PART 137 — PERFORMANCE TARGETS
+=====================================================================
+
+Target Core Web Vitals:
+
+LCP < 2.5s p75
+
+INP < 200ms
+
+CLS < 0.1.
+
+For normal cached/navigation interactions:
+
+feedback should feel immediate.
+
+Do not claim performance.
+
+Measure it.
+
+=====================================================================
+PART 138 — FRONTEND PERFORMANCE
+=====================================================================
+
+Use React Server Components where they genuinely reduce client work.
+
+Keep "use client" boundary small.
+
+Lazy load:
+
+Formula editor
+heavy calendar modules
+optional data visualizations
+complex file preview
+
+where appropriate.
+
+Do not lazy-load critical first-screen controls unnecessarily.
+
+=====================================================================
+PART 139 — MOTION PERFORMANCE
+=====================================================================
+
+Prefer:
+
+transform
+opacity.
+
+Avoid animating:
+
+backdrop-filter
+large box-shadow
+layout-heavy dimensions
+
+continuously.
+
+Target smooth 60fps on modest mobile hardware.
+
+High-refresh devices should feel smooth too.
+
+=====================================================================
+PART 140 — REDUCED MOTION
+=====================================================================
+
+Honor:
+
+prefers-reduced-motion.
+
+Disable unnecessary:
+
+slide
+scale
+stagger.
+
+Keep:
+
+instant state feedback
+focus
+status.
+
+=====================================================================
+PART 141 — ACCESSIBILITY
+=====================================================================
+
+Aim WCAG 2.2 AA.
+
+Ensure:
+
+keyboard access
+visible focus
+correct semantic elements
+dialog focus trap
+screen-reader labels
+minimum touch sizes
+status not color-only
+contrast through glass
+reduced motion
+error association with fields.
+
+Touch target target:
+
+~44×44px.
+
+=====================================================================
+PART 142 — SAFE AREAS
+=====================================================================
+
+Support:
+
+env(safe-area-inset-top)
+
+env(safe-area-inset-bottom)
+
+Floating mobile bottom navigation must not overlap gesture indicator.
+
+Main content receives enough bottom padding.
+
+=====================================================================
+PART 143 — RESPONSIVE QA
+=====================================================================
+
+Test at least:
+
+320×568
+360×800
+375×812
+390×844
+412×915
+430×932
+
+768×1024
+820×1180
+1024×1366
+
+1280×720
+1366×768
+1440×900
+1920×1080
+
+Also inspect at:
+
+2560px wide.
+
+No:
+
+horizontal page overflow
+clipping
+hidden action
+overlapping nav
+broken dialog
+unreadable glass
+huge empty desktop areas.
+
+=====================================================================
+PART 144 — LIGHT/DARK QA
+=====================================================================
+
+Every major route must be inspected in:
+
+Light
+Dark
+
+Do not assume token inversion is sufficient.
+
+Dark glass should look intentional.
+
+No:
+
+milky gray dark mode
+pure black everywhere
+low-contrast text.
+
+=====================================================================
+PART 145 — VISUAL COMPONENT SYSTEM
+=====================================================================
+
+Build reusable primitives:
+
+AppShell
+
+TopBar
+
+DesktopSidebar
+TabletRail
+MobileBottomNav
+MobileMoreSheet
+
+GlassSurface
+GlassCard
+GlassPanel
+GlassSheet
+GlassDialog
+
+GlassButton
+GlassIconButton
+
+GlassInput
+GlassTextarea
+GlassSelect
+SearchField
+
+LiquidToggle
+
+StatusBadge
+
+MetricCard
+
+EntityList
+EntityRow
+
+FilterButton
+FilterSheet
+
+SegmentedControl
+
+ViewHeader
+PageHeader
+
+DateControl
+MonthPicker
+
+MoneyDisplay
+
+Skeleton
+
+EmptyState
+ErrorState
+
+Toast
+
+ConfirmationDialog.
+
+Do not create one-off CSS for each route.
+
+=====================================================================
+PART 146 — DOMAIN COMPONENTS
+=====================================================================
+
+Create domain components such as:
+
+MealSummary
+MealStatusControl
+ResidentMealRow
+
+ResidentSummaryRow
+
+PaymentRow
+PaymentReview
+
+ExpenseRow
+ExpenseForm
+
+FundSummary
+
+FormulaPreview
+FormulaImpact
+
+BillSummary
+BillBreakdown
+BillingReadiness
+
+TaskRow
+TaskSubmissionReview
+
+NotificationRow
+ActivityRow.
+
+Keep domain components separate from design primitives.
+
+=====================================================================
+PART 147 — PAGE FILE SIZE
+=====================================================================
+
+Do NOT repeat BoardOps-Fresh's extremely large feature component problem.
+
+If component approaches a few hundred lines and has multiple unrelated
+responsibilities:
+
+split it.
+
+Example:
+
+payments/
+├── payments-page.tsx
+├── payment-summary.tsx
+├── payment-list.tsx
+├── payment-row.tsx
+├── payment-detail.tsx
+├── payment-review-actions.tsx
+└── payment-filters.tsx
+
+Do the same for other large domains.
+
+=====================================================================
+PART 148 — RESPONSIBILITY BOUNDARIES
+=====================================================================
+
+Do not mix:
+
+API calls
+financial math
+authorization
+presentation
+
+inside one React component.
+
+Backend:
+
+business truth.
+
+Frontend:
+
+presentation/interactions.
+
+=====================================================================
+PART 149 — MOBILE VISUAL DENSITY
+=====================================================================
+
+Do not create enormous 250px cards for simple 2-line information.
+
+Use tighter premium layout.
+
+Mobile should feel:
+
+comfortable
+not sparse
+not cramped.
+
+Vertical scroll is normal.
+
+Horizontal page scroll is not.
+
+=====================================================================
+PART 150 — DESKTOP VISUAL DENSITY
+=====================================================================
+
+Desktop can be more information-dense.
+
+Use:
+
+tables
+side panes
+multiple columns
+
+where they reduce navigation.
+
+Do not turn every desktop route into 4-column card wall.
+
+=====================================================================
+PART 151 — NO CLUTTER
+=====================================================================
+
+For EVERY element ask:
+
+Does it help the user:
+
+understand?
+decide?
+navigate?
+act?
+
+If not:
+
+REMOVE IT.
+
+No visual filler.
+
+=====================================================================
+PART 152 — CHART POLICY
+=====================================================================
+
+Do NOT automatically add:
+
+pie charts
+donut charts
+line charts
+
+just because dashboard libraries make it easy.
+
+Use a chart only if it helps answer a genuine question.
+
+The original dashboard does not require charts.
+
+Do not add them there.
+
+=====================================================================
+PART 153 — HIERARCHICAL TODO
+=====================================================================
+
+Create TODO hierarchy:
+
+Phase
+ └ Domain
+    └ Feature
+       ├ Database
+       ├ Backend
+       ├ Authorization
+       ├ UI
+       ├ Responsive
+       ├ Tests
+       └ QA.
+
+Never mark feature complete because UI exists.
+
+=====================================================================
+PART 154 — AGENTS
+=====================================================================
+
+Use specialized agents where useful:
+
+Architecture Agent
+
+Database Agent
+
+Security Agent
+
+Meal Engine Agent
+
+Ledger Agent
+
+Formula/Billing Agent
+
+Backend Agent
+
+Product Design Agent
+
+Frontend Agent
+
+Motion Agent
+
+Accessibility Agent
+
+Performance Agent
+
+Testing Agent
+
+Final Audit Agent.
+
+Parallelize only independent work.
+
+Avoid agents editing same critical files concurrently.
+
+=====================================================================
+PART 155 — FRONTEND CONCEPT PROCESS
+=====================================================================
+
+Before coding major frontend:
+
+generate visual concepts if Image Gen/design capability is available.
+
+Generate at minimum:
+
+Admin Dashboard mobile
+Admin Meal Count mobile
+Admin Payments mobile
+Admin Desktop shell
+Resident Dashboard mobile
+Resident Meals mobile
+Tablet shell
+Dark-mode example
+Form example
+Bottom sheet/dialog example.
+
+Use:
+
+BoardOps-Fresh for structural reference.
+
+Use:
+
+liquid_polish for material reference.
+
+Then critique.
+
+Reject if:
+
+too transparent
+too colorful
+too many cards
+generic dashboard
+poor hierarchy
+small touch controls
+overly dense
+too empty.
+
+=====================================================================
+PART 156 — FRONTEND VERIFICATION
+=====================================================================
+
+Do not trust implementation based on code.
+
+Run actual browser.
+
+Capture screenshots.
+
+Compare to accepted concepts.
+
+Inspect:
+
+layout
+spacing
+typography
+glass
+opacity
+blur
+highlight
+shadow
+navigation
+icons
+motion
+responsive behavior.
+
+Keep fixing until professional design-review quality.
+
+=====================================================================
+PART 157 — DATABASE TESTS
+=====================================================================
+
+Use real PostgreSQL through Testcontainers.
+
+Test:
+
+unique constraints
+foreign keys
+check constraints
+transactions
+concurrency
+locks
+rollback
+idempotency
+migration.
+
+Do not mock Postgres for everything.
+
+=====================================================================
+PART 158 — UNIT TESTS
+=====================================================================
+
+Test heavily:
+
+meal eligibility
+cutoff
+mid-month joining
+leave overlap
+Admin override
+calendar disabling
+deficit policy
+
+money arithmetic
+rounding
+
+formula parser
+formula AST
+formula evaluator
+divide-by-zero
+
+refund eligibility
+
+billing calculation
+
+state machines.
+
+=====================================================================
+PART 159 — PROPERTY TESTS
+=====================================================================
+
+Use randomized tests for:
+
+money
+meal counts
+formula inputs
+rounding.
+
+Guarantee:
+
+no NaN
+no Infinity
+no floating-point drift
+deterministic results.
+
+=====================================================================
+PART 160 — CONCURRENCY TESTS
+=====================================================================
+
+Simulate:
+
+2 Admins approve one payment.
+
+2 Admins generate same billing period.
+
+2 Admins approve same task submission.
+
+Resident meal toggle exactly at cutoff.
+
+Admin override while another Admin edits.
+
+System must remain correct.
+
+=====================================================================
+PART 161 — SECURITY TESTS
+=====================================================================
+
+Test:
+
+Resident access another resident's bill.
+
+Resident access another resident's payment.
+
+Resident change path ID.
+
+Resident submit role=ADMIN.
+
+Resident call Admin endpoint.
+
+Resident approve own payment.
+
+Session replay after revocation.
+
+CSRF attempts.
+
+Unauthorized proof access.
+
+All must fail appropriately.
+
+=====================================================================
+PART 162 — E2E ADMIN
+=====================================================================
+
+Playwright full flows:
+
+login
+
+approve resident
+
+request profile change
+
+create meal
+
+modify meal
+
+override locked meal
+
+approve leave
+
+approve payment
+
+reject payment
+
+add expense
+
+void expense
+
+configure formula
+
+billing readiness
+
+generate bills
+
+assign market task
+
+verify resident purchase
+
+create calendar event
+
+publish announcement
+
+export data.
+
+=====================================================================
+PART 163 — E2E RESIDENT
+=====================================================================
+
+register
+
+pending approval
+
+login after approval
+
+meal toggle
+
+locked meal behavior
+
+guest meal
+
+leave request
+
+submit payment
+
+view approval
+
+view bill
+
+pay bill
+
+accept task
+
+reject task
+
+submit market purchase.
+
+=====================================================================
+PART 164 — BACKUPS
+=====================================================================
+
+Production PostgreSQL:
+
+encrypted backups
+
+point-in-time recovery
+
+defined retention
+
+backup monitoring.
+
+Periodically restore to isolated environment.
+
+A backup is not considered healthy until restoration is proven.
+
+=====================================================================
+PART 165 — MIGRATIONS
+=====================================================================
+
+NEVER:
+
+drop production DB
+
+prisma migrate reset production
+
+delete migration history
+
+recreate everything because migration is inconvenient.
+
+Use safe forward migrations.
+
+For breaking schema evolution:
+
+expand
+backfill
+switch
+contract.
+
+=====================================================================
+PART 166 — CI
+=====================================================================
+
+GitHub Actions:
+
+install locked deps
+
+lint
+
+format check
+
+typecheck
+
+unit tests
+
+property tests
+
+integration tests
+
+migration check
+
+security tests
+
+frontend build
+
+API build
+
+worker build
+
+Playwright smoke
+
+dependency vulnerability scan
+
+container scan.
+
+Critical failures block merge.
+
+=====================================================================
+PART 167 — DEPLOYMENT
+=====================================================================
+
+Production should remain operationally simple:
+
+Web container
+
+API container
+
+Worker container
+
+Managed PostgreSQL
+
+Managed Redis
+
+Private S3-compatible object storage
+
+TLS/reverse proxy.
+
+Do not deploy Kubernetes merely because it sounds enterprise-grade.
+
+=====================================================================
+PART 168 — PWA
+=====================================================================
+
+Make installable as PWA where useful.
+
+Cache:
+
+static assets.
+
+Be extremely careful with private API data.
+
+Never serve stale Resident A data to Resident B.
+
+Do not offline-queue financial writes.
+
+=====================================================================
+PART 169 — NO PLACEHOLDERS
+=====================================================================
+
+Never leave:
+
+TODO calculate
+fake count
+hardcoded ₹40
+hardcoded user
+Math.random()
+mock payment
+fake bill
+fake upload
+stub API
+button that does nothing.
+
+Seed data allowed only in development/test.
+
+=====================================================================
+PART 170 — NO FAKE COMPLETION
+=====================================================================
+
+Feature completion requires:
+
+Database
+Backend
+Authorization
+Validation
+Transaction
+Audit
+Frontend
+Responsive behavior
+Loading
+Empty
+Error
+Tests
+Actual browser verification.
+
+A rendered page alone is NOT finished.
+
+=====================================================================
+PART 171 — BUILD PHASES
+=====================================================================
+
+PHASE 0
+Reference Analysis + Architecture
+
+PHASE 1
+Monorepo + Infrastructure + Design System
+
+PHASE 2
+Auth + Residents + Institution
+
+PHASE 3
+Meal Configuration + Meal Engine + Leave + Guests + Calendar
+
+PHASE 4
+Ledger + Payments + Expenses + Funds + Refunds
+
+PHASE 5
+Formula Engine + Billing + Reconciliation
+
+PHASE 6
+Tasks + Notifications + Announcements
+
+PHASE 7
+Settings + Search + Audit + Export
+
+PHASE 8
+Responsive + Accessibility + Performance
+
+PHASE 9
+Full Liquid Polish visual refinement
+
+PHASE 10
+Security/Concurrency/Database audit
+
+PHASE 11
+Final requirement-by-requirement audit.
+
+=====================================================================
+PART 172 — FINAL DATABASE INVARIANTS
+=====================================================================
+
+The completed product MUST guarantee:
+
+1. Resident cannot access another Resident's private data.
+
+2. Resident cannot grant themselves Admin.
+
+3. One Resident cannot have duplicate participation for one MealInstance.
+
+4. Historical MealInstance never changes because MealDefinition changes.
+
+5. Browser time cannot bypass meal cutoff.
+
+6. Payment cannot be approved twice.
+
+7. Task submission cannot create duplicate expense.
+
+8. Billing period cannot generate duplicate bills.
+
+9. Posted financial transaction cannot be silently edited.
+
+10. Billing snapshot cannot mutate after generation.
+
+11. Formula cannot execute arbitrary code.
+
+12. Money cannot rely on floating point.
+
+13. Redis failure cannot destroy authoritative data.
+
+14. Notification failure cannot roll back valid financial operation.
+
+15. Required historical financial data cannot be deleted.
+
+16. Every critical Admin change is auditable.
+
+=====================================================================
+PART 173 — FINAL UX INVARIANTS
+=====================================================================
+
+The completed frontend MUST guarantee:
+
+1. All important functions remain available on mobile.
+
+2. Pages reflow instead of disappearing/collapsing.
+
+3. No normal horizontal page scrolling.
+
+4. Primary action is easy to find.
+
+5. Status never relies on color only.
+
+6. Financial numbers are explainable.
+
+7. Dangerous actions explain consequences.
+
+8. Routine actions do not cause confirmation fatigue.
+
+9. Glass never reduces readability.
+
+10. Actual backdrop blur is visible.
+
+11. Glass is substantial, not nearly transparent.
+
+12. Every actionable click/tap has immediate tactile feedback.
+
+13. Animation never slows normal workflow.
+
+14. Resident screens avoid technical/accounting jargon.
+
+15. Admin screens remain operationally dense but not cluttered.
+
+16. Tablet looks intentionally designed.
+
+17. Desktop looks intentionally designed.
+
+18. Dark mode is first-class.
+
+19. The app does not look like default shadcn.
+
+20. The app clearly has the visual DNA of liquid_polish while preserving
+    the clarity/structure of BoardOps-Fresh.
+
+=====================================================================
+PART 174 — FINAL FRONTEND QUALITY TEST
+=====================================================================
+
+Reject the implementation if it looks like:
+
+- generic CRUD
+- generic admin dashboard
+- default shadcn
+- Material Design clone
+- card wall
+- KPI wall
+- transparent unreadable glass
+- neon glassmorphism
+- crypto dashboard
+- amateur PWA
+- mobile website merely enlarged on desktop.
+
+Accept only when it looks like:
+
+BoardOps-Fresh evolved by a world-class product team
+
+with
+
+liquid_polish evolved into a denser,
+more readable,
+more physically convincing Liquid Glass system.
+
+=====================================================================
+PART 175 — FINAL COMPLETION PROCESS
+=====================================================================
+
+BEFORE SAYING "DONE":
+
+RE-READ THIS ENTIRE SPECIFICATION.
+
+RE-READ THE ORIGINAL BUSINESS REQUIREMENTS.
+
+RE-INSPECT BOTH REFERENCE REPOSITORIES.
+
+Then perform:
+
+requirement-by-requirement audit
+
+route-by-route audit
+
+database invariant audit
+
+financial audit
+
+authorization audit
+
+concurrency audit
+
+idempotency audit
+
+migration audit
+
+responsive audit
+
+accessibility audit
+
+performance audit
+
+light-mode audit
+
+dark-mode audit
+
+animation audit
+
+visual fidelity audit.
+
+Find and fix:
+
+missing feature
+
+partially working feature
+
+wrong state
+
+hardcoded value
+
+fake logic
+
+race condition
+
+duplicate risk
+
+unsafe delete
+
+historical mutation
+
+IDOR
+
+poor mobile layout
+
+poor tablet layout
+
+poor desktop layout
+
+bad glass opacity
+
+insufficient blur
+
+excess blur
+
+nested blur performance
+
+inconsistent radius
+
+inconsistent spacing
+
+generic UI
+
+excessive cards
+
+excessive KPIs
+
+excessive filters
+
+missing click feedback
+
+broken reduced-motion behavior.
+
+Then rerun:
+
+lint
+
+format
+
+typecheck
+
+unit tests
+
+property tests
+
+integration tests
+
+concurrency tests
+
+security tests
+
+E2E
+
+accessibility tests
+
+responsive tests
+
+production build
+
+migration verification.
+
+Only after those pass may the project be called complete.
+
+=====================================================================
+FINAL COMMAND
+=====================================================================
+
+Build the smallest architecture that can be extremely reliable.
+
+Build the smallest interface that exposes every required capability clearly.
+
+Use BoardOps-Fresh for the structural UX reference.
+
+Use liquid_polish for the material/motion/theme reference.
+
+Use modern production architecture for everything underneath.
+
+Do not copy their weaknesses.
+
+Do not add unnecessary complexity.
+
+Make the database extremely difficult to corrupt.
+
+Make financial history immutable.
+
+Make backend business logic deterministic.
+
+Make the frontend exceptionally polished.
+
+Make mobile the first-class experience.
+
+Make tablet genuinely adaptive.
+
+Make desktop genuinely adaptive.
+
+Never hide functionality because the viewport becomes smaller.
+
+Use real Liquid Glass with real backdrop blur.
+
+Keep the glass dense enough for perfect readability.
+
+Animate every meaningful interaction.
+
+Keep the interface calm and uncluttered.
+
+The goal is not to make the application look expensive by adding more.
+
+The goal is to make it look expensive because absolutely every decision
+has been refined.

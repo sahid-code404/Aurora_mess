@@ -1,0 +1,809 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Admin Meal Configuration — meal definitions with versioned edits.
+     5→ * GET /api/v1/admin/meal-definitions · GET/PUT /:id · POST (create) ·
+     6→ * POST /:id/archive · POST /:id/request-deletion
+     7→ * Create/Edit = one 6-step wizard dialog; PUT creates a new version.
+     8→ */
+     9→
+    10→import { useState } from "react";
+    11→import { AnimatePresence, motion } from "framer-motion";
+    12→import {
+    13→  Archive,
+    14→  Check,
+    15→  ChevronLeft,
+    16→  ChevronRight,
+    17→  Clock,
+    18→  Eye,
+    19→  EyeOff,
+    20→  History,
+    21→  Plus,
+    22→  Settings2,
+    23→  Trash2,
+    24→  Utensils,
+    25→} from "lucide-react";
+    26→import { toast } from "sonner";
+    27→import PageHeader from "@/components/glass/PageHeader";
+    28→import GlassCard from "@/components/glass/GlassCard";
+    29→import StatusBadge from "@/components/glass/StatusBadge";
+    30→import Money from "@/components/glass/Money";
+    31→import EmptyState from "@/components/glass/EmptyState";
+    32→import ErrorState from "@/components/glass/ErrorState";
+    33→import { KpiGridSkeleton, ListSkeleton } from "@/components/glass/LoadingSkeleton";
+    34→import ConfirmDialog from "@/components/glass/ConfirmDialog";
+    35→import SegmentedControl from "@/components/glass/SegmentedControl";
+    36→import GlassToggle from "@/components/glass/GlassToggle";
+    37→import { GlassButton } from "@/components/glass/GlassButton";
+    38→import { useApiQuery, postJson } from "@/hooks/use-api-query";
+    39→import { useSession } from "@/hooks/use-session";
+    40→import { api } from "@/lib/api";
+    41→import { ApiClientError } from "@/lib/api";
+    42→import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+    43→import { cn } from "@/lib/utils";
+    44→import { useApiMetaQuery, errMessage, useInvalidate, metaNum } from "./_shared/api";
+    45→import {
+    46→  ColorTokenPicker,
+    47→  IconPicker,
+    48→  MoneyField,
+    49→  SelectField,
+    50→  TextAreaField,
+    51→  TextField,
+    52→  WeekdayPicker,
+    53→  moneyProblem,
+    54→  mealIcon,
+    55→} from "./_shared/fields";
+    56→import { Chip, KpiGrid, KeyValue, OverflowMenu, ViewButton } from "./_shared/chrome";
+    57→import { cutoffPlainWords, fmtDate, fmtDateTime, scheduleLabel } from "./_shared/format";
+    58→import type { MealDefinitionRow } from "./_shared/types";
+    59→
+    60→const DEFS_PATH = "/api/v1/admin/meal-definitions";
+    61→
+    62→/* ------------------------------------------------------------ wizard state */
+    63→
+    64→interface DraftDef {
+    65→  name: string;
+    66→  description: string;
+    67→  icon: string;
+    68→  colorToken: string;
+    69→  mealType: string;
+    70→  scheduleStrategy: "DAILY" | "WEEKDAYS" | "ONE_TIME";
+    71→  weekdays: number[];
+    72→  specificDate: string;
+    73→  serviceStartLocal: string;
+    74→  serviceEndLocal: string;
+    75→  cutoffStrategy: "SAME_DAY" | "PREVIOUS_DAY" | "CUSTOM_OFFSET";
+    76→  cutoffOffsetDays: string;
+    77→  cutoffLocalTime: string;
+    78→  pricingStrategy: "FORMULA" | "FIXED";
+    79→  fixedPriceMinor: string;
+    80→  defaultState: "ON" | "OFF";
+    81→  defaultVisible: boolean;
+    82→  internalNotes: string;
+    83→}
+    84→
+    85→function emptyDraft(): DraftDef {
+    86→  return {
+    87→    name: "",
+    88→    description: "",
+    89→    icon: "utensils",
+    90→    colorToken: "teal",
+    91→    mealType: "REGULAR",
+    92→    scheduleStrategy: "DAILY",
+    93→    weekdays: [1, 2, 3, 4, 5],
+    94→    specificDate: "",
+    95→    serviceStartLocal: "12:30",
+    96→    serviceEndLocal: "14:00",
+    97→    cutoffStrategy: "SAME_DAY",
+    98→    cutoffOffsetDays: "0",
+    99→    cutoffLocalTime: "09:00",
+   100→    pricingStrategy: "FORMULA",
+   101→    fixedPriceMinor: "",
+   102→    defaultState: "ON",
+   103→    defaultVisible: true,
+   104→    internalNotes: "",
+   105→  };
+   106→}
+   107→
+   108→function draftFromDef(def: MealDefinitionRow): DraftDef {
+   109→  return {
+   110→    name: def.name,
+   111→    description: def.description ?? "",
+   112→    icon: def.icon ?? "utensils",
+   113→    colorToken: def.colorToken ?? "teal",
+   114→    mealType: def.mealType,
+   115→    scheduleStrategy: (def.scheduleStrategy as DraftDef["scheduleStrategy"]) ?? "DAILY",
+   116→    weekdays: (def.weekdaysCsv ?? "").split(",").map((s) => Number(s.trim())).filter((n) => n >= 1 && n <= 7),
+   117→    specificDate: def.specificDate ?? "",
+   118→    serviceStartLocal: def.serviceStartLocal,
+   119→    serviceEndLocal: def.serviceEndLocal,
+   120→    cutoffStrategy: (def.cutoffStrategy as DraftDef["cutoffStrategy"]) ?? "SAME_DAY",
+   121→    cutoffOffsetDays: String(def.cutoffOffsetDays ?? 0),
+   122→    cutoffLocalTime: def.cutoffLocalTime,
+   123→    pricingStrategy: (def.pricingStrategy as DraftDef["pricingStrategy"]) ?? "FORMULA",
+   124→    fixedPriceMinor: def.fixedPriceMinor != null ? (def.fixedPriceMinor / 100).toFixed(2) : "",
+   125→    defaultState: def.defaultState === "OFF" ? "OFF" : "ON",
+   126→    defaultVisible: def.defaultVisible,
+   127→    internalNotes: def.internalNotes ?? "",
+   128→  };
+   129→}
+   130→
+   131→const STEPS = ["Basics", "Schedule", "Cutoff", "Pricing", "Defaults", "Review"];
+   132→const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+   133→
+   134→function stepProblem(draft: DraftDef, step: number): string | null {
+   135→  switch (step) {
+   136→    case 0:
+   137→      if (draft.name.trim().length < 2) return "Give the meal a name (at least 2 characters).";
+   138→      return null;
+   139→    case 1: {
+   140→      if (!HHMM.test(draft.serviceStartLocal) || !HHMM.test(draft.serviceEndLocal))
+   141→        return "Set the service window as HH:MM.";
+   142→      if (draft.serviceStartLocal >= draft.serviceEndLocal) return "Service end must be after service start.";
+   143→      if (draft.scheduleStrategy === "WEEKDAYS" && draft.weekdays.length === 0) return "Pick at least one weekday.";
+   144→      if (draft.scheduleStrategy === "ONE_TIME" && !draft.specificDate) return "Pick the one-time date.";
+   145→      return null;
+   146→    }
+   147→    case 2:
+   148→      if (!HHMM.test(draft.cutoffLocalTime)) return "Set the cutoff time as HH:MM.";
+   149→      if (draft.cutoffStrategy === "CUSTOM_OFFSET" && !/^\d{1,2}$/.test(draft.cutoffOffsetDays.trim()))
+   150→        return "Enter the offset in days (0–30).";
+   151→      return null;
+   152→    case 3:
+   153→      if (draft.pricingStrategy === "FIXED" && moneyProblem(draft.fixedPriceMinor)) return "Enter a fixed price like 55.00.";
+   154→      return null;
+   155→    default:
+   156→      return null;
+   157→  }
+   158→}
+   159→
+   160→function draftToPayload(draft: DraftDef): Record<string, unknown> {
+   161→  const payload: Record<string, unknown> = {
+   162→    name: draft.name.trim(),
+   163→    description: draft.description.trim() || undefined,
+   164→    icon: draft.icon,
+   165→    colorToken: draft.colorToken,
+   166→    mealType: draft.mealType,
+   167→    defaultState: draft.defaultState,
+   168→    defaultVisible: draft.defaultVisible,
+   169→    pricingStrategy: draft.pricingStrategy,
+   170→    scheduleStrategy: draft.scheduleStrategy,
+   171→    serviceStartLocal: draft.serviceStartLocal,
+   172→    serviceEndLocal: draft.serviceEndLocal,
+   173→    cutoffStrategy: draft.cutoffStrategy,
+   174→    cutoffLocalTime: draft.cutoffLocalTime,
+   175→    internalNotes: draft.internalNotes.trim() || undefined,
+   176→  };
+   177→  if (draft.scheduleStrategy === "WEEKDAYS") {
+   178→    payload.weekdaysCsv = [...draft.weekdays].sort((a, b) => a - b).join(",");
+   179→  }
+   180→  if (draft.scheduleStrategy === "ONE_TIME") payload.specificDate = draft.specificDate;
+   181→  if (draft.cutoffStrategy === "CUSTOM_OFFSET") payload.cutoffOffsetDays = Number(draft.cutoffOffsetDays);
+   182→  if (draft.pricingStrategy === "FIXED") payload.fixedPriceMinor = draft.fixedPriceMinor.trim();
+   183→  return payload;
+   184→}
+   185→
+   186→/* ----------------------------------------------------------------- wizard */
+   187→
+   188→function DefinitionWizard({
+   189→  open,
+   190→  onOpenChange,
+   191→  editing,
+   192→  onSaved,
+   193→}: {
+   194→  open: boolean;
+   195→  onOpenChange: (open: boolean) => void;
+   196→  editing: MealDefinitionRow | null;
+   197→  onSaved: () => void;
+   198→}) {
+   199→  const [draft, setDraft] = useState<DraftDef>(() => (editing ? draftFromDef(editing) : emptyDraft()));
+   200→  const [step, setStep] = useState(0);
+   201→  const [saving, setSaving] = useState(false);
+   202→
+   203→  const problem = stepProblem(draft, step);
+   204→
+   205→  async function save() {
+   206→    setSaving(true);
+   207→    try {
+   208→      const payload = draftToPayload(draft);
+   209→      if (editing) {
+   210→        // PUT creates a NEW immutable version (merged + validated server-side).
+   211→        await api(`${DEFS_PATH}/${editing.id}`, { method: "PUT", json: payload });
+   212→      } else {
+   213→        await postJson(DEFS_PATH, payload);
+   214→      }
+   215→      toast.success(editing ? "Meal updated — new version saved" : "Meal created", {
+   216→        description: editing
+   217→          ? `${draft.name.trim()} · version snapshot recorded. Already-materialized services keep their old version.`
+   218→          : `${draft.name.trim()} · instances generate from the next service date.`,
+   219→      });
+   220→      onSaved();
+   221→      onOpenChange(false);
+   222→    } catch (err) {
+   223→      toast.error(errMessage(err));
+   224→    } finally {
+   225→      setSaving(false);
+   226→    }
+   227→  }
+   228→
+   229→  return (
+   230→    <DialogShell2
+   231→      open={open}
+   232→      onOpenChange={(next) => {
+   233→        if (!next) {
+   234→          setStep(0);
+   235→          setDraft(editing ? draftFromDef(editing) : emptyDraft());
+   236→        }
+   237→        onOpenChange(next);
+   238→      }}
+   239→      title={editing ? `Edit ${editing.name}` : "New meal"}
+   240→      description={`Step ${step + 1} of 6 — ${STEPS[step]}`}
+   241→      wide
+   242→      footer={
+   243→        <>
+   244→          <GlassButton variant="ghost" icon={<ChevronLeft />} disabled={step === 0 || saving} onClick={() => setStep((s) => Math.max(0, s - 1))}>
+   245→            Back
+   246→          </GlassButton>
+   247→          {step < 5 ? (
+   248→            <GlassButton disabled={problem != null} onClick={() => setStep((s) => Math.min(5, s + 1))}>
+   249→              {problem ? "Fix to continue" : "Continue"}
+   250→              <ChevronRight className="size-4" aria-hidden />
+   251→            </GlassButton>
+   252→          ) : (
+   253→            <GlassButton variant="primary" icon={<Check />} loading={saving} onClick={() => void save()}>
+   254→              {editing ? "Save new version" : "Create meal"}
+   255→            </GlassButton>
+   256→          )}
+   257→        </>
+   258→      }
+   259→    >
+   260→      {/* progress dots */}
+   261→      <div className="mb-5 flex items-center gap-1.5" aria-hidden>
+   262→        {STEPS.map((s, i) => (
+   263→          <span
+   264→            key={s}
+   265→            className={`h-1.5 flex-1 rounded-full transition-colors ${i <= step ? "bg-primary" : "bg-foreground/10 dark:bg-white/10"}`}
+   266→          />
+   267→        ))}
+   268→      </div>
+   269→
+   270→      <AnimatePresence mode="wait" initial={false}>
+   271→        <motion.div
+   272→          key={step}
+   273→          initial={{ opacity: 0, x: 12 }}
+   274→          animate={{ opacity: 1, x: 0 }}
+   275→          exit={{ opacity: 0, x: -12 }}
+   276→          transition={{ duration: 0.18, ease: "easeOut" }}
+   277→          className="space-y-4"
+   278→        >
+   279→          {/* 1 — basics */}
+   280→          {step === 0 && (
+   281→            <>
+   282→              <TextField label="Name" value={draft.name} onChange={(v) => setDraft({ ...draft, name: v })} placeholder="e.g. Breakfast" maxLength={60} error={draft.name.trim().length > 0 && draft.name.trim().length < 2 ? "Name needs at least 2 characters." : undefined} />
+   283→              <TextAreaField label="Description (optional)" value={draft.description} onChange={(v) => setDraft({ ...draft, description: v })} rows={2} maxLength={500} placeholder="What this meal includes…" />
+   284→              <div>
+   285→                <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Icon</p>
+   286→                <IconPicker value={draft.icon} onChange={(icon) => setDraft({ ...draft, icon })} />
+   287→              </div>
+   288→              <div>
+   289→                <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Accent colour</p>
+   290→                <ColorTokenPicker value={draft.colorToken} onChange={(colorToken) => setDraft({ ...draft, colorToken })} />
+   291→              </div>
+   292→              <SelectField
+   293→                label="Meal type"
+   294→                value={draft.mealType}
+   295→                onChange={(mealType) => setDraft({ ...draft, mealType })}
+   296→                options={[
+   297→                  { value: "REGULAR", label: "Regular — daily service" },
+   298→                  { value: "SPECIAL", label: "Special" },
+   299→                  { value: "GUEST_ONLY", label: "Guest only" },
+   300→                  { value: "FESTIVAL", label: "Festival" },
+   301→                  { value: "CUSTOM", label: "Custom" },
+   302→                ]}
+   303→              />
+   304→            </>
+   305→          )}
+   306→
+   307→          {/* 2 — schedule */}
+   308→          {step === 1 && (
+   309→            <>
+   310→              <div>
+   311→                <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Repeats</p>
+   312→                <SegmentedControl
+   313→                  aria-label="Schedule strategy"
+   314→                  options={[
+   315→                    { value: "DAILY", label: "Daily" },
+   316→                    { value: "WEEKDAYS", label: "Weekdays" },
+   317→                    { value: "ONE_TIME", label: "One-time" },
+   318→                  ]}
+   319→                  value={draft.scheduleStrategy}
+   320→                  onChange={(v) => setDraft({ ...draft, scheduleStrategy: v as DraftDef["scheduleStrategy"] })}
+   321→                />
+   322→              </div>
+   323→              {draft.scheduleStrategy === "WEEKDAYS" && (
+   324→                <div>
+   325→                  <p className="mb-1.5 text-xs font-semibold text-muted-foreground">On days</p>
+   326→                  <WeekdayPicker
+   327→                    selected={draft.weekdays}
+   328→                    onToggle={(day) =>
+   329→                      setDraft({
+   330→                        ...draft,
+   331→                        weekdays: draft.weekdays.includes(day)
+   332→                          ? draft.weekdays.filter((d) => d !== day)
+   333→                          : [...draft.weekdays, day],
+   334→                      })
+   335→                    }
+   336→                  />
+   337→                </div>
+   338→              )}
+   339→              {draft.scheduleStrategy === "ONE_TIME" && (
+   340→                <TextField label="Service date" type="date" value={draft.specificDate} onChange={(specificDate) => setDraft({ ...draft, specificDate })} />
+   341→              )}
+   342→              <div className="grid grid-cols-2 gap-2.5">
+   343→                <TextField label="Service starts" type="time" value={draft.serviceStartLocal} onChange={(serviceStartLocal) => setDraft({ ...draft, serviceStartLocal })} />
+   344→                <TextField label="Service ends" type="time" value={draft.serviceEndLocal} onChange={(serviceEndLocal) => setDraft({ ...draft, serviceEndLocal })} />
+   345→              </div>
+   346→            </>
+   347→          )}
+   348→
+   349→          {/* 3 — cutoff */}
+   350→          {step === 2 && (
+   351→            <>
+   352→              <SelectField
+   353→                label="Cutoff strategy"
+   354→                value={draft.cutoffStrategy}
+   355→                onChange={(cutoffStrategy) => setDraft({ ...draft, cutoffStrategy: cutoffStrategy as DraftDef["cutoffStrategy"] })}
+   356→                options={[
+   357→                  { value: "SAME_DAY", label: "Same day" },
+   358→                  { value: "PREVIOUS_DAY", label: "Previous day" },
+   359→                  { value: "CUSTOM_OFFSET", label: "Custom offset" },
+   360→                ]}
+   361→              />
+   362→              {draft.cutoffStrategy === "CUSTOM_OFFSET" && (
+   363→                <TextField label="Offset (days before service)" value={draft.cutoffOffsetDays} inputMode="numeric" onChange={(cutoffOffsetDays) => setDraft({ ...draft, cutoffOffsetDays })} placeholder="0" />
+   364→              )}
+   365→              <TextField label="Cutoff time" type="time" value={draft.cutoffLocalTime} onChange={(cutoffLocalTime) => setDraft({ ...draft, cutoffLocalTime })} />
+   366→              <div className="glass-inset flex items-start gap-2.5 rounded-md p-3.5">
+   367→                <Clock className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
+   368→                <p className="text-[12px] leading-relaxed text-muted-foreground">
+   369→                  {cutoffPlainWords(draft.cutoffStrategy, Number(draft.cutoffOffsetDays) || 0, draft.cutoffLocalTime || "—")}
+   370→                </p>
+   371→              </div>
+   372→            </>
+   373→          )}
+   374→
+   375→          {/* 4 — pricing */}
+   376→          {step === 3 && (
+   377→            <>
+   378→              <div>
+   379→                <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Pricing</p>
+   380→                <SegmentedControl
+   381→                  aria-label="Pricing strategy"
+   382→                  options={[
+   383→                    { value: "FORMULA", label: "From formula" },
+   384→                    { value: "FIXED", label: "Fixed price" },
+   385→                  ]}
+   386→                  value={draft.pricingStrategy}
+   387→                  onChange={(v) => setDraft({ ...draft, pricingStrategy: v as DraftDef["pricingStrategy"] })}
+   388→                />
+   389→              </div>
+   390→              {draft.pricingStrategy === "FIXED" ? (
+   391→                <MoneyField label="Price per meal" value={draft.fixedPriceMinor} onChange={(fixedPriceMinor) => setDraft({ ...draft, fixedPriceMinor })} placeholder="55.00" error={moneyProblem(draft.fixedPriceMinor) ?? undefined} />
+   392→              ) : (
+   393→                <div className="glass-inset rounded-md p-3.5 text-[12px] leading-relaxed text-muted-foreground">
+   394→                  The charge per meal is computed each billing period by the active formula (see the Formula page). Every
+   395→                  resident pays the same computed amount for this meal.
+   396→                </div>
+   397→              )}
+   398→            </>
+   399→          )}
+   400→
+   401→          {/* 5 — defaults */}
+   402→          {step === 4 && (
+   403→            <>
+   404→              <div>
+   405→                <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Default state for new residents</p>
+   406→                <SegmentedControl
+   407→                  aria-label="Default state"
+   408→                  options={[
+   409→                    { value: "ON", label: "Opted in" },
+   410→                    { value: "OFF", label: "Opted out" },
+   411→                  ]}
+   412→                  value={draft.defaultState}
+   413→                  onChange={(v) => setDraft({ ...draft, defaultState: v as DraftDef["defaultState"] })}
+   414→                />
+   415→              </div>
+   416→              <div className="glass-inset flex items-center justify-between gap-3 rounded-md px-3.5 py-3">
+   417→                <div className="flex min-w-0 items-center gap-2.5">
+   418→                  {draft.defaultVisible ? <Eye className="size-4 shrink-0 text-primary" aria-hidden /> : <EyeOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
+   419→                  <div className="min-w-0">
+   420→                    <p className="text-sm font-medium">Visible to residents</p>
+   421→                    <p className="text-[11px] text-muted-foreground">Hidden meals stay admin-only.</p>
+   422→                  </div>
+   423→                </div>
+   424→                <GlassToggle
+   425→                  checked={draft.defaultVisible}
+   426→                  onChange={(next) => setDraft({ ...draft, defaultVisible: next })}
+   427→                  label="Visible to residents"
+   428→                />
+   429→              </div>
+   430→              <TextAreaField label="Internal notes (optional)" value={draft.internalNotes} onChange={(internalNotes) => setDraft({ ...draft, internalNotes })} rows={2} maxLength={1000} placeholder="Kitchen notes, not shown to residents…" />
+   431→            </>
+   432→          )}
+   433→
+   434→          {/* 6 — review */}
+   435→          {step === 5 && (
+   436→            <div className="space-y-3">
+   437→              <div className="glass-inset rounded-md p-4">
+   438→                <div className="mb-2 flex items-center gap-3">
+   439→                  <span className="glass-inset flex size-10 items-center justify-center rounded-md text-primary [&_svg]:size-[18px]">
+   440→                    {(() => {
+   441→                      const Icon = mealIcon(draft.icon);
+   442→                      return <Icon aria-hidden />;
+   443→                    })()}
+   444→                  </span>
+   445→                  <div>
+   446→                    <p className="text-sm font-semibold">{draft.name.trim() || "—"}</p>
+   447→                    <p className="text-[11px] text-muted-foreground">{draft.mealType}</p>
+   448→                  </div>
+   449→                </div>
+   450→                <KeyValue label="Schedule" value={scheduleLabel(draft.scheduleStrategy, draft.weekdays.join(","), draft.specificDate)} />
+   451→                <KeyValue label="Service window" value={`${draft.serviceStartLocal} – ${draft.serviceEndLocal}`} />
+   452→                <KeyValue label="Cutoff" value={cutoffPlainWords(draft.cutoffStrategy, Number(draft.cutoffOffsetDays) || 0, draft.cutoffLocalTime || "—")} />
+   453→                <KeyValue label="Pricing" value={draft.pricingStrategy === "FIXED" ? "Fixed price" : "Computed from formula"} />
+   454→                {draft.pricingStrategy === "FIXED" && (
+   455→                  <KeyValue label="Fixed price" value={draft.fixedPriceMinor ? `₹${draft.fixedPriceMinor}` : "—"} />
+   456→                )}
+   457→                <KeyValue label="Default state" value={draft.defaultState === "ON" ? "Opted in" : "Opted out"} />
+   458→                <KeyValue label="Visible" value={draft.defaultVisible ? "Yes" : "Hidden"} />
+   459→              </div>
+   460→              <p className="text-[12px] leading-relaxed text-muted-foreground">
+   461→                {editing
+   462→                  ? "Saving creates a new immutable version. Services already generated keep their current version."
+   463→                  : "New instances generate from the next matching service date."}
+   464→              </p>
+   465→            </div>
+   466→          )}
+   467→
+   468→          {problem && step < 5 && (
+   469→            <p className="text-[12px] font-medium text-warning">{problem}</p>
+   470→          )}
+   471→        </motion.div>
+   472→      </AnimatePresence>
+   473→    </DialogShell2>
+   474→  );
+   475→}
+   476→
+   477→/* ------------------------------------------------------------------- view */
+   478→
+   479→export default function AdminMealConfiguration() {
+   480→  const [wizardOpen, setWizardOpen] = useState(false);
+   481→  const [editingDef, setEditingDef] = useState<MealDefinitionRow | null>(null);
+   482→  const [detailId, setDetailId] = useState<string | null>(null);
+   483→  const [archiveTarget, setArchiveTarget] = useState<MealDefinitionRow | null>(null);
+   484→  const [deleteTarget, setDeleteTarget] = useState<MealDefinitionRow | null>(null);
+   485→  const [acting, setActing] = useState(false);
+   486→  const invalidate = useInvalidate();
+   487→  const { institution } = useSession();
+   488→  const tz = institution?.timezone ?? "Asia/Kolkata";
+   489→
+   490→  const { data: envelope, isLoading, error, refetch } = useApiMetaQuery<MealDefinitionRow[]>(DEFS_PATH);
+   491→  const defs = envelope?.data ?? [];
+   492→  const meta = envelope?.meta ?? {};
+   493→
+   494→  const detailQuery = useApiQuery<MealDefinitionRow>(detailId ? `${DEFS_PATH}/${detailId}` : null);
+   495→  const detail = detailQuery.data;
+   496→
+   497→  async function archive(target: MealDefinitionRow) {
+   498→    setActing(true);
+   499→    try {
+   500→      await postJson(`${DEFS_PATH}/${target.id}/archive`, {});
+   501→      invalidate([DEFS_PATH]);
+   502→      toast.success("Meal archived", {
+   503→        description: `${target.name} stops generating future services. History stays intact.`,
+   504→      });
+   505→      setArchiveTarget(null);
+   506→    } catch (err) {
+   507→      toast.error(errMessage(err));
+   508→    } finally {
+   509→      setActing(false);
+   510→    }
+   511→  }
+   512→
+   513→  async function requestDeletion(target: MealDefinitionRow, reason: string | undefined) {
+   514→    setActing(true);
+   515→    try {
+   516→      await postJson(`${DEFS_PATH}/${target.id}/request-deletion`, { reason });
+   517→      invalidate([DEFS_PATH]);
+   518→      toast.success("Deletion queued", {
+   519→        description: `${target.name} will be removed after the 30-day safety window.`,
+   520→      });
+   521→      setDeleteTarget(null);
+   522→    } catch (err) {
+   523→      toast.error(errMessage(err));
+   524→    } finally {
+   525→      setActing(false);
+   526→    }
+   527→  }
+   528→
+   529→  if (isLoading) {
+   530→    return (
+   531→      <div className="space-y-6">
+   532→        <PageHeader title="Meal Configuration" subtitle="Define services, cutoffs and defaults — every edit is versioned." />
+   533→        <KpiGridSkeleton count={3} />
+   534→        <ListSkeleton rows={3} />
+   535→      </div>
+   536→    );
+   537→  }
+   538→
+   539→  if (error || !envelope) {
+   540→    return (
+   541→      <div className="space-y-6">
+   542→        <PageHeader title="Meal Configuration" subtitle="Define services, cutoffs and defaults — every edit is versioned." />
+   543→        <ErrorState
+   544→          code={(error as ApiClientError | undefined)?.code}
+   545→          message={(error as ApiClientError | undefined)?.message}
+   546→          onRetry={() => void refetch()}
+   547→        />
+   548→      </div>
+   549→    );
+   550→  }
+   551→
+   552→  return (
+   553→    <div className="space-y-5">
+   554→      <PageHeader
+   555→        title="Meal Configuration"
+   556→        subtitle="Define services, cutoffs and defaults — every edit is versioned."
+   557→        actions={
+   558→          <GlassButton
+   559→            variant="primary"
+   560→            icon={<Plus />}
+   561→            onClick={() => {
+   562→              setEditingDef(null);
+   563→              setWizardOpen(true);
+   564→            }}
+   565→          >
+   566→            New Meal
+   567→          </GlassButton>
+   568→        }
+   569→      />
+   570→
+   571→      <KpiGrid
+   572→        kpis={[
+   573→          { label: "Configured", value: String(metaNum(meta, "configured") ?? defs.length), icon: <Settings2 />, sub: "Total definitions" },
+   574→          { label: "Active", value: String(metaNum(meta, "active") ?? "—"), icon: <Utensils />, sub: "Generating services" },
+   575→          { label: "Inactive", value: String(metaNum(meta, "inactive") ?? "—"), icon: <Archive />, sub: "Archived" },
+   576→        ]}
+   577→      />
+   578→
+   579→      {defs.length === 0 ? (
+   580→        <EmptyState
+   581→          icon={Utensils}
+   582→          title="No meals configured"
+   583→          description="Create your first meal definition — residents see and opt into meals from here."
+   584→          action={
+   585→            <GlassButton variant="primary" icon={<Plus />} onClick={() => setWizardOpen(true)}>
+   586→              New Meal
+   587→            </GlassButton>
+   588→          }
+   589→        />
+   590→      ) : (
+   591→        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
+   592→          <AnimatePresence initial={false}>
+   593→            {defs.map((def) => {
+   594→              const Icon = mealIcon(def.icon);
+   595→              const inactive = def.archivedAt != null;
+   596→              return (
+   597→                <motion.div
+   598→                  key={def.id}
+   599→                  layout
+   600→                  initial={{ opacity: 0, y: 8 }}
+   601→                  animate={{ opacity: 1, y: 0 }}
+   602→                  exit={{ opacity: 0, y: -4 }}
+   603→                  transition={{ duration: 0.22, ease: "easeOut" }}
+   604→                >
+   605→                  <GlassCard className="p-4 sm:p-5">
+   606→                    <div className="flex items-start justify-between gap-3">
+   607→                      <div className="flex min-w-0 items-center gap-3">
+   608→                        <span className="glass-inset flex size-10 shrink-0 items-center justify-center rounded-md text-primary [&_svg]:size-[18px]">
+   609→                          <Icon aria-hidden />
+   610→                        </span>
+   611→                        <div className="min-w-0">
+   612→                          <div className="flex flex-wrap items-center gap-1.5">
+   613→                            <p className="truncate text-sm font-semibold">{def.name}</p>
+   614→                            {!def.defaultVisible && <Chip tone="neutral">Hidden</Chip>}
+   615→                          </div>
+   616→                          <p className="truncate text-[11px] text-muted-foreground">
+   617→                            {def.mealType.toLowerCase()} · v{def.latestVersion?.version ?? 1}
+   618→                          </p>
+   619→                        </div>
+   620→                      </div>
+   621→                      <StatusBadge status={inactive ? "INACTIVE" : "ACTIVE"} />
+   622→                    </div>
+   623→
+   624→                    {def.description && <p className="mt-2.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">{def.description}</p>}
+   625→
+   626→                    <div className="mt-3 space-y-1">
+   627→                      <KeyValue label="Schedule" value={scheduleLabel(def.scheduleStrategy, def.weekdaysCsv, def.specificDate)} />
+   628→                      <KeyValue label="Window" value={`${def.serviceStartLocal} – ${def.serviceEndLocal}`} />
+   629→                      <KeyValue label="Cutoff" value={`${def.cutoffStrategy === "SAME_DAY" ? "same day" : def.cutoffStrategy === "PREVIOUS_DAY" ? "previous day" : `−${def.cutoffOffsetDays ?? 0} d`} · ${def.cutoffLocalTime}`} />
+   630→                      <KeyValue
+   631→                        label="Price"
+   632→                        value={def.pricingStrategy === "FIXED" ? <Money minor={def.fixedPriceMinor ?? 0} /> : "From formula"}
+   633→                      />
+   634→                      <KeyValue label="Default" value={`${def.defaultState === "ON" ? "Opted in" : "Opted out"}${def.defaultVisible ? "" : " · hidden"}`} />
+   635→                    </div>
+   636→
+   637→                    {def.deleteRequestedAt && (
+   638→                      <p className="mt-2.5 rounded-md bg-danger/10 px-3 py-2 text-[11px] font-medium text-danger">
+   639→                        Deletion queued — {fmtDate(def.deleteRequestedAt)}
+   640→                      </p>
+   641→                    )}
+   642→
+   643→                    <div className="mt-3.5 flex items-center justify-end gap-2">
+   644→                      <ViewButton
+   645→                        label="View / Edit"
+   646→                        onClick={() => {
+   647→                          setEditingDef(def);
+   648→                          setWizardOpen(true);
+   649→                        }}
+   650→                      />
+   651→                      <OverflowMenu
+   652→                        label={`Actions for ${def.name}`}
+   653→                        actions={[
+   654→                          { key: "history", label: "Version history", icon: <History />, onSelect: () => setDetailId(def.id) },
+   655→                          {
+   656→                            key: "edit",
+   657→                            label: "Edit (new version)",
+   658→                            icon: <Settings2 />,
+   659→                            onSelect: () => {
+   660→                              setEditingDef(def);
+   661→                              setWizardOpen(true);
+   662→                            },
+   663→                            separatorBefore: true,
+   664→                          },
+   665→                          ...(inactive
+   666→                            ? []
+   667→                            : [{ key: "archive", label: "Archive", icon: <Archive />, onSelect: () => setArchiveTarget(def), separatorBefore: true }]),
+   668→                          ...(def.deleteRequestedAt
+   669→                            ? []
+   670→                            : [{ key: "delete", label: "Request deletion…", icon: <Trash2 />, onSelect: () => setDeleteTarget(def), destructive: true }]),
+   671→                        ]}
+   672→                      />
+   673→                    </div>
+   674→                  </GlassCard>
+   675→                </motion.div>
+   676→              );
+   677→            })}
+   678→          </AnimatePresence>
+   679→        </div>
+   680→      )}
+   681→
+   682→      {/* wizard */}
+   683→      {wizardOpen && (
+   684→        <DefinitionWizard
+   685→          open
+   686→          onOpenChange={(open) => {
+   687→            if (!open) {
+   688→              setWizardOpen(false);
+   689→              setEditingDef(null);
+   690→            }
+   691→          }}
+   692→          editing={editingDef}
+   693→          onSaved={() => invalidate([DEFS_PATH, detailId ? `${DEFS_PATH}/${detailId}` : DEFS_PATH])}
+   694→        />
+   695→      )}
+   696→
+   697→      {/* version history dialog */}
+   698→      {detailId && (
+   699→        <DialogShell2
+   700→          open
+   701→          onOpenChange={(open) => !open && setDetailId(null)}
+   702→          title={detail ? `${detail.name} — versions` : "Version history"}
+   703→          description="Each edit snapshots the full configuration. Materialized services keep the version they were generated with."
+   704→          wide
+   705→        >
+   706→          {detailQuery.isLoading ? (
+   707→            <ListSkeleton rows={3} />
+   708→          ) : !detail ? (
+   709→            <ErrorState code={detailQuery.error ? (detailQuery.error as ApiClientError).code : undefined} message="This meal definition could not be found." onRetry={undefined} />
+   710→          ) : (
+   711→            <div className="space-y-2">
+   712→              {(detail.versions ?? []).map((v) => (
+   713→                <div key={v.id} className="glass-inset rounded-md p-3.5">
+   714→                  <div className="flex items-center justify-between gap-2">
+   715→                    <p className="text-sm font-semibold">Version {v.version}</p>
+   716→                    <span className="kpi-num text-[11px] text-muted-foreground">{fmtDateTime(v.createdAt, tz)}</span>
+   717→                  </div>
+   718→                  {v.configSnapshot && (
+   719→                    <div className="mt-1.5 grid grid-cols-2 gap-x-4 text-[12px] text-muted-foreground">
+   720→                      <span>Name: {String((v.configSnapshot as Record<string, unknown>).name ?? "—")}</span>
+   721→                      <span>Window: {String((v.configSnapshot as Record<string, unknown>).serviceStartLocal ?? "—")} – {String((v.configSnapshot as Record<string, unknown>).serviceEndLocal ?? "—")}</span>
+   722→                      <span>Cutoff: {String((v.configSnapshot as Record<string, unknown>).cutoffLocalTime ?? "—")}</span>
+   723→                      <span>Pricing: {String((v.configSnapshot as Record<string, unknown>).pricingStrategy ?? "—")}</span>
+   724→                    </div>
+   725→                  )}
+   726→                </div>
+   727→              ))}
+   728→              {(detail.versions ?? []).length === 0 && <p className="text-[13px] text-muted-foreground">No versions recorded yet.</p>}
+   729→            </div>
+   730→          )}
+   731→        </DialogShell2>
+   732→      )}
+   733→
+   734→      {/* archive confirm */}
+   735→      {archiveTarget && (
+   736→        <ConfirmDialog
+   737→          open
+   738→          onOpenChange={(open) => !open && setArchiveTarget(null)}
+   739→          title={`Archive ${archiveTarget.name}`}
+   740→          description="Future services stop being generated. Residents' existing meals and all history stay intact. This can be reversed by editing the meal."
+   741→          confirmLabel="Archive meal"
+   742→          tone="destructive"
+   743→          loading={acting}
+   744→          onConfirm={() => void archive(archiveTarget)}
+   745→        />
+   746→      )}
+   747→
+   748→      {/* deletion queue */}
+   749→      {deleteTarget && (
+   750→        <ConfirmDialog
+   751→          open
+   752→          onOpenChange={(open) => !open && setDeleteTarget(null)}
+   753→          title={`Request deletion — ${deleteTarget.name}`}
+   754→          description="This queues the definition for deletion after a 30-day safety window, during which the request can be reviewed in the audit trail. The full version history is preserved."
+   755→          confirmLabel="Queue deletion"
+   756→          tone="destructive"
+   757→          requireReason
+   758→          reasonPlaceholder="Why is this meal being removed? (required)"
+   759→          loading={acting}
+   760→          onConfirm={(reason) => void requestDeletion(deleteTarget, reason)}
+   761→        />
+   762→      )}
+   763→    </div>
+   764→  );
+   765→}
+   766→
+   767→/* ------------------------------------------------------------ dialog shell */
+   768→
+   769→function DialogShell2({
+   770→  open,
+   771→  onOpenChange,
+   772→  title,
+   773→  description,
+   774→  children,
+   775→  footer,
+   776→  wide,
+   777→}: {
+   778→  open: boolean;
+   779→  onOpenChange: (open: boolean) => void;
+   780→  title: string;
+   781→  description?: React.ReactNode;
+   782→  children: React.ReactNode;
+   783→  footer?: React.ReactNode;
+   784→  wide?: boolean;
+   785→}) {
+   786→  return (
+   787→    <Dialog open={open} onOpenChange={onOpenChange}>
+   788→      <DialogContent className={cn("glass-strong rounded-[28px] border-0 p-0", wide ? "sm:max-w-2xl" : "sm:max-w-md")}>
+   789→        <div className="flex max-h-[85vh] flex-col">
+   790→          <div className="px-5 pt-5 sm:px-6 sm:pt-6">
+   791→            <DialogTitle className="text-left text-lg font-semibold tracking-tight">{title}</DialogTitle>
+   792→            {description && (
+   793→              <DialogDescription className="mt-1.5 text-left text-[13px] leading-relaxed text-muted-foreground">
+   794→                {description}
+   795→              </DialogDescription>
+   796→            )}
+   797→          </div>
+   798→          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">{children}</div>
+   799→          {footer && (
+   800→            <div className="safe-b flex flex-wrap items-center justify-end gap-2 border-t border-border/50 px-5 py-4 sm:px-6">
+   801→              {footer}
+   802→            </div>
+   803→          )}
+   804→        </div>
+   805→      </DialogContent>
+   806→    </Dialog>
+   807→  );
+   808→}
+   809→

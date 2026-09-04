@@ -1,0 +1,366 @@
+Task ID: 13-b
+Agent: frontend-styling-expert
+Task: Polish the Money cluster pages (admin/resident payments + admin funds) to the BoardOps-Fresh
+composition (payments-view / funds-view) while keeping the Aurora liquid-glass theme and all domain
+logic byte-for-byte.
+
+Work Log:
+- Read worklog tail (Tasks 10/11-b/12: BoardOps shell, KpiCard tone/glow/onClick, PickerCapsule,
+  grid-kpi, meals gold standard) + the two reference views (payments-view.tsx render section:
+  month capsule, KPI order Total Deposit success / Pending Approvals warning w/ "Awaiting review"/
+  "All clear" / Refund Pending primary, search + status pills w/ counts, PaymentRow anatomy with
+  METHOD_META-tinted tiles, capped lists, empty state; funds-view.tsx: KPIs, search, All/Deficit
+  pills w/ counts, avatar rows with Deposit/Deficit strip).
+- Checked the APIs for month/year params first: /api/v1/payments (status/cursor/limit only),
+  /api/v1/admin/payments (status/q/cursor/limit), /api/v1/admin/funds (no params) → month picker
+  SKIPPED on all three pages per the "not trivial → keep fetch shape" rule; PickerCapsule unused.
+- src/components/app/resident/payments.tsx REWRITE (presentation only):
+  • PageHeader (title/subtitle/Submit Payment action) removed → headerless page; primary action
+    relocated to a BoardOps action bar `flex flex-wrap items-center justify-end gap-2` above the
+    KPIs (same GlassButton primary + Wallet icon + setPayOpen).
+  • KPIs: breakpoint grid → `grid grid-cols-3 gap-3` (meals house pattern) with KpiCard
+    tone+glow: Deposits This Month (BadgeCheck, success), Pending Approval (Hourglass, warning,
+    sub "Awaiting review"/"All clear" from meta.pendingCount), Refund Pending (RotateCcw,
+    primary); index 0/1/2 stagger + loading kept.
+  • NEW client-side search (SearchInput from resident/_shared/ui) over the fetched page
+    (displayNumber/reference/method) + TabRow kept with a PENDING count badge (meta.pendingCount).
+  • Rows: glass-inset rounded-lg rows keep reference anatomy — METHOD_META tile size-10
+    rounded-md tinted UPI=primary/CASH=success/BANK_TRANSFER=warning/OTHER=neutral (local map
+    replacing METHOD_LABELS+METHOD_ICONS), title `displayNumber · method`, Clock+ArrowUpRight
+    meta icons, right-aligned Money + StatusBadge; PENDING note / REJECTED reason / proof line
+    kept; entrance y:6 with Math.min(i*0.04,0.2); list capped `no-scrollbar max-h-[28rem]
+    overflow-y-auto pr-1` (was max-h-[480px]); empty state gains a search-aware variant.
+  • All hooks/queries/dialog props identical (useEnvelopeQuery /api/v1/payments, billing staleTime
+    60s, payableBills memo, SubmitPaymentDialog untouched).
+- src/components/app/admin/payments.tsx REWRITE (presentation only):
+  • PageHeader removed from main + error branches; error branch = bare ErrorState; root
+    space-y-5 → space-y-4.
+  • KpiGrid now passes tone/glow (Wallet success / Clock warning w/ "Awaiting review"/"All clear"
+    / RotateCcw primary) + `className="lg:grid-cols-3"` for exactly 3 KPIs; loading flag kept.
+  • List: 2-col card grid → reference single-column rows inside `no-scrollbar max-h-[28rem]
+    overflow-y-auto pr-1` + space-y-3; entrance y:6 w/ capped stagger.
+  • Row anatomy (reference PaymentRow): method-tinted size-10 rounded-md tile, resident name +
+    StatusBadge + method Chip (frost/success/warning/neutral), "Amount" transaction strip
+    (Money bold), Clock+fmtDateTime / ArrowUpRight+displayNumber / "Ref x" / Paperclip proof
+    meta row, AlertTriangle rejection reason, voided line kept.
+  • PENDING rows gained quick Approve/Reject GlassButtons wired to the EXACT existing flow
+    (setReviewId(p.id) + setAction(kind) → reason-required ConfirmDialog → runAction →
+    postJson approve/reject + same invalidations/toasts); the same stacked-dialog state the
+    in-review-dialog buttons already produce. Review/Details button kept for all rows.
+  • Review dialog, AiProofPanel (proof preview + AI assist), resident funds summary, void flow,
+    ConfirmFreeDialog — untouched (containers already house-style).
+- src/components/app/admin/funds.tsx REWRITE (presentation only):
+  • PageHeader removed from all three branches (loading/error/main); roots space-y-6 →
+    space-y-4; loading branch = KpiGridSkeleton(3) + ListSkeleton.
+  • KpiGrid tone/glow (Wallet success / Banknote primary / TrendingDown warning) +
+    `lg:grid-cols-3`; sub copy identical.
+  • NEW funds-view controls (client-side only, memoised BEFORE the early returns so hook order
+    is stable): SearchField (name/room/email) + FilterChips All/Deficit with live counts.
+  • Resident cards → reference rows: deterministic gradient avatar (gradientForName +
+    initialsOf from lib/gradients, rounded-xl white initials), name + StatusBadge(policyState),
+    DoorOpen room/email line, transaction strip Deposits(success)/Consumed/
+    Available(primary, danger when negative)/Deficit(warning when >0) with uppercase mini
+    labels + bold Money; the existing deficit inset (Amount to Pay, grace, threshold + pending
+    Chips) kept verbatim inside; rows capped `no-scrollbar max-h-[28rem] overflow-y-auto`.
+  • Ledger accounts: icon tile glass-inset rounded-pill → size-10 rounded-md (house row
+    anatomy); "Journals in Audit →" SectionHeading action, divide rows, balances note kept.
+  • Exemptions: gradient avatar added, rest of row + Cancel… ConfirmDialog flow untouched.
+  • cancelExemption mutation, invalidate list, toasts — byte-for-byte identical.
+- resident/_shared/pay-dialog.tsx: inspected, deliberately UNTOUCHED — already fully house-style
+  (SheetDialog glass shell, SegmentedControl, glass-inset bill/method pickers, FileProofInput)
+  and its logic (idempotency key, multipart POST) was just reworked in Task 10; no skinning
+  needed, keeping it risk-free.
+- Verification: `bun run lint` → clean, zero warnings/errors. `bunx tsc --noEmit` → zero errors
+  in all four files (remaining repo errors are pre-existing/parallel-agent files: seed.ts,
+  examples/, skills/, _shared/api.ts, admin/billing.tsx, API routes). dev.log shows ✓ Compiled
+  after each edit, no compile failures; dev server left running, no browser test (orchestrator
+  does E2E). No PageHeader references remain (grep-verified).
+
+Stage Summary:
+- admin/payments.tsx: headerless; KpiGrid 3×tone/glow KPIs (success/warning/primary), search +
+  solid FilterChips, single-column capped list of method-tinted reference rows, pending rows
+  with quick approve/reject reusing the exact reason-required review flow; proof/AI review
+  dialog preserved.
+- resident/payments.tsx: headerless; right-aligned Submit Payment action bar, 3 tone KPIs, new
+  SearchInput + TabRow (pending count), method-tinted rows with capped scroll; submit dialog +
+  all queries untouched.
+- admin/funds.tsx: headerless; 3 tone KPIs, new client-side search + All/Deficit filter chips
+  with counts, gradient-avatar resident rows with transaction strips + kept deficit insets,
+  ledger/exemption sections restyled lightly; exemption-cancel mutation untouched.
+- pay-dialog.tsx: intentionally unchanged (already on-theme; logic sacred).
+
+---
+Task ID: 13-c
+Agent: frontend-styling-expert
+Task: Restyle the billing cluster (admin/billing, admin/expenses, resident/billing) to the
+BoardOps-Fresh composition while keeping the Aurora liquid-glass theme and all domain logic.
+
+Work Log:
+- Read worklog tail (Tasks 9–12: Liquid Glass II mint system, BoardOps shell, sheen removal,
+  gold-standard meals pages) + the BoardOps reference views (billing-view, expenses-view,
+  monthly-closing-view) + our resident/meals.tsx & admin/meals.tsx house patterns
+  (PickerCapsule capsule pill, KpiCard tone/glow, FilterChips, expandable rows, stagger caps).
+- API recon: GET /admin/expenses supports `month=YYYY-MM` AND echoes the effective month in
+  `meta.month` (meta KPIs follow it) → month picker is trivially addable there. GET /bills
+  (resident) and GET /admin/bills have NO month param → picker skipped on both billing pages
+  per the contract's fallback clause (noted in report).
+- src/components/app/admin/expenses.tsx:
+  • Removed PageHeader (headerless page). Root space-y-5 → space-y-4 (error branch too).
+  • NEW shared PickerCapsule month picker (Calendar icon + two-line month/year pill,
+    pill click resets monthParam → server-current month, RotateCcw hint when not current).
+    monthParam is undefined by default (server owns the institution-tz current month);
+    active month label comes from meta.month with a client fallback before first load.
+  • KpiGrid: 3 KPIs now carry tone+glow (Total Expenses primary, Remaining Funds success,
+    Awaiting Review warning) + lg:grid-cols-3; first KPI label is month-aware
+    ("Total Expenses · Sep 2025").
+  • FilterChips (status) kept — solid primary sliding pill; chip counts intentionally
+    skipped (server-side filtering + 25-row pagination make per-status counts not cheaply
+    derivable; no counts in meta).
+  • "Add Expense" (was PageHeader action) → BoardOps action bar
+    `flex flex-wrap items-center justify-end gap-2` right-aligned directly above the list.
+  • Expense rows → reference row anatomy: status-tinted icon tile size-10 rounded-md
+    (PENDING warning/Clock, APPROVED success/CheckCircle2, REJECTED danger/XCircle,
+    VOIDED neutral/Ban, fallback ReceiptText — local EXPENSE_STATUS_TILE map), description
+    as row title + StatusBadge + "via task" Chip, meta line (displayNumber · category ·
+    date · item count), transaction strip (uppercase "Total" + bold Money + recorded
+    timestamp); OverflowMenu moved into the row header (same actions/handlers, was a
+    bottom-right footer row). Entrance stagger initial y:6 + SPRING_SNAPPY with
+    delay Math.min(i*0.04, 0.2), popLayout exits, max-h-[28rem] overflow-y-auto pr-1.
+  • Local helpers: shiftMonthKey / monthLongName / monthShortLabel; removed a dead
+    KpiGridSkeleton import (pre-existing).
+- src/components/app/admin/billing.tsx:
+  • Removed PageHeader + SegmentedControl imports; root space-y-5 → space-y-4.
+  • KpiGrid 3 KPIs with tone/glow: Total Billed (primary), Total Collected (success —
+    collected money), Overdue Bills (danger) + lg:grid-cols-3.
+  • Periods | All Bills tabs → FilterChips with counts (periods.length; bills count once
+    the bills query has data — it's tab-gated). Same tab state machine.
+  • Period cards: CalendarClock primary-tinted icon tile (size-10 rounded-md) + monthLabel
+    + Current chip + StatusBadge + bills/charge meta + billed date; staggered entrance
+    (SPRING_SNAPPY, capped delay), popLayout exit, h-full grid alignment; selection ring,
+    current-period chip and auto-select logic untouched.
+  • ReadinessPanel: 100% of domain kept (checks, summary KeyValues, arithmetic
+    confirmation, generate mutation + invalidations + toasts, result panel); checklist
+    rows now also show a success border when passing (warning border as before on fail).
+  • BilledPanel: snapshot KeyValues + reopen flow (48h window, reason-required
+    ConfirmDialog) untouched; the desktop bills table became resident rows — gradient
+    avatar (gradientForName + initialsOf from @/lib/gradients, size-10 rounded-md),
+    billNumber mono meta, subtotal/paid right-aligned + StatusBadge + due money,
+    capped stagger, max-h-72 scroll. This FIXES the pre-existing tsc error at line ~529
+    (Money element was passed to StatusBadge's string `label` prop — money now renders
+    as sibling spans).
+  • BillsTab: rows restyled reference-style — gradient avatar tile, billNumber +
+    StatusBadge title, resident · period meta, meals/guests/due meta, transaction strip
+    (Subtotal bold, Adjustments when ≠ 0, Paid success-tinted), right column "Due" money
+    (warning when outstanding, success when settled) + the same Adjustment… button;
+    capped stagger + max-h-[28rem] scroll; AdjustmentDialog untouched.
+  • No PickerCapsule (periods are a sparse card grid, not a contiguous month calendar;
+    /admin/bills filters by periodId/status/q only) — period cards ARE the selector.
+  • Removed unused imports (PageHeader, SegmentedControl, KpiGridSkeleton, useEffect —
+    all dead before or after the restyle).
+- src/components/app/resident/billing.tsx:
+  • Removed PageHeader; root space-y-6 → space-y-4; pending branch now KpiGridSkeleton(3)
+    + hero skeleton + ListSkeleton.
+  • NEW KPI row (grid grid-cols-3, resident/meals house style): Amount to Pay (warning
+    tone/glow, Wallet — outstanding money), Pending Payments (primary, Clock), My Meals
+    (success, Utensils, sub = period monthLabel). Values straight off the existing
+    /api/v1/billing payload — no new fetches.
+  • "Pay Bill" (was PageHeader action) → BoardOps centered action bar
+    (`flex flex-wrap items-center justify-center gap-2`, reference billing-view user
+    placement), same render condition and handlers (preset null → SubmitPaymentDialog).
+  • Amount-to-Pay hero, running-estimate card with collapse, BillDetailSheet,
+    CalculationExplanation, SubmitPaymentDialog: kept EXACTLY (all DataRows, provenance
+    copy, pay flows); "You're all settled" card got a success-tinted gradient icon orb.
+  • Bill history rows → contract anatomy: bill period as title, billNumber + due-date
+    meta, "{meals} meals · total {formatMinor(subtotal)}" meta, right side bold total
+    DUE money + StatusBadge; same click → detail sheet; staggered entrance
+    (SPRING_SNAPPY, capped delay); scroll container max-h-[28rem] pr-1 (was max-h-96).
+  • No PickerCapsule: /api/v1/bills has no month param and the page's core sections
+    (unsettled bills + current-period estimate) aren't month-switchable.
+  • Cleanups: dropped now-unused formatDateTimeInTz import + dead
+    estimateSubtotalUsable local (both effectively dead before).
+- Verification: `bun run lint` → clean (zero output). `bunx tsc --noEmit` → ZERO errors
+  in all three files; the pre-existing admin/billing.tsx:529 error is gone (fixed);
+  remaining repo errors are pre-existing / other-owned (readiness route TS2783,
+  _shared/api.ts never-narrowings, ai proof-preview route, examples/, scripts/seed.ts).
+  Did NOT run build, did NOT restart the dev server, did NOT browser-test (orchestrator
+  E2Es after merge). Confirmed via git that I only modified my three assigned files.
+
+Stage Summary:
+- admin/expenses.tsx: PickerCapsule month scope (month=YYYY-MM param, meta-driven label) +
+  tone/glow KPIs (lg:grid-cols-3) + status FilterChips + right-aligned Add Expense action
+  bar + status-tinted-tile expense rows (title/meta/transaction strip, header-row overflow
+  menu) + capped stagger + 28rem scroll. Mutations/dialogs/validation untouched.
+- admin/billing.tsx: headerless, tone/glow KPI trio, FilterChips tabs with counts,
+  CalendarClock-tile period cards, readiness/generate + reopen + adjustment flows kept
+  verbatim, snapshot bills table → gradient-avatar resident rows (fixes tsc 529),
+  reference-style bills rows with right-aligned Due + Adjustment action.
+- resident/billing.tsx: headerless, centered Pay Bill action bar, 3-tone KPI row from the
+  existing billing payload, Amount-to-Pay hero + estimate + sheet flows untouched,
+  contract-anatomy bill history rows (period title, due meta, right total-due + badge)
+  with stagger + 28rem scroll.
+
+---
+Task ID: 13-d
+Agent: frontend-styling-expert
+Task: Polish the Ops cluster (admin+resident tasks, admin announcements, admin+resident
+notifications) to the BoardOps-Fresh composition while keeping the Aurora liquid-glass theme.
+
+Work Log:
+- Read worklog Tasks 10/11-b/12 (design system: glass materials, SPRING_* presets, grid-kpi,
+  glow-* utilities, KpiCard tone/glow API, headerless BoardOps views) + studied the BoardOps
+  reference views (tasks-view, announcements-view, notifications-view, notifications-hub-view)
+  and our gold-standard converted pages (resident/meals.tsx, admin/meals.tsx).
+- Verified dueDate is a "YYYY-MM-DD" date-key on both task APIs (keyOfUtcDate) so overdue =
+  string-compare against todayKey() / todayKeyInTz(tz) — no query changes needed for KPIs.
+- src/components/app/admin/tasks.tsx:
+  • Removed PageHeader (headerless) + import; root space-y-5 → space-y-4; error branch space-y-6 → space-y-4.
+  • NEW right-aligned action bar (`flex flex-wrap items-center justify-end gap-2`) carrying the
+    relocated "Assign Task" primary GlassButton (was PageHeader.actions).
+  • NEW 4-KPI KpiGrid (admin/_shared/chrome, loading prop while fetching): Open (primary,
+    ListChecks, ASSIGNED+ACCEPTED from meta.countsByStatus), In Progress (warning, Timer,
+    IN_PROGRESS+SUBMITTED), Completed (success, CheckCircle2, APPROVED), Overdue (danger,
+    TriangleAlert, computed client-side: active statuses with dueDate < todayKey()).
+  • Task rows → BoardOps anatomy: status-tinted type-icon tile (`size-10 rounded-md border` +
+    local STATUS_TILE token tints), title + assignee/room/type meta + due/assigned/items
+    kpi-num line, StatusBadge, submission inset kept. Entrance stagger initial y:6 with
+    `delay: Math.min(i*0.04, 0.2)` (dropped `layout` like the reference to avoid delayed
+    layout shifts); list wrapped in `no-scrollbar max-h-[28rem] overflow-y-auto pr-1`.
+  • SubmissionReviewCard header now uses the same tinted tile (SUBMITTED→warning) +
+    flex-1 title/StatusBadge shrink-0. AssignTaskDialog + DialogShell4 + all mutations,
+    invalidations, toasts, field errors untouched.
+- src/components/app/resident/tasks.tsx:
+  • Removed PageHeader; root space-y-6 → space-y-4; removed a pre-existing unused `Money`
+    import. NEW 4-KPI grid (grid-cols-2 sm:grid-cols-4, glass/KpiCard): Open (primary,
+    ListChecks), In Progress (warning, Hourglass), Done (success, CheckCircle2), Overdue
+    (danger, TriangleAlert) — client-side from the loaded tasks (useMemo; overdue uses
+    todayKeyInTz(tz) + not-finished filter).
+  • Task cards: leading type-icon tile `size-10 rounded-md` tinted by status (local
+    STATUS_TILE), stagger tightened to y:6 + `Math.min(i*0.04, 0.2)`; list inside
+    `no-scrollbar max-h-[28rem] overflow-y-auto pr-1` (space-y-3).
+  • Accept/Reject/Start/Submit flows, SubmissionDialog (items repeater, proof, optimistic
+    totals), reject-reason ConfirmDialog, toasts, invalidations — all byte-identical.
+- src/components/app/admin/announcements.tsx:
+  • Removed PageHeader; root space-y-5 → space-y-4 (loading + error branches too). Loading
+    branch now KpiGridSkeleton(4) + ListSkeleton (no header).
+  • NEW right-aligned action bar with relocated "Publish" primary button.
+  • NEW 4-KPI KpiGrid mirroring the reference set: Total (primary, Megaphone), Pinned
+    (primary, Pin), High Priority (warning, TriangleAlert — HIGH+URGENT+CRITICAL), Expiring
+    Soon (danger, Clock — expires within 7 days, not yet expired).
+  • Board rows: NEW local TYPE_META (INFO/ALERT/WARNING/MAINTENANCE/EVENT → Info/TriangleAlert/
+    Wrench/PartyPopper icons with token tints); pinned rows keep ring-primary/30 + Pin tile;
+    URGENT/CRITICAL rows get the accent `glow-danger` ambient tint; entrance stagger y:6 +
+    capped 0.04 delay; chips row (type/priority/audience/pinned/scheduled/expired/until)
+    kept. PublishDialog (preview-first high-stakes flow) untouched.
+- src/components/app/admin/notifications.tsx:
+  • Removed PageHeader + SegmentedControl; root space-y-5 → space-y-4 (loading + error too).
+  • NEW right-aligned action bar "Mark all read" (secondary sm, still rendered only while
+    unreadCount > 0 — preserved condition). Filter control swapped SegmentedControl →
+    FilterChips with counts (All = items.length, Unread = unreadCount); same `filter` state
+    + same query param — presentational swap only.
+  • Rows: leading orb → `size-10 rounded-xl border` tone-tinted via local notifTone(type)
+    (REJECTED/ALERT/DEFICIT/RESTRICT/OVERDUE→danger, APPROVED/ACCEPTED/SETTLED→success,
+    PENDING/SUBMITTED/DUE/GRACE→warning, default→primary) keeping notifIcon icons +
+    unread dot overlay; unread rows now also ring-1 ring-primary/30 (reference pattern);
+    dropped the redundant trailing CircleDot indicator (orb dot + "New" chip kept). Today/
+    Yesterday/Earlier grouping, tap-to-mark-read, mark-all-read, scroll container, timeAgo
+    meta — all preserved.
+- src/components/app/resident/notifications.tsx:
+  • Removed PageHeader; root space-y-6 → space-y-4. Mark-all-read button relocated into a
+    right-aligned action bar (same disabled/loading/onClick semantics).
+  • Rows: motion.button restyled from glass-inset rounded-md border-l-2 → glass rounded-lg
+    p-4 rows with ring-1 ring-primary/30 + hover:ring-primary/50 when unread (reference
+    pattern); orb size-9 pill → `size-10 rounded-xl` token-tinted via local notifTone(type)
+    (REJECTED→danger, APPROVED/ACCEPTED→success, SUBMITTED/PENDING→warning, default→primary)
+    with notificationIcon kept; title dot, "tap to mark read" hint, dayGroupLabel
+    Today/Yesterday/date groups, optimistic markRead + rollback, markAllRead — unchanged.
+- Verification: `bun run lint` → clean (zero output, exit 0). `bunx tsc --noEmit` → zero
+  errors in all five touched files (repo's pre-existing errors are all in examples/,
+  scripts/, skills/, api routes, _shared/api.ts, billing.tsx — untouched by me). Did NOT
+  run build / restart dev server / browser-test (orchestrator owns E2E).
+- Deliberately NOT done: no search field added (none of the reference views have search —
+  skipped to avoid behavior drift); no gradient avatars (no user-list rows in these pages —
+  assignees render as meta text per the reference task-row anatomy); admin notifications
+  keeps its existing viewport-based scroll cap instead of 28rem (feed is day-grouped and
+  full-page; 28rem would clip 3 group headers).
+
+Stage Summary:
+- All five Ops pages are now headerless BoardOps compositions (action bar → KPIs → filters →
+  tinted rows) in the Aurora liquid-glass skin: admin tasks (Assign Task bar, Open/In
+  Progress/Completed/Overdue KPIs, status-tinted tiles, 28rem scroll cap), resident tasks
+  (same KPI set client-side, tinted tiles, scroll cap), admin announcements (Publish bar,
+  Total/Pinned/High/Expiring KPIs, type-tinted tiles, pinned ring + urgent glow), admin
+  notifications (Mark-all-read bar, FilterChips w/ counts, tone orbs + unread ring, day
+  groups), resident notifications (Mark-all-read bar, TabRow, glass rows with tone orbs +
+  unread ring, day groups).
+- Zero domain-logic changes: every query key/path, mutation, optimistic flow, dialog,
+  validation, toast, and invalidation is byte-identical; all changes are JSX composition,
+  className/token styling, local presentational helpers, and KPI counts derived from
+  already-loaded data / existing meta.
+- No shared files touched (admin/_shared/*, resident/_shared/*, glass/*, globals.css, nav,
+  shell components all untouched by me).
+
+---
+Task ID: 13-e
+Agent: frontend-styling-expert
+Task: Restyle the People-cluster pages (residents directory, resident 360°, audit log, formulas) to BoardOps-Fresh composition while keeping the Aurora liquid-glass theme and all domain logic.
+
+Work Log:
+- Read worklog tail (Tasks 10/11-b/12) for the established design system; studied the BoardOps reference views (users-view, audit-view, formulas-view, formula-engine-view, profile-view header, resident-360-dialog) and our gold-standard pages (resident/meals, admin/meals, admin/meal-configuration) plus _shared/{chrome,fields,format}.tsx, lib/gradients, lib/motion.
+- Rewrote admin/residents.tsx (headerless, space-y-4): KpiGrid with tone/glow (Total primary / Active success / Pending warning, lg:grid-cols-3), SearchField + FilterChips (counts kept), users-view row anatomy — gradientForName + initialsOf avatar (size-11 rounded-full, ring), name + StatusBadge + room/email meta, balance + joined/restricted lines, ViewButton + OverflowMenu action row; single-column list capped at max-h-[28rem] overflow-y-auto pr-1 with entrance stagger (y:6, delay Math.min(i*0.04, 0.2)). Fixed the 5 pre-existing tsc errors by typing the lifecycle actions array as OverflowAction[] (import type from _shared/chrome).
+- Rewrote admin/resident360.tsx (headerless, space-y-4): profile hero card modeled on profile-view/360-dialog (ambient corner glows, back button, gradient avatar with ring, name + StatusBadge, email, room/joined meta, "Available" glass-inset money block) with the detail-page actions moved into the hero row (approve / request changes / reject / deactivate / reactivate / edit membership — same handlers); funds KPI row (Available success, Amount to Pay danger-when-positive, Pending payments warning, lg:grid-cols-3, fmtMinor values); TabRow + per-tab section cards via a new local SectionCard component (tinted icon tile header + rotating chevron expander, AnimatePresence height animation) for Membership, Funds summary, Status history, Meals, Funds & deficit policy (exemption button kept in card header), Payments, Bills, Tasks, Activity. All queries (incl. meals query gated on tab === "meals"), lifecycle/membership/exemption dialogs, toasts and invalidations untouched.
+- Rewrote admin/audit.tsx (headerless, space-y-4): client-derived KPI row (Entries / Entity Types / Action Types), SearchField + entity FilterChips (replaced the native SelectField with chips driving the SAME entityType state/server param), audit-view row anatomy — action icon tile tinted by a local severity map derived from the action verb (success/warning/danger/neutral), mono Chip action pill, "on <entity> · id" meta, timestamp + actor-role chip + italic reason, Δ chip + rotating chevron expander revealing the before/after JSON diff panels and req/ip/userAgent metadata. The debounced search, render-phase pagination reset, cursor page accumulation and "Load more" flow are byte-for-byte preserved.
+- Restyled admin/formulas.tsx (headerless, space-y-4): right-aligned BoardOps action bar (History secondary + Edit Formula primary), KpiGrid (Active Version primary / Variables success / Versions Kept warning), active formula rendered as a meal-configuration-style config card in grid-cards — teal accent bar (mealHex default), size-12 tinted icon tile, Chip badge row (input mode, version, "current period runs vN" when a newer version is queued), human-preview headline, expression in a glass-inset mono box, reason line, current-period estimate KeyValue grid pinned with mt-auto; variables/functions/operators CollapseRow kept; FormulaEditorDialog + SaveDialog + HistoryDialog + DialogShell3 kept EXACTLY as before (only the page shell around them changed).
+- Verification: `bun run lint` → zero warnings/errors; `bunx tsc --noEmit` → zero errors in all four restyled files AND the 5 pre-existing residents.tsx OverflowAction errors are resolved (remaining 24 repo errors are pre-existing in scripts/seed, examples, skills, api routes, _shared/api.ts and other agents' in-flight files). No build/server/browser actions taken per instructions.
+
+Stage Summary:
+- residents.tsx: PageHeader removed; gradient-avatar roster rows (users-view anatomy) with KPI tone/glow grid, filter chips with counts, capped scroll list, staggered entrances; 5 tsc errors fixed via typed OverflowAction[].
+- resident360.tsx: PageHeader replaced by a profile hero (gradient avatar, identity, balance, relocated lifecycle actions) + funds KPI row; every tab section is now a tinted-icon-tile SectionCard with rotating chevron expander; all data flows/dialogs identical.
+- audit.tsx: compact severity-tinted audit rows with expandable before/after diffs, entity filter chips, client-derived KPIs; search/debounce/cursor-pagination logic untouched.
+- formulas.tsx: right-aligned action bar + tone/glow KPIs + config-card formula display (accent bar, tinted tile, chips, mono expression box, estimate KeyValues); editor/save/history dialogs untouched.
+
+---
+Task ID: 13-f
+Agent: frontend-styling-expert
+Task: Polish the Settings cluster (admin settings · admin calendar · resident profile) to the BoardOps-Fresh composition on the Aurora liquid-glass theme, plus strip leftover PageHeaders from the already-polished dashboards and meal-configuration.
+
+Work Log:
+- Read worklog tail (Tasks 10/11-b/12 design system + meals gold standard), the BoardOps references (settings-view/settings-hub-view, calendar-view MonthView/Legend/CalendarHeader, profile-view hero/InfoCard/AvatarUpload), and our gold standards (resident/meals.tsx picker-capsule + CALENDAR grid + KPI tones, admin/meals.tsx, admin/meal-configuration.tsx config cards). Verified shared APIs first: PickerCapsule (onPillClick/resettable/CircleArrow), KpiCard tone/glow, GlassCard entrance/entranceDelay, chrome helpers, gradients lib (gradientForName/initialsOf), resident/_shared/ui (GlassField/SearchInput), admin/_shared/fields.
+- src/components/app/admin/settings.tsx (restyle):
+  • PageHeader + unused SectionHeading/KeyValue imports removed (TopBar carries the title); page roots space-y-6/5 → space-y-4 in all three branches.
+  • New local GroupCard (BoardOps settings-hub group): tinted icon tile (size-10 rounded-md, SECTION_TONES primary/warning/success/danger/frost), title + description, action slot, warning dirty-dot on the tile, GlassCard entrance + entranceDelay stagger (0→0.3s). SettingsSection is now a thin wrapper that keeps the exact save button (dirty → primary "Save changes" / secondary "Saved", loading, disabled) — all drafts, dirty flags, PATCH payloads, changed-label toasts, versioned policy publish dialog and theme SegmentedControl flow untouched.
+  • Tones: Institution=primary, Meals & Financial Policy=warning, Billing=success, Security=danger, Policies=frost (+ "Publish new version" action slot), Appearance=primary. Policy version list now scrolls (max-h-[28rem] overflow-y-auto pr-1); Currency row inlined (dropped the empty-label KeyValue wrapper).
+- src/components/app/admin/calendar.tsx (restyle):
+  • PageHeader removed → BoardOps action bar top-right ("Create Event" primary) + centered PickerCapsule month navigation (Calendar icon + month-long/year two-line pill, onPillClick resets to the server-current month, RotateCcw resettable hint, circular glass-strong arrows). shiftMonth/resetToCurrentMonth keep the old semantics (clears selectedDay).
+  • Month grid rebuilt on the meals-page house pattern: GlassCard p-4, 7-col Sun-first weekday headers (was Mon-first), whole-week padded aspect-square min-h-[44px] cells, today = bg-primary/15 ring-primary/40 + text-primary number, selected day = ring-2 ring-primary/50, days-with-events = glass-inset hover ring, empty = dimmed, past dimmed to 60%. Cell click still toggles selectedDay (day-detail flow preserved). Event dots per type with TOKEN tones (holiday=warning, festival=primary, maintenance=danger, custom=neutral) instead of raw amber/teal/rose/slate; disableMeals keeps its ring marker.
+  • Legend row restyled to the meals legend (dot + label, centered, border-top) incl. "Meals disabled" ring dot; event list icons moved to tone-tinted rounded-md tiles; list wrapped in max-h-[28rem] scroll. Create dialog (impact preview), DialogShell5, delete ConfirmDialog, month fetch range — byte-identical logic.
+- src/components/app/resident/profile.tsx (restyle):
+  • PageHeader removed → BoardOps profile hero: GlassCard strong + entrance with primary/success aurora blobs, gradient avatar (size-16 sm:size-20 rounded-full, gradientForName(displayName), initialsOf, blur halo, ring-2 ring-border/50), display-font name, email line, badge row (Resident pill + StatusBadge + mess pill), "Edit details" secondary button (hidden while editing).
+  • Grouped InfoCards with tinted icon tiles + glass-inset InfoRows (icon + label + value): Contact (primary, hosts the untouched react-hook-form EditProfileForm while editing), Membership (success — email/status/role/mess + admin note), Session (danger — sign-out row). aria-labelledby ids (profile-personal/account/session) preserved; sign-out handler, PATCH flow, invalidations, toasts identical.
+- Minimal edits (nothing else touched):
+  • admin/dashboard.tsx + resident/dashboard.tsx: PageHeader import + error-branch usage removed; all three page-root branches space-y-6 → space-y-4.
+  • admin/meal-configuration.tsx: 3 PageHeader usages + import removed; "New Meal" primary action relocated to a right-aligned BoardOps action bar (flex flex-wrap items-center justify-end gap-2) right after the page root; roots space-y-6/5 → space-y-4. Wizard, KPI grid, config cards, version dialogs untouched.
+- Verification: `bun run lint` → clean (zero warnings/errors). `bunx tsc --noEmit` → zero errors in all six touched files (remaining repo errors are pre-existing/other agents': examples/, scripts/seed.ts, skills/, api/v1 routes, _shared/api.ts, resident/billing.tsx mid-flight). Dev server left running (dev.log shows successful recompiles, no compile errors); no build/browser test per instructions.
+- Domain-logic deviations: NONE — all queries, mutations, query keys, API paths, dialogs, validations, toasts, toasts' copy and flows are identical before/after. Only presentational JSX/containers changed. No shared/glass/_shared file was modified.
+
+Stage Summary:
+- admin/settings.tsx: settings-hub grouped cards with tone-tinted icon tiles + dirty dots + entrance stagger; headerless, space-y-4; every draft/save flow intact.
+- admin/calendar.tsx: BoardOps action bar + PickerCapsule month nav + Sun-first house calendar grid (today ring, past dimmed, token-tone event dots, legend row, scrollable event list); create/impact/delete flows intact.
+- resident/profile.tsx: profile hero (gradient avatar, name, email, badge row) + grouped Contact/Membership/Session glass-inset row cards; edit + sign-out flows intact.
+- admin/dashboard.tsx & resident/dashboard.tsx: PageHeader stripped, page roots space-y-4 (only).
+- admin/meal-configuration.tsx: PageHeaders stripped, "New Meal" moved to top-right action bar, root spacing aligned; wizard/cards untouched.
+
+---
+Task ID: 13
+Agent: Main Orchestrator (Z.ai Code)
+Task: "Now polish this frontend" — full BoardOps-Fresh composition pass across every remaining page, on the Aurora liquid-glass theme.
+
+Work Log:
+- 13-a (orchestrator): NEW src/components/glass/PickerCapsule.tsx (CircleArrow + centered capsule extracted from the Meals gold-standard pattern; pill click = reset-to-current with RotateCcw hint). TabRow + admin _shared/chrome FilterChips upgraded to SOLID primary active pills (BoardOps filter style, layoutId slide kept). KpiGrid passes tone/glow/onClick/navLabel/index through to KpiCard. NEW SearchInput in resident/_shared/ui.tsx. Deleted dead PageHeader.tsx + stub-view.tsx after confirming zero importers. Fixed the 5 pre-existing tsc 'never' errors in admin/_shared/api.ts (ResponseBody<T> type alias — type-level only).
+- 13-b (money): admin/payments, resident/payments, admin/funds → headerless, KpiGrid/raw KPI cards with tone+glow, method-tinted row tiles, pending quick-approve row buttons (same mutation flow), SearchField + FilterChips (resident got client-side SearchInput + TabRow w/ pending count), gradient-avatar resident fund rows. pay-dialog untouched (already on-theme).
+- 13-c (billing): admin/expenses gained PickerCapsule month picker (API natively supported ?month=); admin/billing KPIs + FilterChips w/ counts + gradient-avatar billed-panel rows (fixed pre-existing tsc error at billing.tsx:529); resident/billing KPI trio + centered Pay Bill action bar + reference bill rows. Readiness/closing/adjustment dialogs byte-identical.
+- 13-d (ops): admin+resident/tasks 4-KPI grids (Open/In Progress/Done/Overdue) + status-tinted tiles + right-aligned Assign/Submit action bars; announcements 4 KPIs + Publish bar + type-tinted board rows (pinned ring, urgent glow-danger); notifications (both roles) FilterChips w/ unread counts + tone orbs + unread rings, day-grouped feeds.
+- 13-e (people): residents directory gradient-avatar rows (fixed all 5 pre-existing OverflowAction tsc errors); resident360 profile hero + funds KPIs + SectionCard expanders per tab; audit severity-tinted rows + entity FilterChips + JSON diff expander; formulas meal-configuration-style config card (accent bar, Chip badges, mono expression box, mt-auto estimate).
+- 13-f (settings): settings-hub GroupCards w/ tinted tiles + dirty dots; calendar rebuilt on PickerCapsule + Sun-first house grid (today ring, past dimmed, token-tone dots, legend); resident/profile gradient-avatar hero + grouped cards; MINIMAL: PageHeader stripped from both dashboards + meal-configuration (New Meal → top-right action bar), roots → space-y-4.
+- Post-merge fixes: resident/payments + resident/billing KPI grids changed grid-cols-3 → grid-cols-2 sm:grid-cols-3 (VLM + DOM measurement caught label/value truncation at 390px — money values need ≥143px card content; KpiGridSkeleton override matched).
+- Verification: bun run lint clean; tsc --noEmit zero errors in ALL of src/components (first time); dev server crashed twice during the session — root cause: kernel OOM-killer (Chromium + Turbopack full recompile spiked past 4GB) — resolved by killing the stale browser daemon, rm -rf .next, detached restart via setsid; server then stable (955MB–1.7GB RSS, 200s throughout). agent-browser E2E: resident login → dashboard/payments(KPIs+rows)/billing(KPIs+estimate+bill history)/tasks(4 KPIs+rows)/notifications(tabs+day groups)/profile(hero+sign-out works); admin login → dashboard, payments (Pending→All filter swap renders rows), funds (search/chips/5 resident rows), expenses (PickerCapsule next-month → "Oct 2026" KPI subs + reset back), billing (Aug period → SNAPSHOT panel w/ RESIDENTS 5, MEALS 352, GUESTS 6), residents → 360° view (hero + tabs + detail actions), tasks, announcements, notifications, calendar (picker + 30 day cells + event counts), formulas, settings, audit, meal-configuration; ZERO page/console errors across every page; 390px automated clip-scan + VLM reviews of res-payments mobile (truncation found → fixed → re-measured clean), res-payments desktop 9/10, admin-expenses mobile PASS, admin-tasks desktop clean.
+- Merged worklog-entry-13-{b..f}.md files into this worklog; removed the temp entry files.

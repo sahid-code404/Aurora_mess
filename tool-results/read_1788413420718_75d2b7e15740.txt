@@ -1,0 +1,612 @@
+     1→# PROJECT WORKLOG — Resident Meal, Finance & Operations Platform
+     2→
+     3→This is the SHARED worklog. Every agent MUST read this file before working and MUST append
+     4→their section after finishing (append only, never overwrite).
+     5→
+     6→---
+     7→
+     8→Task ID: 0
+     9→Agent: Main Orchestrator (Z.ai Code)
+    10→Task: Read the full 7,632-line master spec, analyze, and produce the master plan/contracts.
+    11→
+    12→Work Log:
+    13→- Read entire spec at /home/z/my-project/upload/Pasted Content_1788376605170.txt (320 numbered sections)
+    14→- Inspected sandbox: Next.js 16.1.3 (App Router, Turbopack, port 3000, dev server RUNNING), React 19,
+    15→  Tailwind CSS 4, full shadcn/ui set in src/components/ui, Prisma 6 + SQLite (db/custom.db),
+    16→  framer-motion, zod 4, TanStack Query, sonner, lucide-react, z-ai-web-dev-sdk.
+    17→- Verified dev server responds 200 on /
+    18→
+    19→## ENVIRONMENT ADAPTATIONS (documented decisions — spec §0 "choose safest behavior + document")
+    20→1. Spec asks for NestJS+PostgreSQL+Redis monorepo. Sandbox constraint: single Next.js 16 app on port 3000
+    21→   with Prisma/SQLite only. DECISION: implement the spec's DOMAIN MODEL, INVARIANTS, and UX as a
+    22→   modular-monolith Next.js app: App Router API routes under `/api/v1/*` act as the REST API layer
+    23→   (mirroring the NestJS module boundaries via folder-per-module + domain services in src/lib/domain).
+    24→   Redis replaced by in-memory rate limiting. Money stays integer minor units; ledger stays double-entry.
+    25→2. Spec asks for `/admin/*` + `/app/*` routes. Sandbox constraint: user can only see `/`.
+    26→   DECISION: single-page app at `/` with hash-based routing (e.g. `#/admin/meals`, `#/app/billing`).
+    27→   Hash router gives back-button support + shareable state without extra Next.js routes.
+    28→3. Spec asks `__Host-session` cookie. Sandbox serves over internal HTTP proxy.
+    29→   DECISION: cookie name `mes_session`, HttpOnly, SameSite=Lax, Path=/, 30d expiry. Session tokens are
+    30→   256-bit random, only SHA-256 hash stored server-side (spec §10 honored). Documented for prod swap.
+    31→4. Spec asks Argon2id. Native module risk in sandbox. DECISION: Node built-in `scrypt` (memory-hard,
+    32→   per-user salt, params stored with hash, timingSafeEqual compare). Documented ADR swap for prod.
+    33→5. File proofs stored on private filesystem folder `uploads-storage/` (never under public/) with random
+    34→   object keys + sha256 checksums + magic-byte validation, served only via authenticated endpoint.
+    35→6. Cutoffs/locking are ALWAYS computed from server time (spec §16) — browsers only render countdowns.
+    36→
+    37→## MASTER ARCHITECTURE
+    38→
+    39→### Repository layout (single Next.js app, modular monolith)
+    40→```
+    41→src/
+    42→  app/
+    43→    layout.tsx                     # fonts, ThemeProvider, Toaster, QueryProvider
+    44→    page.tsx                       # THIN: renders <AppRoot /> (client SPA)
+    45→    globals.css                    # Liquid Glass design tokens + primitives styling
+    46→    api/v1/
+    47→      auth/                        # register, login, logout, me, policies (public)
+    48→      me/                          # profile, notifications, dashboard (resident)
+    49→      meals/                       # resident meal list, toggle
+    50→      guest-meals/ leave-requests/ billing/ bills/ payments/ tasks/ announcements/
+    51→      search/ files/ health/
+    52→      admin/
+    53→        residents/ users/ meals/ meal-definitions/ meal-instances/ leave-requests/
+    54→        guest-meals/ payments/ expenses/ refunds/ funds/ ledger/ formulas/ billing/
+    55→        billing-periods/ tasks/ task-submissions/ calendar/ announcements/ notifications/
+    56→        settings/ policies/ audit/ ai/
+    57→  components/
+    58→    glass/                         # design primitives (GlassCard, KpiCard, StatusBadge, Segmented,
+    59→                                   # GlassSheet, AppBar, BottomNav, Sidebar, EmptyState, ErrorState,
+    60→                                   # PageHeader, FilterSheet, ConfirmDialog, MoneyInput, Toggle, ...)
+    61→    app/
+    62→      AppRoot.tsx                  # auth gate + role shell + hash router
+    63→      AuthScreen.tsx               # login/register tabs (+ policy acceptance on register)
+    64→      router.ts                    # hash router + route registry (ALL routes defined here)
+    65→      nav.ts                       # navigation model per role (bottom nav mobile / sidebar desktop)
+    66→      admin/                       # ONE FOLDER PER VIEW: dashboard, meals, payments, residents,
+    67→                                   # resident360, funds, expenses, meal-configuration, formulas,
+    68→                                   # billing, tasks, calendar, announcements, notifications,
+    69→                                   # settings, audit
+    70→      resident/                    # dashboard, meals, billing, payments, tasks, profile, notifications
+    71→      shared/                      # cross-role domain components (BillCalculation, ActivityFeed, ...)
+    72→  lib/
+    73→    db.ts                          # prisma client (exists)
+    74→    money.ts                       # integer minor units, format ₹, round-half-up helpers (THE rounding)
+    75→    time.ts                        # institution-timezone helpers via Intl (no external tz lib)
+    76→    ids.ts                         # PAY-YYYYMM-#### / EXP-… / BILL-YYYYMM-#### display numbers
+    77→    errors.ts                      # ApiError + domain codes (MEAL_CUTOFF_PASSED, ...) + envelope
+    78→    api.ts                         # client fetch helper (typed envelopes) + useApi hooks support
+    79→    validation.ts                  # zod schemas shared by routes
+    80→    auth/
+    81→      password.ts                  # scrypt hash/verify (params stored)
+    82→      session.ts                   # create/rotate/revoke, cookie helpers, getSessionUser()
+    83→      guard.ts                     # requireAdmin / requireResident / ownership helpers
+    84→    audit.ts                       # appendAudit() — always inside same transaction as mutation
+    85→    outbox.ts                      # appendOutbox() + simple sweeper (notifications/email decoupled)
+    86→    notify.ts                      # createNotification() (in-transaction)
+    87→    storage.ts                     # upload validation (JPEG/PNG/PDF magic bytes, 2MB), sha256, keys
+    88→    domain/
+    89→      meal-engine.ts               # THE deterministic state-precedence engine (spec §28)
+    90→      instance-service.ts          # ensureInstancesForDate() generation from definitions
+    91→      ledger.ts                    # postJournal() balanced double-entry, account codes
+    92→      funds.ts                     # read model: deposits/consumed/available/amountToPay/deficit
+    93→      formula/ast.ts               # AST types
+    94→      formula/parser.ts            # tokenizer + recursive-descent parser (NO eval ever)
+    95→      formula/evaluator.ts         # safe evaluation, FORMULA_DIVIDE_BY_ZERO guard
+    96→      formula/variables.ts         # whitelist registry w/ labels+sources
+    97→      formula/nl.ts                # natural-language → candidate AST (uses z-ai-web-dev-sdk LLM)
+    98→      billing.ts                   # readiness checks, snapshot, bill calc w/ provenance lines
+    99→      deficit.ts                   # financial-policy state (AVAILABLE/GRACE/RESTRICTED/EXEMPT)
+   100→```
+   101→
+   102→### API ENVELOPE (all /api/v1 routes)
+   103→Success: `{ ok: true, data: <T>, meta?: { requestId, cursor?, total? } }`
+   104→Failure: `{ ok: false, error: { code: "DOMAIN_CODE", message: "plain-language", fields?: {...}, requestId } }`
+   105→HTTP status 4xx/5xx. Domain codes used by frontend for friendly copy. requestId = crypto.randomUUID().
+   106→
+   107→### AUTH
+   108→- POST /api/v1/auth/register  { email, password, fullName, phone?, room?, acceptances:[{policyId, policyVersionId}] }
+   109→  → user PENDING_APPROVAL (+ status history + policy acceptance rows). Login allowed ONLY when ACTIVE.
+   110→- POST /api/v1/auth/login { email, password } → session cookie; generic failure message (no enumeration).
+   111→- POST /api/v1/auth/logout. GET /api/v1/auth/me → { user, profile, institution, role }.
+   112→- GET /api/v1/auth/policies → active policy versions (public for registration).
+   113→- Sessions: token 32B random base64url; store sha256(token); rotation on login; revoke on deactivate.
+   114→
+   115→### ROLE MODEL (ONLY TWO — spec §8)
+   116→ADMIN, RESIDENT. Backend guards on EVERY route + ownership checks (resident can only see own data).
+   117→Registration → PENDING_APPROVAL → (APPROVE→ACTIVE | REQUEST_CHANGES→CHANGES_REQUESTED | REJECT→REJECTED);
+   118→ACTIVE → INACTIVE / PENDING_DELETION. Status history table records every transition w/ reason.
+   119→
+   120→### MONEY (spec §17-18)
+   121→All amounts Int paise (`amountMinor`). `lib/money.ts`: fromDecimal/toDecimal (string math), format with
+   122→en-IN grouping (₹1,84,320.00), round-half-up ONLY in lib/money.ts. Client shows; server computes.
+   123→
+   124→### MEAL ENGINE (spec §24-33)
+   125→- meal_definitions (config) → meal_definition_versions (immutable snapshots) → meal_instances
+   126→  (per definition+date, unique) → resident_meals (unique resident+instance).
+   127→- Precedence (engine, deterministic): instance missing→NOT_AVAILABLE; membership not active for
+   128→  serviceDate→NOT_AVAILABLE; not visible→NOT_AVAILABLE; calendar disableMeals→NOT_AVAILABLE(reason CALENDAR);
+   129→  approved leave covering date→ON_LEAVE; deficit policy RESTRICTED→NOT_AVAILABLE(reason POLICY);
+   130→  else resident selected state (before cutoff) or baseline default; admin_override_state overrides
+   131→  everything for that instance; after cutoffAt → locked for residents; admin override post-lock allowed
+   132→  with mandatory reason + audit. effective_state + effective_reason always stored.
+   133→- Toggle endpoint: POST /api/v1/meals/:instanceId/toggle { state, expectedVersion } — server-time cutoff
+   134→  check inside transaction, optimistic version check (RESOURCE_CHANGED on stale).
+   135→- Mid-month join: membershipEffectiveFrom — meals before join cutoff = NOT_AVAILABLE (no retro ON).
+   136→- New active resident: defaults applied ONLY to instances with cutoff still in future.
+   137→
+   138→### FINANCE (spec §19-20, 37-44)
+   139→- ledger_accounts by code: CASH, RESIDENT_RECEIVABLE, GUEST_INCOME, MESS_EXPENSE, OPERATING_EXPENSE,
+   140→  REFUND_PAYABLE (per institution). postJournal({entries:[{accountCode, debitMinor, creditMinor}],
+   141→  refType, refId, description}) — verifies SUM(debits)=SUM(credits), never mutates posted journals.
+   142→- Payment submit (resident, proof optional file, idempotency key) → PENDING. Admin approve: txn{ lock
+   143→  row, verify PENDING, mark APPROVED, post journal Dr CASH / Cr RESIDENT_RECEIVABLE, audit, outbox }.
+   144→  Reject/void similar. Refund: checks available credit (funds read model), mode CARRY_FORWARD or
+   145→  ISSUE_REFUND w/ journal. Expense (admin) w/ items (server recomputes line totals + total), approve
+   146→  posts journal Dr MESS_EXPENSE / Cr CASH; void creates reversal journal (never delete approved).
+   147→- Funds read model derives everything from ledger + bills (no mutable balance column).
+   148→
+   149→### FORMULA ENGINE (spec §45-53) — security critical
+   150→- Whitelisted variables: total_market_cost, total_guest_income, total_consumed_resident_meals,
+   151→  total_guest_meals, total_approved_expenses, resident_consumed_meals, resident_guest_meals.
+   152→- Operators: + - * / ( ) SUM MIN MAX ROUND IF. Parser → typed AST (JSON). Evaluator with integer/decimal
+   153→  safe math (BigInt/Number paise), divide-by-zero → FORMULA_DIVIDE_BY_ZERO (blocks billing).
+   154→- NL mode: POST /api/v1/admin/formulas/parse-nl { text } → LLM (z-ai-web-dev-sdk) returns candidate AST
+   155→  JSON → server VALIDATES (whitelist + parse) → preview with current-period numbers → explicit Save.
+   156→  NL output NEVER executes without validation. UI always shows "I understood this as: …" preview.
+   157→- formula_versions immutable; new version effective from NEXT period by default; applying to OPEN period
+   158→  requires impact simulation + explicit confirm; CLOSED/BILLED never recalculated.
+   159→
+   160→### BILLING (spec §52-59)
+   161→- billing_periods unique (institution, year, month). OPEN→CLOSING→BILLED (+REOPENED restricted).
+   162→- Readiness endpoint runs full checks (payments↔ledger reconcile, expenses↔ledger, no PENDING financials
+   163→  required, formula valid, meal duplicates none, instances complete, etc.) → human-readable results.
+   164→- Generate: advisory lock (SQLite: transaction serialization + status guard), re-run readiness, snapshot
+   165→  ALL inputs to billing_snapshots (JSON + checksum), compute meal charge from active formula version,
+   166→  create bills + bill_lines w/ full provenance (qty × unit), adjustments, payments applied, status BILLED.
+   167→- Client confirm requires arithmetic answer (e.g. "2 + 9 = [11]") verified server-side.
+   168→- Bill numbers: BILL-YYYYMM-NNNN. Corrections on closed periods = adjustments only (bill_adjustments).
+   169→
+   170→### TASKS (spec §60-62)
+   171→ASSIGNED → (REJECT w/ reason | ACCEPT → IN_PROGRESS → SUBMITTED) → admin (REJECTED_BY_ADMIN | APPROVED).
+   172→Approve txn: creates official expense w/ items linked by sourceTaskSubmissionId (unique → no dup money).
+   173→
+   174→### COMMS + AUDIT (spec §63-66, 73)
+   175→- announcements (targeted, escaped text only), notifications (system-generated, read_at), audit_events
+   176→  (append-only, actor/action/entity/before/after/reason/requestId), outbox_events (+ sweeper).
+   177→
+   178→### DESIGN LANGUAGE — "Liquid Glass" (spec §100-126) — MANDATORY
+   179→- Premium, quiet, Apple-inspired. NOT default shadcn look. Dense frosted materials:
+   180→  light glass `rgba(255,255,255,0.78–0.88)` + `backdrop-filter: blur(20-28px) saturate(140%)`;
+   181→  dark glass `rgba(18,20,24,0.8–0.9)` + same blur. 1px hairline borders w/ inner top highlight.
+   182→- Radius tokens: xs 10, sm 14, md 18, lg 22, xl 28, sheet 32, pill 999. Spacing 4-based scale.
+   183→- Color families: Frost (teal-emerald primary accent — NO indigo/blue per environment rule), Graphite,
+   184→  Cloud, Ink, Emerald success, Amber warning, Red danger. Semantic > decorative. WCAG AA on glass.
+   185→- Motion: spring physics (framer-motion), button press scale 0.97-0.985, page fade/slide 180-280ms,
+   186→  toggle thumb springs + rollback animation on server reject, toasts spring, KPI number interpolation,
+   187→  tab indicator shared-layout, prefers-reduced-motion honored. 60fps compositor props only.
+   188→- Mobile-first 320px. Bottom nav (admin: Home/Meals/Money/Tasks/More; resident: Home/Meals/Billing/
+   189→  Payments/Tasks). Tablet: rail. Desktop 1200px+: persistent sidebar, restrained max width (~1440px).
+   190→- Sticky footer: root wrapper min-h-screen flex-col, footer mt-auto (env requirement).
+   191→- Safe-area insets, 44px touch targets, skeletons (no aggressive shimmer), empty/error states with
+   192→  plain-language copy + domain-code mapping. Dark mode designed separately (denser glass).
+   193→
+   194→### SEED (development-only; obvious non-production data)
+   195→admin@messtest.in / Admin#12345 ; resident demos: sahid@messtest.in, riya@…, arjun@…, meera@…, farhan@…
+   196→password Resident#12345 ; pending resident: newres@messtest.in. Login screen shows a "Development seed"
+   197→panel listing these (dev convenience only). Institution: Aurora Residency Mess, Asia/Kolkata, INR.
+   198→
+   199→### AGENT RULES
+   200→- NEVER modify: prisma/schema.prisma (frozen contract by Task 1 — if something is missing, note it in
+   201→  worklog and work around it), src/lib/db.ts, src/components/ui/* (use as-is), package.json deps
+   202→  (everything needed exists), Caddyfile, next.config.ts.
+   203→- Every agent works ONLY in its assigned folders. Shared files (page.tsx, AppRoot, router, nav,
+   204→  globals.css) may only be touched by the agent explicitly assigned to them.
+   205→- Use `bun run lint` before finishing. API routes: use Route Handler exports (GET/POST/PATCH...),
+   206→  zod-validate ALL inputs, never trust client totals/status/ids (derive resident from session).
+   207→- Money: Int paise everywhere. Use lib/money.ts.
+   208→- Run `bun run db:generate` after schema changes if needed — schema won't change after Task 1.
+   209→
+   210→Stage Summary:
+   211→- Spec fully analyzed; environment adaptations documented; master contracts established above.
+   212→- All subsequent agents MUST follow the file map, API envelope, domain rules, and design language here.
+   213→
+   214→---
+   215→Task ID: 1-a, 1-b, 1-c, 1-d
+   216→Agent: Main Orchestrator (Z.ai Code)
+   217→Task: Database schema + shared core libraries + brand assets
+   218→
+   219→Work Log:
+   220→- Wrote prisma/schema.prisma: 38 models — Institution(+Settings,+SecuritySettings), Policy/PolicyVersion/
+   221→  UserPolicyAcceptance, User/UserProfile/UserStatusHistory/Session, MealDefinition/MealDefinitionVersion/
+   222→  MealInstance/ResidentMeal, GuestMealRequest, LeaveRequest, CalendarEvent, StoredFile, Payment/
+   223→  PaymentStatusHistory, Refund, ExpenseCategory/Expense/ExpenseItem, LedgerAccount/LedgerJournal/
+   224→  LedgerEntry, FormulaDefinition/FormulaVersion, BillingPeriod/BillingSnapshot/Bill/BillLine/
+   225→  BillAdjustment, Task/TaskItem/TaskSubmission/TaskSubmissionItem, Announcement, Notification,
+   226→  AuditEvent, OutboxEvent, IdempotencyRecord, DeletionRequest. Enums→Strings (SQLite). Money = Int paise.
+   227→- `bun run db:push` → "The database is already in sync" ✓ (db/custom.db)
+   228→- Shared libs created:
+   229→  - src/lib/money.ts (parseDecimalToMinor, formatMinor en-IN ₹, divideMinorRoundHalfUp, multiplyRoundHalfUp)
+   230→  - src/lib/time.ts (partsInTz, zonedTimeToUtc 2-pass, computeCutoffAt, computeServiceWindow, monthBoundsInTz,
+   231→    weekdayOfKey, greetingFor, format labels)
+   232→  - src/lib/errors.ts (ApiError + CODES registry + ok()/fail() envelopes with requestId)
+   233→  - src/lib/ids.ts (PAY-/EXP-/BILL-YYYYMM-NNNN sequence w/ uniqueness retry)
+   234→  - src/lib/institution.ts (getInstitution w/ 60s cache + invalidate)
+   235→  - src/lib/auth/password.ts (scrypt N=16384,r=8,p=1, params stored, timingSafeEqual, passwordProblems)
+   236→  - src/lib/auth/session.ts (opaque 32B token, sha256 stored, rotation on login, revoke all, cookie helpers)
+   237→  - src/lib/auth/guard.ts (route() wrapper: auth modes PUBLIC/ANY/ADMIN/RESIDENT, params resolve, zod
+   238→    parseBody helper, assertOwnership) — ALL api routes MUST use route()
+   239→  - src/lib/audit.ts (appendAudit(tx)), src/lib/outbox.ts (appendOutbox + sweepOutbox→notifications)
+   240→  - src/lib/storage.ts (magic-byte JPEG/PNG/PDF validation, 2MB, sha256, uploads-storage/ private dir)
+   241→  - src/lib/rate-limit.ts (in-memory sliding window), src/lib/api.ts (client fetch + ApiClientError)
+   242→  - src/lib/validation.ts (shared zod: email/password/fullName/methods/reason/dateKey/money parse)
+   243→- Brand assets via image-generation skill: public/auth-bg-light.png, public/auth-bg-dark.png (1152x864),
+   244→  public/logo-mark.png (1024x1024)
+   245→- `bun run lint` → clean ✓
+   246→
+   247→Stage Summary:
+   248→- Schema is FROZEN. Agents must not modify prisma/schema.prisma.
+   249→- All shared libs are FROZEN contracts — import them, do not rewrite them.
+   250→- route() from src/lib/auth/guard.ts is mandatory for every /api/v1 route file.
+   251→- Brand assets ready at public/auth-bg-light.png, public/auth-bg-dark.png, public/logo-mark.png.
+   252→
+   253→---
+   254→Task ID: 2
+   255→Agent: Frontend Design Lead (Liquid Glass design system + app shell)
+   256→Task: Design system (globals.css tokens + materials), glass primitives, app shell
+   257→(hash router, role nav, AppBar/BottomNav/Sidebar/MoreSheet), AuthScreen, hooks,
+   258→layout/page wiring, and stub views for every route.
+   259→
+   260→Work Log:
+   261→- globals.css: kept shadcn CSS-variable base + @theme inline, EXTENDED with:
+   262→  radius scale (xs 10 → sheet 32, pill 999), glass fills (light rgba(255,255,255,.80/.88),
+   263→  dark rgba(18,20,24,.82/.90)), blur/saturate tokens (24-28px, 145-155%), hairline borders +
+   264→  inset top highlights, shadow tokens, z-index scale vars, Frost oklch(0.51 0.079 178) primary
+   265→  (teal-emerald, NO blue/indigo), success/warning/danger semantic colors, chart family,
+   266→  dark = designed denser variant. Utilities (unlayered so they beat Tailwind utilities in
+   267→  cascade — required for reskinning shadcn dialog/sheet/dropdown): .glass/.glass-strong/
+   268→  .glass-inset (NO backdrop-filter for nested)/.glass-nav/.glass-fallback(@supports)/
+   269→  .glass-skeleton (soft pulse)/.kpi-num (tnum+lnum)/.no-scrollbar/.safe-b. app-bg = layered
+   270→  radial gradients (light cream/sage, dark ink/teal glow) as fixed z-index:-1 layer in layout
+   271→  (real content for backdrop-filter to blur). auth screen composites /auth-bg-*.png at 13-16%
+   272→  opacity under gradients. Thin translucent scrollbars (webkit+firefox), ::selection,
+   273→  prefers-reduced-motion global kill.
+   274→- src/components/glass (20 primitives): GlassCard (interactive spring hover/tap 0.992,
+   275→  keyboard), KpiCard (AnimatedNumber via useMotionValue/useSpring, parses "₹1,23,456.00" prefix/
+   276→  suffix/decimals, reduced-motion static, delta chip, KpiSkeleton), StatusBadge (status→tone
+   277→  vocabulary: ON/APPROVED emerald, PENDING/LOCKED/ON_LEAVE/OFF graphite, ADMIN_OVERRIDE amber,
+   278→  REJECTED/RESTRICTED red, OPEN/BILLED frost; text+dot never color-only), SegmentedControl
+   279→  (layoutId sliding pill, radiogroup + arrow keys), GlassToggle (iOS switch: spring thumb,
+   280→  track color interpolation, icon crossfade, role=switch/aria-checked), GlassButton
+   281→  (primary/secondary/ghost/destructive, ≥44px, press 0.985 spring, specular top highlight,
+   282→  loading keeps width), PageHeader, EmptyState/ErrorState (domain-code → friendly copy +
+   283→  retry), LoadingSkeleton (pulse blocks), FilterSheet (mobile bottom sheet 32px top radius +
+   284→  drag indicator over reskinned shadcn Sheet; desktop inline glass card), ConfirmDialog
+   285→  (consequence copy, optional mandatory reason, focus trap/ESC via Radix; reason state in
+   286→  mount-fresh child — no setState-in-effect), AppBar (mobile top: title, bell w/ unread badge,
+   287→  avatar dropdown w/ theme toggle + sign out), BottomNav (5 slots, layoutId active pill,
+   288→  safe-area-inset-bottom), Sidebar (260px glass, groups, active bar + tint, unread badge on
+   289→  Notifications, theme + sign out), MoreSheet (admin overflow grid), Money (client-safe
+   290→  formatMinor duplicate of lib/money.ts — en-IN ₹ 2dp), ActivityItem, SectionHeading, TabRow
+   291→  (scrollable tabs w/ layoutId pill).
+   292→- src/hooks: use-hash-route (parse/subscribe/navigateTo/goBack/replaceHash), use-api-query
+   293→  (TanStack wrapper over api/apiGet from @/lib/api — IMPORT ONLY, retry:false, useApiMutation
+   294→  + postJson/patchJson/deleteJson helpers), use-session (/api/v1/auth/me, error→unauth,
+   295→  logout() clears query cache), use-breakpoint (lg 1024 desktop), use-mounted
+   296→  (useSyncExternalStore — hydration-safe, lint-clean).
+   297→- App shell: nav.ts (ADMIN/RESIDENT NavItem arrays w/ bottomNav + desktop groups exactly per
+   298→  spec; bottomNavItems/sidebarGroups/navItemByKey helpers), router.ts (resolveRoute: sections,
+   299→  views, #/admin/residents/:id → resident360 w/ param, unknown→role default, useRoute gates
+   300→  URL normalization until session resolved so deep links survive), AppRoot.tsx (loading curtain
+   301→  → AuthScreen → role shell; page transitions keyed by route (fade+8px rise 240ms, reduced
+   302→  motion honored); AppBar+BottomNav mobile / Sidebar lg+ / lg:pl-[260px]; max-w-1400px content;
+   303→  sticky footer mt-auto: institution · ticking clock in institution tz (30s) · Liquid Glass
+   304→  v0.1 chip; bell polls /api/v1/notifications?unread=1 every 30s — count derived defensively
+   305→  (graceful when 404); admin mobile "More" → MoreSheet; unknown/cross-role hash renders role
+   306→  default + replaceState normalizes URL), providers.tsx (next-themes class/system, QueryClient
+   307→  retry:false, sonner Toaster glass-skinned).
+   308→- AuthScreen: desktop split-screen (brand panel: auth-bg image 13% under gradients + logo +
+   309→  "Aurora Mess" + tagline + 3 quiet feature rows; right: GlassCard strong w/ SegmentedControl).
+   310→  Sign-in: mapped error copy for INVALID_CREDENTIALS/ACCOUNT_PENDING/ACCOUNT_REJECTED +
+   311→  generic; password reveal; loading button. Register: fullName/email/phone/room/password/
+   312→  confirm, client validation mirrors lib/validation (password ≥10 + upper/lower/digit),
+   313→  policies from GET /api/v1/auth/policies with unknown-shape normalization; when endpoint
+   314→  missing (current state) → amber notice + local fallback acknowledgement checkbox (not sent);
+   315→  ApiClientError.fields → per-field errors; success → "Application submitted — waiting for
+   316→  approval" screen. Dev seed panel (spec §191): collapsible dashed DEV-only block listing
+   317→  admin@messtest.in/Admin#12345 + sahid@messtest.in/Resident#12345 with Fill buttons (sign-in
+   318→  side only). Spring entrance (fade+rise), reduced-motion respected.
+   319→- layout.tsx: Inter (next/font/google, 400-700, display swap, tabular-nums via .kpi-num) +
+   320→  Geist Mono, ThemeProvider/QueryClient/Toaster via Providers, viewport metadata (viewportFit
+   321→  cover, themeColor light #F5F3ED / dark #0C0F13), title "Aurora Mess", <div class="app-bg"/>
+   322→  outside content. page.tsx: thin server component → <AppRoot/>.
+   323→- Stub views: all 16 admin + 7 resident files via shared stub-view helper (PageHeader + KPI
+   324→  skeleton grid + "Coming in the next build step" GlassCard). resident360 accepts { id }.
+   325→- VERIFIED (agent-browser + VLM): SSR 200 HTML with app-bg + curtain; /auth/me 404 →
+   326→  AuthScreen renders (no crash loop); mocked session → admin & resident shells render
+   327→  (sidebar groups, bottom nav, AppBar badge 3 unread, footer clock); deep links survive auth
+   328→  gate (#/admin/meals, #/admin/residents/res_abc123 → "Resident 360°" w/ param visible);
+   329→  MoreSheet navigates + closes; register tab + policy fallback notice; seed Fill buttons
+   330→  populate inputs; 320px viewport: NO horizontal scroll, 44px+ targets; dark mode fully
+   331→  designed (checked light+dark screenshots + WCAG contrast audit via canvas sRGB: warning
+   332→  4.36→5.0:1 after token fix, all others ≥4.99 light / ≥6.9 dark).
+   333→- bun run lint → clean ✓; tsc --noEmit → clean for src/** (pre-existing scaffold errors only
+   334→  in examples/ + skills/, untouched); dev.log clean, GET / 200.
+   335→
+   336→Stage Summary:
+   337→- Liquid Glass design system + full app shell + auth screens + all stub views are LIVE at `/`.
+   338→- API-independent: every endpoint miss (auth/me, policies, notifications) degrades gracefully.
+   339→- Frontend contracts for later steps: useApiQuery/useApiMutation conventions, GlassCard/
+   340→  KpiCard/StatusBadge/SegmentedControl/GlassToggle/GlassButton/FilterSheet/ConfirmDialog/Money
+   341→  primitives, nav.ts keys (admin-* / app-* / admin-resident360), route hash format
+   342→  #/<area>/<view>[/:id]. View agents replace src/components/app/{admin,resident}/*.tsx files
+   343→  ONLY — shell, primitives and tokens are stable.
+   344→- Known approximations: footer "Server time" renders the client clock in the institution
+   345→  timezone (swap to /api/v1/health time when it ships); use-toast.ts (shadcn) retained but
+   346→  superseded by sonner Toaster in providers.
+   347→
+   348→---
+   349→Task ID: 1-e (supplement)
+   350→Agent: Main Orchestrator (Z.ai Code)
+   351→Task: Financial kernel + policy models (shared by meal engine, payments, expenses, billing)
+   352→
+   353→Work Log:
+   354→- Added models PolicyExemption + PasswordResetToken to schema; db push synced.
+   355→- src/lib/domain/ledger.ts (FROZEN): ensureAccounts (chart: CASH, RESIDENT_FUNDS,
+   356→  MESS_EXPENSE, MEAL_CHARGE_INCOME, GUEST_INCOME, REFUND_PAYABLE), postJournal (balanced
+   357→  double-entry, tx-aware, validates Dr=Cr), getAccountBalances, reconcileInstitution.
+   358→- src/lib/domain/funds.ts (FROZEN): residentFundsSummary (credits/pending/charges/refunds/
+   359→  carryForward/available/amountToPay/deficit + policyState EXEMPTED|AVAILABLE|GRACE_PERIOD|
+   360→  RESTRICTED w/ grace anchor = oldest unsettled bill dueDate + graceDays), isMealRestricted.
+   361→- Accounting decision: PENDING payments do NOT add funds until approved; bill generation
+   362→  posts Dr RESIDENT_FUNDS / Cr MEAL_CHARGE_INCOME (charges); guest bills post to GUEST_INCOME;
+   363→  ISSUE_REFUND posts Dr RESIDENT_FUNDS / Cr CASH; CARRY_FORWARD records only.
+   364→
+   365→Stage Summary:
+   366→- Task 2 (design system/shell/auth UI) COMPLETE — 53 files, page renders 200, lint clean.
+   367→- Kernel ready: all backend agents import @/lib/domain/ledger + @/lib/domain/funds (read/write
+   368→  via these ONLY — do not reimplement). postJournal MUST be called inside your $transaction.
+   369→
+   370→---
+   371→Task ID: 3-a
+   372→Agent: Backend Engineer — auth / users / communications
+   373→Task: REST API for auth, resident lifecycle, notifications, announcements, profile, settings,
+   374→policies, search, audit trail, file serving, health probes (Next.js 16 App Router + Prisma/SQLite).
+   375→
+   376→Work Log:
+   377→- 25 route files created under src/app/api/v1/, ALL wrapped in route() from @/lib/auth/guard
+   378→  (auth modes PUBLIC/ANY/ADMIN/RESIDENT; ctx = {req, params, user, institutionId, requestId});
+   379→  inputs zod-validated via parseBody + a local safeParse helper for query strings; all errors via
+   380→  ApiError/CODES envelopes; every sensitive mutation audited in-transaction + user notifications
+   381→  through appendOutbox("NOTIFICATION", {...}).
+   382→- AUTH: register (rate 5/h/IP; policy-acceptance rows verified against ACTIVE policies of the
+   383→  first-active institution; EMAIL_TAKEN 409 on unique violation; PENDING_APPROVAL + statusHistory
+   384→  + audit RESIDENT_REGISTERED), login (8/15min/IP + 5/15min/email pre-lookup; scrypt timing
+   385→  equalizer; ACCOUNT_PENDING/REJECTED/INACTIVE gates; createSession rotation — cookie set on the
+   386→  ok() NextResponse passthrough), logout (revokeSession), me (user+profile+institution),
+   387→  policies (public, latest versions; [] when none).
+   388→- RESIDENT LIFECYCLE (admin): list (q/status/cursor/limit=25; profile + parallel
+   389→  residentFundsSummary for billable statuses; KPI meta {total=ACTIVE|INACTIVE|CHANGES_REQUESTED,
+   390→  active, pending}), 360° view (user, profile, statusHistory, funds, payments×10, bills×5 w/ line
+   391→  counts, tasks×5, leave×5, audit ×15 — all Promise.all), approve (→ACTIVE, membershipFrom=now if
+   392→  null), request-changes/reject/deactivate {reason} (audit + reason-bearing notifications,
+   393→  revokeAllUserSessions on reject/deactivate), activate, membership PATCH (from/until ISO|null;
+   394→  closed-period guard: from < any BILLED period start → VALIDATION_FAILED 409 "Changing
+   395→  membership into a closed billing period is restricted." — period start computed with
+   396→  zonedTimeToUtc in institution tz).
+   397→- COMMS: notifications GET (sweepOutbox() FIRST, failures swallowed; ?unread=1; cursor
+   398→  "<createdAtISO>~<id>"; meta {unreadCount, nextCursor}), read-all, [id]/read (owner-only 404);
+   399→  announcements GET (target EVERYONE|role, publishAt<=now, unexpired, pinned first, publishAt desc).
+   400→- ADMIN PLATFORM: settings GET/PATCH (name/timezone[Intl-validated]/currency; settings +
+   401→  security blocks; MONEY INPUTS AS DECIMAL STRINGS "1500.50" → parseDecimalToMinor; only changed
+   402→  fields audited SETTINGS_UPDATED w/ before/after; invalidateInstitutionCache()), policies
+   403→  GET/POST (immutable PolicyVersion chain, v1 or bump; audit POLICY_PUBLISHED), audit GET
+   404→  (entityType/entityId/action filters + cursor, limit 50, metadataJson parsed).
+   405→- SEARCH (authorization-aware §76): q 2-60 chars; ADMIN → residents/payments/bills/expenses/
+   406→  tasks (≤5 per group, parallel); RESIDENT → ONLY own payments/bills/tasks/leave — cannot
+   407→  discover other residents. FILES /[id]: bytes + content-type + nosniff + inert filename;
+   408→  admin | uploader | resident whose own payment/task-submission proof references it; else 404
+   409→  (existence never leaked); never lists. HEALTH: live (200 {ok}); ready (db count → 200 | 503).
+   410→- VERIFIED end-to-end with a throwaway fixture (unique ZZ-TEST-3A institution, admin, policy v1,
+   411→  resident via the real register endpoint): pending login gate, KPI meta, approve→notification
+   412→  sweep delivery, session revocation on deactivate (old cookie → 401 immediately), settings
+   413→  "1500.50"→150050 minor flowing into funds thresholdMinor, policy v1→v2 bump visible on public
+   414→  endpoint, membership closed-period rejection with exact spec message, state-machine 409s,
+   415→  ownership 404s, FORBIDDEN role gate, logout. Fixture then surgically deleted (by
+   416→  institutionId); DB returned to empty (ready: institutions=0, policies: []) for the seed task.
+   417→- bun run lint → clean ✓. tsc --noEmit: 0 errors in my 25 files (remaining errors are
+   418→  pre-existing scaffold examples/ + skills/ or other agents' in-flight files — untouched).
+   419→- INCIDENT + OPERATOR NOTE: the shared dev server was OOM-killed by the kernel (~20:29,
+   420→  next-server anon-rss ~2.5GB of 4GB sandbox) while hot-compiling several agents' routes at
+   421→  once. Restored with the SAME command/port/log via `setsid -f bash -c 'bun run dev'` and
+   422→  updated .zscripts/dev.pid. LESSON for all agents: background processes spawned from a tool
+   423→  command are process-group-killed when the command ends — always use setsid (nohup+disown is
+   424→  NOT enough); and keep an eye on memory when many routes compile simultaneously.
+   425→
+   426→Deviations (documented):
+   427→1. register acceptances min-1 enforced only when ACTIVE policies exist (bootstrap-empty case
+   428→   accepts [] — matches frontend fallback checkbox; strict min-1 otherwise).
+   429→2. Status-machine violations → VALIDATION_FAILED with HTTP 409 (400 for malformed input).
+   430→3. Extra audit codes RESIDENT_REGISTERED / PROFILE_UPDATED (low-noise, high trail value); no
+   431→   login/logout audit per task guidance (rate limits cover).
+   432→4. /agent-ctx at filesystem root is read-only in this sandbox — per-task records live in
+   433→   /home/z/my-project/agent-ctx/{taskId}-{agent}.md.
+   434→
+   435→Stage Summary:
+   436→- Auth + user lifecycle + comms + platform-admin backend is live and verified on :3000.
+   437→- Frontend contracts available now: /api/v1/auth/* (register/login/logout/me/policies),
+   438→  /api/v1/notifications (+read-all, [id]/read), /api/v1/announcements, /api/v1/me/profile,
+   439→  /api/v1/admin/residents(+[id]/approve|request-changes|reject|deactivate|activate|membership),
+   440→  /api/v1/admin/settings, /api/v1/admin/policies, /api/v1/search, /api/v1/admin/audit,
+   441→  /api/v1/files/[id], /api/v1/health/{live,ready}. Envelope {ok,data,meta|error{code,message,
+   442→  fields,requestId}} everywhere; money always Int paise (decimal-string inputs on settings).
+   443→- Awaiting seed (institution Aurora Residency Mess, policies, admin@messtest.in, residents incl.
+   444→  sahid@messtest.in + pending newres@messtest.in) to light up the login screen end-to-end.
+   445→
+   446→---
+   447→Task ID: 3-b, 3-c (backend meals + finance/formula/billing)
+   448→Agent: full-stack-developer agents (completed via orchestrator verification)
+   449→Task: Meal engine, tasks, guest/leave/calendar + finance/formula/billing backend
+   450→
+   451→Work Log:
+   452→- 87 route files under src/app/api/v1/ (all verified responding; auth envelopes correct).
+   453→- Domain libs created by agents: meal-engine.ts, billing.ts, notify.ts, activity.ts, list.ts,
+   454→  serialize.ts, meal-definition-schema.ts, http.ts + formula/{ast,parser,evaluator,variables,
+   455→  period-variables,versions,nl}.ts (nl.ts uses z-ai-web-dev-sdk LLM for NL→AST with validation).
+   456→- NOTE: prisma format (run by an agent) inverted User↔UserProfile relation: FK now lives on
+   457→  User.userProfileId; UserProfile.userId is a plain column (agents' code sets both). Register
+   458→  creates profile then links — matches current code.
+   459→- Orchestrator added 2 missing routes: admin/announcements (GET+POST w/ preview), admin/task-submissions (GET review list).
+   460→- Fixed admin dashboard NaN guard (mealCharge → null when not finite).
+   461→
+   462→Stage Summary:
+   463→- Backend COMPLETE: auth+users+comms (3-a), meals+tasks (3-b), finance+formula+billing (3-c).
+   464→- Seed data live: admin@messtest.in/Admin#12345, residents sahid/riya/arjun/meera/farhan@messtest.in
+   465→  (Resident#12345), pending newres@messtest.in. Institution Asia/Kolkata INR. Prev month BILLED
+   466→  (meal charge ₹48.71, bills+lines+journals), current month OPEN. Pending items for demo flows:
+   467→  2 pending payments (sahid ₹2,000 UPI; meera ₹1,000 CASH), 1 pending leave (farhan), 1 submitted
+   468→  task (meera rice ₹2,750), 1 assigned task (sahid), 1 pending expense (₹1,750 veg), pending
+   469→  resident approval (newres), 1 admin meal override (sahid Dinner today OFF), guest meal tomorrow
+   470→  (sahid ×2), calendar events (festival, kitchen maintenance), announcements pinned.
+   471→- Verified via curl: login/me/dashboard/resident meals all working with envelopes.
+   472→
+   473→---
+   474→Task ID: 5-a, 5-b
+   475→Agent: full-stack-developer agents (completed; orchestrator verified + lint-fixed)
+   476→Task: Admin views (16 files) + resident views (7 files) — real API wiring
+   477→
+   478→Work Log:
+   479→- ALL views implemented against live APIs: admin (dashboard w/ needs-attention+greeting,
+   480→  meals w/ override, payments w/ review dialog + AI panel, residents + 360, funds,
+   481→  expenses w/ item repeater, meal-configuration 6-step wizard, formulas NL+formula editor
+   482→  w/ preview-before-save, billing readiness+arithmetic+generate+adjustments, tasks w/
+   483→  submission review, calendar w/ impact preview, announcements w/ critical preview,
+   484→  notifications, settings w/ theme+policy publishing, audit w/ expandable before/after).
+   485→- Resident: dashboard (greeting, KPIs, today's meals w/ cutoff countdown), meals
+   486→  (agenda/day, optimistic toggle w/ rollback, guest dialog w/ §153 preview, leave w/
+   487→  preview counts), billing (calculation provenance, pay dialog), payments, tasks
+   488→  (accept/reject/submit w/ verification state), profile, notifications.
+   489→- Orchestrator fixed lint errors: static icon wrappers (icons.tsx), setState-during-render
+   490→  patterns in audit/billing, use-now ref access, unused directives.
+   491→
+   492→Stage Summary:
+   493→- Full SPA at `/` hash-routed, both roles, verified live in agent-browser.
+   494→
+   495→---
+   496→Task ID: 6
+   497→Agent: Main Orchestrator (Z.ai Code)
+   498→Task: AI integrations — LLM formula NL + VLM payment proof preview
+   499→
+   500→Work Log:
+   501→- LLM natural-language formula parsing VERIFIED end-to-end (spec §49): input
+   502→  "Subtract guest income from total market cost, then divide the result by consumed
+   503→  resident meals." → validated AST + "I understood this as (Total Market Cost − Guest
+   504→  Income) ÷ Resident Consumed Meals" + worked example with current data. UI shows
+   505→  preview BEFORE save; nothing executes unvalidated.
+   506→- VLM endpoint POST /api/v1/admin/ai/proof-preview (z-ai-web-dev-sdk createVision,
+   507→  backend-only): reads stored proof image, extracts {amount, method, reference, summary}
+   508→  as SUGGESTION for the admin; audited AI_PROOF_PREVIEWED; rate-limited; never mutates.
+   509→  Wired into admin payments review dialog ("AI assist — Read proof" panel w/ disclaimer).
+   510→- VLM also used for §311 FINAL VISUAL QUALITY GATE on screenshots (see Task 7).
+   511→
+   512→Stage Summary:
+   513→- 3 skills integrated: image-generation (brand assets), LLM (formula NL), VLM (proof
+   514→  reading + design QA). All backend-side per environment rules.
+   515→
+   516→---
+   517→Task ID: 7
+   518→Agent: Main Orchestrator (Z.ai Code)
+   519→Task: Integration QA + Agent Browser E2E verification + fixes
+   520→
+   521→Work Log (E2E verified in agent-browser with seeded data):
+   522→- Resident flows: login (Sahid) → dashboard greeting/today's meals/pinned/activity →
+   523→  meals agenda (locked past meals, admin-override badge, ON_LEAVE) → toggle ON→OFF→ON
+   524→  with server confirmation → guest meal dialog (exact §153 preview: your meal/guests/
+   525→  total/₹165/cutoff) → submit + confirmation. Logout clean.
+   526→- Admin flows: login → dashboard needs-attention aggregation (all 6 items) → payments
+   527→  review dialog (balance summary, proof) → approve ₹1,000 (confirm dialog) + ₹2,000 →
+   528→  verified journals Dr CASH/Cr RESIDENT_FUNDS + PAYMENT_APPROVED audits + notifications.
+   529→  Expenses: pending → approve (journal posted). Tasks: submission review → approve →
+   530→  official expense EXP-…-0007 created w/ journal + sourceTaskSubmissionId link (dup-money
+   531→  guard). Billing: readiness all 10 checks ✓ + arithmetic 6+7=13 → GENERATE → 5 bills
+   532→  with provenance lines, immutable snapshot (sha256), 10 BILL journals, period BILLED.
+   533→- Formula NL editor UI: Plain Language mode → Understand → LLM interpretation preview.
+   534→- Responsive: 320×568 scrollWidth=320 (no horizontal overflow ✓), bottom nav, sticky
+   535→  footer (mt-auto pattern; pushes naturally on long pages). Dark mode designed variant.
+   536→- VLM §311 gate: initial 6.5/10 → enriched .app-bg gradients (visible refraction) →
+   537→  7.5/10. Framer-motion color-mix warnings are cosmetic.
+   538→
+   539→BUGS FOUND + FIXED during verification:
+   540→1. Billing generation deadlock: guard set status=CLOSING before in-tx readiness re-run
+   541→   → check-1 "period open" always failed. FIX: status stays OPEN during run;
+   542→   generationState=null→CLOSING claims the run (concurrent-safe), final update →BILLED.
+   543→2. Seed formula AST used spec notation (type:"divide") but evaluator expects {type:"op",
+   544→   op:"/"}. FIX: seed rewritten + evaluator now throws FORMULA_INVALID on unknown nodes
+   545→   (never returns undefined silently).
+   546→3. Readiness summary mealChargeMinor undefined→NaN display. FIX: null-guards (== null +
+   547→   Number.isFinite) in readiness route + dashboard.
+   548→4. Snapshot profile query used inverted User↔Profile relation. FIX: profiles fetched via
+   549→   user query include.
+   550→5. admin/task-submissions used non-existent Task.assignedResident relation. FIX: batch
+   551→   resident lookup.
+   552→6. 6 react-hooks lint errors (components-during-render etc.) fixed via icons.tsx wrappers
+   553→   + set-state-during-render patterns.
+   554→7. prisma format had inverted User↔UserProfile relation (FK on User.userProfileId) —
+   555→   all code adapted (documented).
+   556→
+   557→Final state: dev server 200, lint CLEAN, all E2E flows verified, DB re-seeded to
+   558→pristine demo state (Aug BILLED, Sep OPEN, pending items for demo).
+   559→
+   560→Stage Summary:
+   561→- The system satisfies the spec's core invariants: no double money (unique guards),
+   562→  immutable history (snapshots/journals/versions), server-time cutoffs, balanced
+   563→  double-entry ledger, append-only audit, authorization on every route, arithmetic
+   564→  confirmation before billing.
+   565→
+   566→---
+   567→Task ID: 8
+   568→Agent: Main Orchestrator (Z.ai Code)
+   569→Task: User report — "after sign in it not going to next page" (login succeeds but app stays on AuthScreen)
+   570→
+   571→Work Log:
+   572→- Reproduced via dev.log forensics: `POST /api/v1/auth/login 200` immediately followed by
+   573→  `GET /api/v1/auth/me 401` with NO Session SELECT query (early exit at !token) — the browser
+   574→  never sent the session cookie back. curl round-trip (login → cookie → /auth/me) worked fine.
+   575→- ROOT CAUSE: the sandbox preview panel embeds the app in a cross-site (third-party) iframe.
+   576→  Browsers reject `SameSite=Lax` cookies set in third-party iframe contexts, so login 200'd
+   577→  server-side while the cookie was silently dropped → /auth/me 401 → useSession sees no user →
+   578→  AppRoot keeps rendering AuthScreen ("not going to next page").
+   579→- FIX (dual-layer, in src/lib/auth/session.ts + login route + client):
+   580→  1. Dual Set-Cookie headers for mes_session (Lax first, then SameSite=None; Secure, appended
+   581→     via res.headers.append — exported applySessionCookies()). Over HTTPS the None/Secure cookie
+   582→     replaces the Lax one and is accepted inside iframes; over plain HTTP the Secure variant is
+   583→     discarded by the browser and Lax survives (local dev / agent-browser E2E unaffected).
+   584→  2. Bearer fallback transport for browsers that block ALL third-party cookies (Safari ITP):
+   585→     /api/v1/auth/login now returns `sessionToken` in the envelope; client persists it in
+   586→     localStorage (mes_session_token, helpers in src/lib/api.ts) and attaches
+   587→     `Authorization: Bearer` on every api()/apiGet() call; server getSessionUser resolves
+   588→     cookie first, bearer second. Rotation on login revokes old cookie AND bearer sessions;
+   589→     logout (revokeSession) revokes both + dual clear headers; client clears the stored token
+   590→     on logout and on any 401 (except login/register credential entries).
+   591→- Verified via curl: cookie-only 200, bearer-only 200 (iframe simulation), both 200, no-auth
+   592→  401, admin dashboard via bearer 200, logout revokes both transports (401 after), re-login
+   593→  rotation kills old bearer (401) while new token 200.
+   594→- Verified via agent-browser (lint clean, zero console/page errors):
+   595→  resident sign-in via UI → navigates to #/app/dashboard ("Good Morning, Sahid", sidebar,
+   596→  notifications 4 unread, localStorage token stored); cookies cleared + reload → STILL signed
+   597→  in via bearer (auth/me 200 — the exact user bug scenario, previously impossible); logout →
+   598→  auth screen with server-side revocation; pristine browser (no cookie/no token) → login →
+   599→  dashboard → Meals page navigation (#/app/meals, data loads, GET /api/v1/meals 200).
+   600→- NOTE: login rate limits (8/15min/IP, 5/15min/email, in-memory) are per client key — local
+   601→  testing exhausted the admin email quota temporarily (429 renders correctly in the UI).
+   602→  User-facing key differs (comes through gateway), so user sign-in is unaffected.
+   603→
+   604→Stage Summary:
+   605→- Sign-in now works in ALL contexts: top-level HTTPS, cross-site preview iframe (cookie
+   606→  None/Secure), and full third-party-cookie-blocked browsers (bearer). Files touched:
+   607→  src/lib/auth/session.ts (dual Set-Cookie, bearer resolution, both-transport revoke/rotate),
+   608→  src/app/api/v1/auth/login/route.ts (returns sessionToken), src/lib/api.ts (token storage +
+   609→  Authorization header + 401 cleanup), src/components/app/AuthScreen.tsx (persist token),
+   610→  src/hooks/use-session.ts (clear token on logout). No schema/DB changes.
+
+[showing lines 1-610 of 611; use offset=611 with limit to continue reading]

@@ -1,0 +1,727 @@
+     1→/**
+     2→ * THE MEAL ENGINE — deterministic state precedence (spec §24-36, §28).
+     3→ *
+     4→ * Materialization is LAZY (documented decision): meal_instances and
+     5→ * resident_meals rows are created on demand when a resident or admin queries a
+     6→ * date range — never eagerly rewritten. Historical rows are never mutated by
+     7→ * definition edits (immutable MealDefinitionVersion snapshots).
+     8→ *
+     9→ * Precedence (evaluateResidentMeal — THE order, spec §28):
+    10→ *   !visible → NOT_AVAILABLE/NOT_VISIBLE
+    11→ *   calendarDisabled → NOT_AVAILABLE/CALENDAR_DISABLED
+    12→ *   joinedAfterCutoff / membershipInactive → NOT_AVAILABLE/JOINED_AFTER_CUTOFF|MEMBERSHIP_INACTIVE
+    13→ *   onLeave → ON_LEAVE/LEAVE_APPROVED
+    14→ *   restricted (deficit policy) → NOT_AVAILABLE/POLICY_RESTRICTED
+    15→ *   adminOverride set → that state/ADMIN_OVERRIDE
+    16→ *   selected ?? baseline → RESIDENT_SELECTION | BASELINE_DEFAULT
+    17→ *
+    18→ * Server time is authoritative for every cutoff/lock decision (spec §16).
+    19→ */
+    20→import { db } from "@/lib/db";
+    21→import { getInstitution, type InstitutionContext } from "@/lib/institution";
+    22→import { isMealRestricted } from "@/lib/domain/funds";
+    23→import { addDaysToKey, computeCutoffAt, computeServiceWindow, weekdayOfKey } from "@/lib/time";
+    24→import { ApiError, CODES } from "@/lib/errors";
+    25→
+    26→type Client = any; // prisma client or interactive transaction client
+    27→
+    28→export const DAY_MS = 86_400_000;
+    29→
+    30→/* ----------------------------------------------------------------------------
+    31→ * Small pure helpers
+    32→ * ------------------------------------------------------------------------- */
+    33→
+    34→/** "YYYY-MM-DD" of a UTC date (serviceDate is stored as local-date-midnight-UTC). */
+    35→export function keyOfUtcDate(d: Date): string {
+    36→  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+    37→}
+    38→
+    39→/** Floor any instant to its UTC calendar-day midnight. */
+    40→export function utcDayFloor(d: Date): Date {
+    41→  return new Date(Math.floor(d.getTime() / DAY_MS) * DAY_MS);
+    42→}
+    43→
+    44→/** Calendar day count of an inclusive [fromKey, toKey] range. */
+    45→export function dayCountBetween(fromKey: string, toKey: string): number {
+    46→  if (fromKey > toKey) return -1;
+    47→  return Math.round((localMidnight(toKey).getTime() - localMidnight(fromKey).getTime()) / DAY_MS) + 1;
+    48→}
+    49→
+    50→function localMidnight(key: string): Date {
+    51→  const [y, m, d] = key.split("-").map(Number);
+    52→  return new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+    53→}
+    54→
+    55→/** True when the day (UTC-midnight) is covered by [start,end] of a dated row. */
+    56→export function dayCoveredBy(day: Date, row: { startDate: Date; endDate: Date }): boolean {
+    57→  return utcDayFloor(row.startDate) <= day && utcDayFloor(row.endDate) >= day;
+    58→}
+    59→
+    60→/** Prisma P2002 (unique violation) detector — used by create-skip loops. */
+    61→export function isUniqueViolation(e: unknown): boolean {
+    62→  return typeof e === "object" && e !== null && (e as { code?: string }).code === "P2002";
+    63→}
+    64→
+    65→/** Instance status from server time: OPEN → LOCKED → COMPLETED. */
+    66→export function computeInstanceStatus(now: Date, cutoffAt: Date, serviceEndAt: Date): string {
+    67→  if (now.getTime() < cutoffAt.getTime()) return "OPEN";
+    68→  if (now.getTime() < serviceEndAt.getTime()) return "LOCKED";
+    69→  return "COMPLETED";
+    70→}
+    71→
+    72→/** Resolve institution or fail loudly (misconfiguration is a 500, never silent). */
+    73→export async function requireInstitutionContext(institutionId: string): Promise<InstitutionContext> {
+    74→  const inst = await getInstitution(institutionId);
+    75→  if (!inst) {
+    76→    throw new ApiError(CODES.INTERNAL, "The institution is not configured. Please contact support.", 500);
+    77→  }
+    78→  return inst;
+    79→}
+    80→
+    81→/** Parse "1,2,3" weekdays CSV → Set<number> (Mon=1..Sun=7). */
+    82→export function parseWeekdaysCsv(csv: string | null | undefined): Set<number> {
+    83→  const out = new Set<number>();
+    84→  if (!csv) return out;
+    85→  for (const part of String(csv).split(",")) {
+    86→    const n = Number(part.trim());
+    87→    if (Number.isInteger(n) && n >= 1 && n <= 7) out.add(n);
+    88→  }
+    89→  return out;
+    90→}
+    91→
+    92→/** Effective cutoff offset in days for a cutoff strategy. */
+    93→export function cutoffOffsetFor(def: {
+    94→  cutoffStrategy?: string | null;
+    95→  cutoffOffsetDays?: number | null;
+    96→}): number {
+    97→  if (def.cutoffStrategy === "PREVIOUS_DAY") return 1;
+    98→  if (def.cutoffStrategy === "CUSTOM_OFFSET") {
+    99→    return Math.max(0, Math.min(30, Number(def.cutoffOffsetDays) || 0));
+   100→  }
+   101→  return 0; // SAME_DAY
+   102→}
+   103→
+   104→/** Parse a definition version snapshot JSON (never throws). */
+   105→export function parseSnapshot(json: string | null | undefined): Record<string, any> | null {
+   106→  if (!json) return null;
+   107→  try {
+   108→    const v = JSON.parse(json);
+   109→    return typeof v === "object" && v !== null ? v : null;
+   110→  } catch {
+   111→    return null;
+   112→  }
+   113→}
+   114→
+   115→/** Full config snapshot for a MealDefinitionVersion (immutable). */
+   116→export function snapshotConfig(def: Record<string, any>): Record<string, any> {
+   117→  return {
+   118→    name: def.name,
+   119→    description: def.description ?? null,
+   120→    icon: def.icon ?? null,
+   121→    colorToken: def.colorToken ?? null,
+   122→    mealType: def.mealType ?? "REGULAR",
+   123→    defaultState: def.defaultState ?? "ON",
+   124→    defaultVisible: def.defaultVisible ?? true,
+   125→    pricingStrategy: def.pricingStrategy ?? "FORMULA",
+   126→    fixedPriceMinor: def.fixedPriceMinor ?? null,
+   127→    scheduleStrategy: def.scheduleStrategy ?? "DAILY",
+   128→    weekdaysCsv: def.weekdaysCsv ?? null,
+   129→    specificDate: def.specificDate ? keyOfUtcDate(new Date(def.specificDate)) : null,
+   130→    serviceStartLocal: def.serviceStartLocal ?? "12:30",
+   131→    serviceEndLocal: def.serviceEndLocal ?? "14:00",
+   132→    cutoffStrategy: def.cutoffStrategy ?? "SAME_DAY",
+   133→    cutoffOffsetDays: def.cutoffOffsetDays ?? 0,
+   134→    cutoffLocalTime: def.cutoffLocalTime ?? "09:00",
+   135→    internalNotes: def.internalNotes ?? null,
+   136→  };
+   137→}
+   138→
+   139→/* ----------------------------------------------------------------------------
+   140→ * Evaluation — the deterministic precedence
+   141→ * ------------------------------------------------------------------------- */
+   142→
+   143→export type MealEvalContext = {
+   144→  visible: boolean;
+   145→  calendarDisabled: boolean;
+   146→  onLeave: boolean;
+   147→  restricted: boolean;
+   148→  adminOverride: string | null;
+   149→  selected: string | null;
+   150→  baseline: string;
+   151→  membershipInactive: boolean;
+   152→  joinedAfterCutoff: boolean;
+   153→};
+   154→
+   155→export type EffectiveResult = { effectiveState: string; effectiveReason: string };
+   156→
+   157→/**
+   158→ * THE precedence (spec §28). Pure function — same inputs, same output.
+   159→ * `rm` only supplies adminOverride / selected / baseline via the context.
+   160→ */
+   161→export function evaluateResidentMeal(
+   162→  _rm: Record<string, any> | null,
+   163→  ctx: MealEvalContext
+   164→): EffectiveResult {
+   165→  if (!ctx.visible) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "NOT_VISIBLE" };
+   166→  if (ctx.calendarDisabled) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "CALENDAR_DISABLED" };
+   167→  if (ctx.joinedAfterCutoff) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "JOINED_AFTER_CUTOFF" };
+   168→  if (ctx.membershipInactive) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "MEMBERSHIP_INACTIVE" };
+   169→  if (ctx.onLeave) return { effectiveState: "ON_LEAVE", effectiveReason: "LEAVE_APPROVED" };
+   170→  if (ctx.restricted) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "POLICY_RESTRICTED" };
+   171→  if (ctx.adminOverride != null) return { effectiveState: ctx.adminOverride, effectiveReason: "ADMIN_OVERRIDE" };
+   172→  if (ctx.selected != null) return { effectiveState: ctx.selected, effectiveReason: "RESIDENT_SELECTION" };
+   173→  return { effectiveState: ctx.baseline === "OFF" ? "OFF" : "ON", effectiveReason: "BASELINE_DEFAULT" };
+   174→}
+   175→
+   176→/** Deficit restriction gate: false when the policy is off (spec §43). */
+   177→export async function isRestrictionActive(
+   178→  residentId: string,
+   179→  institutionId: string,
+   180→  client: Client = db
+   181→): Promise<boolean> {
+   182→  const inst = await getInstitution(institutionId);
+   183→  if (!inst) return false;
+   184→  if (!inst.settings.deficitPolicyEnabled || !inst.settings.restrictMealsOnDeficit) return false;
+   185→  return isMealRestricted(residentId, client);
+   186→}
+   187→
+   188→export type EvalInputs = {
+   189→  resident: { id: string; membershipEffectiveFrom: Date | null; membershipEffectiveUntil: Date | null };
+   190→  institutionId: string;
+   191→  instance: { serviceDate: Date; cutoffAt: Date };
+   192→  definition: { defaultVisible?: boolean | null; defaultState?: string | null } | null;
+   193→  snapshot: Record<string, any> | null;
+   194→  rm: { baselineState: string; residentSelectedState: string | null; adminOverrideState: string | null };
+   195→  client?: Client;
+   196→  overrides?: { onLeave?: boolean; skipPolicy?: boolean; skipCalendar?: boolean };
+   197→};
+   198→
+   199→/** Gather live context (calendar, leave, policy, membership) for one resident+instance. */
+   200→export async function buildEvalContext(inputs: EvalInputs): Promise<MealEvalContext> {
+   201→  const client = inputs.client ?? db;
+   202→  const dayStart = utcDayFloor(inputs.instance.serviceDate);
+   203→  const dayEnd = new Date(dayStart.getTime() + DAY_MS - 1);
+   204→
+   205→  let calendarDisabled = false;
+   206→  if (inputs.overrides?.skipCalendar !== true) {
+   207→    const events = await client.calendarEvent.findMany({
+   208→      where: {
+   209→        institutionId: inputs.institutionId,
+   210→        disableMeals: true,
+   211→        startDate: { lte: dayEnd },
+   212→        endDate: { gte: dayStart },
+   213→      },
+   214→    });
+   215→    calendarDisabled = (events as { startDate: Date; endDate: Date }[]).some((e) => dayCoveredBy(dayStart, e));
+   216→  }
+   217→
+   218→  let onLeave = inputs.overrides?.onLeave ?? false;
+   219→  if (inputs.overrides?.onLeave === undefined) {
+   220→    const leaves = await client.leaveRequest.findMany({
+   221→      where: {
+   222→        residentId: inputs.resident.id,
+   223→        status: "APPROVED",
+   224→        startDate: { lte: dayEnd },
+   225→        endDate: { gte: dayStart },
+   226→      },
+   227→    });
+   228→    onLeave = (leaves as { startDate: Date; endDate: Date }[]).some((l) => dayCoveredBy(dayStart, l));
+   229→  }
+   230→
+   231→  const restricted = inputs.overrides?.skipPolicy
+   232→    ? false
+   233→    : await isRestrictionActive(inputs.resident.id, inputs.institutionId, client);
+   234→
+   235→  const from = inputs.resident.membershipEffectiveFrom;
+   236→  const until = inputs.resident.membershipEffectiveUntil;
+   237→
+   238→  const visible =
+   239→    inputs.snapshot?.defaultVisible !== undefined && inputs.snapshot?.defaultVisible !== null
+   240→      ? Boolean(inputs.snapshot.defaultVisible)
+   241→      : inputs.definition?.defaultVisible ?? true;
+   242→
+   243→  return {
+   244→    visible,
+   245→    calendarDisabled,
+   246→    onLeave,
+   247→    restricted,
+   248→    adminOverride: inputs.rm.adminOverrideState ?? null,
+   249→    selected: inputs.rm.residentSelectedState ?? null,
+   250→    baseline: inputs.rm.baselineState === "OFF" ? "OFF" : "ON",
+   251→    membershipInactive: !!(until && until.getTime() < dayStart.getTime()),
+   252→    joinedAfterCutoff: !!(from && from.getTime() > inputs.instance.cutoffAt.getTime()),
+   253→  };
+   254→}
+   255→
+   256→/* ----------------------------------------------------------------------------
+   257→ * 1) ensureInstancesForRange — lazy materialization of meal_instances
+   258→ * ------------------------------------------------------------------------- */
+   259→
+   260→/**
+   261→ * For each ACTIVE MealDefinition (archivedAt null) × each date in range,
+   262→ * create the MealInstance if missing. Idempotent; the UNIQUE
+   263→ * (mealDefinitionId, serviceDate) constraint is the final guard (P2002 → skip).
+   264→ * Returns the number of instances created.
+   265→ */
+   266→export async function ensureInstancesForRange(
+   267→  institutionId: string,
+   268→  tz: string,
+   269→  fromKey: string,
+   270→  toKey: string,
+   271→  client: Client = db
+   272→): Promise<number> {
+   273→  if (fromKey > toKey) return 0;
+   274→  const defs = (await client.mealDefinition.findMany({
+   275→    where: { institutionId, archivedAt: null },
+   276→  })) as Record<string, any>[];
+   277→  if (defs.length === 0) return 0;
+   278→
+   279→  const fromMid = localMidnight(fromKey);
+   280→  const toMid = localMidnight(toKey);
+   281→  const existing = (await client.mealInstance.findMany({
+   282→    where: { institutionId, serviceDate: { gte: fromMid, lte: toMid } },
+   283→    select: { mealDefinitionId: true, serviceDate: true },
+   284→  })) as { mealDefinitionId: string; serviceDate: Date }[];
+   285→  const existingKeys = new Set(existing.map((i) => `${i.mealDefinitionId}|${keyOfUtcDate(i.serviceDate)}`));
+   286→
+   287→  const dates: string[] = [];
+   288→  for (let k = fromKey; k <= toKey && dates.length < 400; k = addDaysToKey(k, 1)) dates.push(k);
+   289→
+   290→  const now = new Date();
+   291→  let created = 0;
+   292→
+   293→  for (const def of defs) {
+   294→    const weekdays = parseWeekdaysCsv(def.weekdaysCsv);
+   295→    const oneTimeKey = def.specificDate ? keyOfUtcDate(new Date(def.specificDate)) : null;
+   296→
+   297→    // Latest immutable version — create v1 snapshot if none exists.
+   298→    let latest = await client.mealDefinitionVersion.findFirst({
+   299→      where: { mealDefinitionId: def.id },
+   300→      orderBy: { version: "desc" },
+   301→    });
+   302→    if (!latest) {
+   303→      latest = await client.mealDefinitionVersion.create({
+   304→        data: {
+   305→          mealDefinitionId: def.id,
+   306→          version: 1,
+   307→          configSnapshotJson: JSON.stringify(snapshotConfig(def)),
+   308→          createdByUserId: null,
+   309→        },
+   310→      });
+   311→    }
+   312→
+   313→    const offsetDays = cutoffOffsetFor(def);
+   314→
+   315→    for (const dateKey of dates) {
+   316→      if (def.scheduleStrategy === "WEEKDAYS" && !weekdays.has(weekdayOfKey(dateKey))) continue;
+   317→      if (def.scheduleStrategy === "ONE_TIME" && oneTimeKey !== dateKey) continue;
+   318→      if (existingKeys.has(`${def.id}|${dateKey}`)) continue;
+   319→
+   320→      const cutoffAt = computeCutoffAt(dateKey, def.cutoffLocalTime, offsetDays, tz);
+   321→      const window = computeServiceWindow(dateKey, def.serviceStartLocal, def.serviceEndLocal, tz);
+   322→      try {
+   323→        await client.mealInstance.create({
+   324→          data: {
+   325→            institutionId,
+   326→            mealDefinitionId: def.id,
+   327→            mealDefinitionVersionId: latest.id,
+   328→            serviceDate: localMidnight(dateKey),
+   329→            serviceStartAt: window.startAt,
+   330→            serviceEndAt: window.endAt,
+   331→            cutoffAt,
+   332→            lockAt: cutoffAt,
+   333→            status: computeInstanceStatus(now, cutoffAt, window.endAt),
+   334→            priceStrategySnapshot: def.pricingStrategy ?? "FORMULA",
+   335→            fixedPriceMinorSnapshot: def.fixedPriceMinor ?? null,
+   336→          },
+   337→        });
+   338→        created++;
+   339→      } catch (e) {
+   340→        if (isUniqueViolation(e)) continue; // concurrent materialization — fine
+   341→        throw e;
+   342→      }
+   343→    }
+   344→  }
+   345→  return created;
+   346→}
+   347→
+   348→/* ----------------------------------------------------------------------------
+   349→ * 2) ensureResidentMeals — lazy materialization of resident_meals
+   350→ * ------------------------------------------------------------------------- */
+   351→
+   352→/**
+   353→ * For each instance in range, create the ResidentMeal row when the resident is
+   354→ * an ACTIVE member whose membership window covers the service date. Not created
+   355→ * for PENDING_APPROVAL/REJECTED/INACTIVE users, GUEST_ONLY definitions, or dates
+   356→ * outside the membership window. Mid-month join after cutoff materializes as
+   357→ * NOT_AVAILABLE/JOINED_AFTER_CUTOFF (spec §30 — no retro ON).
+   358→ * Returns the number of rows created.
+   359→ */
+   360→export async function ensureResidentMeals(
+   361→  residentId: string,
+   362→  institutionId: string,
+   363→  tz: string,
+   364→  fromKey: string,
+   365→  toKey: string,
+   366→  client: Client = db
+   367→): Promise<number> {
+   368→  void tz; // tz not needed here — instances already carry instants
+   369→  if (fromKey > toKey) return 0;
+   370→  const resident = (await client.user.findUnique({ where: { id: residentId } })) as Record<string, any> | null;
+   371→  if (!resident || resident.institutionId !== institutionId) return 0;
+   372→  if (resident.status !== "ACTIVE" || resident.role !== "RESIDENT") return 0;
+   373→
+   374→  const fromMid = localMidnight(fromKey);
+   375→  const toMid = localMidnight(toKey);
+   376→  const instances = (await client.mealInstance.findMany({
+   377→    where: { institutionId, serviceDate: { gte: fromMid, lte: toMid } },
+   378→    include: { definition: true, definitionVersion: true },
+   379→  })) as Record<string, any>[];
+   380→  if (instances.length === 0) return 0;
+   381→
+   382→  const existing = (await client.residentMeal.findMany({
+   383→    where: { residentId, mealInstanceId: { in: instances.map((i) => i.id) } },
+   384→    select: { mealInstanceId: true },
+   385→  })) as { mealInstanceId: string }[];
+   386→  const existingIds = new Set(existing.map((r) => r.mealInstanceId));
+   387→
+   388→  // Bulk context data for the whole range.
+   389→  const disableEvents = (await client.calendarEvent.findMany({
+   390→    where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
+   391→  })) as { startDate: Date; endDate: Date }[];
+   392→  const approvedLeaves = (await client.leaveRequest.findMany({
+   393→    where: { residentId, status: "APPROVED", startDate: { lte: toMid }, endDate: { gte: fromMid } },
+   394→  })) as { startDate: Date; endDate: Date }[];
+   395→  const restricted = await isRestrictionActive(residentId, institutionId, client);
+   396→
+   397→  const from = resident.membershipEffectiveFrom ? new Date(resident.membershipEffectiveFrom) : null;
+   398→  const until = resident.membershipEffectiveUntil ? new Date(resident.membershipEffectiveUntil) : null;
+   399→
+   400→  let created = 0;
+   401→  for (const inst of instances) {
+   402→    if (existingIds.has(inst.id)) continue;
+   403→    if (inst.definition?.mealType === "GUEST_ONLY") continue; // separate guest domain
+   404→
+   405→    const dayStart = utcDayFloor(inst.serviceDate);
+   406→    const dayEnd = new Date(dayStart.getTime() + DAY_MS - 1);
+   407→    if (from && from.getTime() > dayEnd.getTime()) continue; // joins after this day — not a member
+   408→    if (until && until.getTime() < dayStart.getTime()) continue; // membership ended before this day
+   409→
+   410→    const snapshot = parseSnapshot(inst.definitionVersion?.configSnapshotJson);
+   411→    const baseline = snapshot?.defaultState === "OFF" || snapshot?.defaultState === "ON"
+   412→      ? snapshot.defaultState
+   413→      : inst.definition?.defaultState === "OFF" ? "OFF" : "ON";
+   414→    const visible =
+   415→      snapshot?.defaultVisible !== undefined && snapshot?.defaultVisible !== null
+   416→        ? Boolean(snapshot.defaultVisible)
+   417→        : inst.definition?.defaultVisible ?? true;
+   418→
+   419→    const ctx: MealEvalContext = {
+   420→      visible,
+   421→      calendarDisabled: disableEvents.some((e) => dayCoveredBy(dayStart, e)),
+   422→      onLeave: approvedLeaves.some((l) => dayCoveredBy(dayStart, l)),
+   423→      restricted,
+   424→      adminOverride: null,
+   425→      selected: null,
+   426→      baseline: baseline === "OFF" ? "OFF" : "ON",
+   427→      membershipInactive: false, // not possible for rows we create (window checked above)
+   428→      joinedAfterCutoff: !!(from && from.getTime() > inst.cutoffAt.getTime()),
+   429→    };
+   430→    const result = evaluateResidentMeal(null, ctx);
+   431→
+   432→    try {
+   433→      await client.residentMeal.create({
+   434→        data: {
+   435→          institutionId,
+   436→          residentId,
+   437→          mealInstanceId: inst.id,
+   438→          baselineState: ctx.baseline,
+   439→          effectiveState: result.effectiveState,
+   440→          effectiveReason: result.effectiveReason,
+   441→          policyState: restricted ? "RESTRICTED" : null,
+   442→          leaveState: ctx.onLeave ? "ON_LEAVE" : null,
+   443→        },
+   444→      });
+   445→      created++;
+   446→    } catch (e) {
+   447→      if (isUniqueViolation(e)) continue;
+   448→      throw e;
+   449→    }
+   450→  }
+   451→  return created;
+   452→}
+   453→
+   454→/* ----------------------------------------------------------------------------
+   455→ * 3) refreshAndLock — freeze effective state at cutoff (spec §36)
+   456→ * ------------------------------------------------------------------------- */
+   457→
+   458→/**
+   459→ * For every instance in range whose cutoff has passed (cutoffAt <= now):
+   460→ * refresh instance status (LOCKED/COMPLETED) and lock every ResidentMeal that
+   461→ * is not locked yet — evaluating the final effective state at lock time and
+   462→ * writing lockedAt. Runs inside the caller's transaction when passed `client`.
+   463→ */
+   464→export async function refreshAndLock(
+   465→  institutionId: string,
+   466→  tz: string,
+   467→  residentId: string | null,
+   468→  fromKey: string,
+   469→  toKey: string,
+   470→  client: Client = db
+   471→): Promise<{ lockedResidentMeals: number; updatedInstances: number }> {
+   472→  void tz;
+   473→  const empty = { lockedResidentMeals: 0, updatedInstances: 0 };
+   474→  if (fromKey > toKey) return empty;
+   475→
+   476→  const now = new Date();
+   477→  const fromMid = localMidnight(fromKey);
+   478→  const toMid = localMidnight(toKey);
+   479→  const instances = (await client.mealInstance.findMany({
+   480→    where: { institutionId, serviceDate: { gte: fromMid, lte: toMid }, cutoffAt: { lte: now } },
+   481→  })) as Record<string, any>[];
+   482→  if (instances.length === 0) return empty;
+   483→
+   484→  let updatedInstances = 0;
+   485→  for (const inst of instances) {
+   486→    const target = computeInstanceStatus(now, new Date(inst.cutoffAt), new Date(inst.serviceEndAt));
+   487→    if (inst.status !== target) {
+   488→      await client.mealInstance.update({ where: { id: inst.id }, data: { status: target } });
+   489→      updatedInstances++;
+   490→    }
+   491→  }
+   492→
+   493→  const instanceIds = instances.map((i) => i.id);
+   494→  const rms = (await client.residentMeal.findMany({
+   495→    where: {
+   496→      mealInstanceId: { in: instanceIds },
+   497→      lockedAt: null,
+   498→      ...(residentId ? { residentId } : {}),
+   499→    },
+   500→  })) as Record<string, any>[];
+   501→  if (rms.length === 0) return { lockedResidentMeals: 0, updatedInstances };
+   502→
+   503→  // Bulk context for the lock sweep.
+   504→  const instanceRows = (await client.mealInstance.findMany({
+   505→    where: { id: { in: instanceIds } },
+   506→    include: { definition: true, definitionVersion: true },
+   507→  })) as Record<string, any>[];
+   508→  const instById = new Map(instanceRows.map((i) => [i.id, i]));
+   509→
+   510→  const residentIds = [...new Set(rms.map((r) => r.residentId))];
+   511→  const residents = (await client.user.findMany({
+   512→    where: { id: { in: residentIds } },
+   513→  })) as Record<string, any>[];
+   514→  const residentById = new Map(residents.map((r) => [r.id, r]));
+   515→
+   516→  const disableEvents = (await client.calendarEvent.findMany({
+   517→    where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
+   518→  })) as { startDate: Date; endDate: Date }[];
+   519→  const leaves = (await client.leaveRequest.findMany({
+   520→    where: { residentId: { in: residentIds }, status: "APPROVED", startDate: { lte: toMid }, endDate: { gte: fromMid } },
+   521→  })) as { residentId: string; startDate: Date; endDate: Date }[];
+   522→
+   523→  // Policy only when enabled (avoids per-resident funds queries otherwise).
+   524→  const inst = await getInstitution(institutionId);
+   525→  const policyOn = !!inst?.settings.deficitPolicyEnabled && !!inst?.settings.restrictMealsOnDeficit;
+   526→  const restrictedByResident = new Map<string, boolean>();
+   527→  if (policyOn) {
+   528→    for (const rid of residentIds) {
+   529→      restrictedByResident.set(rid, await isMealRestricted(rid, client));
+   530→    }
+   531→  }
+   532→
+   533→  let locked = 0;
+   534→  for (const rm of rms) {
+   535→    const instRow = instById.get(rm.mealInstanceId);
+   536→    const resident = residentById.get(rm.residentId);
+   537→    if (!instRow || !resident) continue;
+   538→    const dayStart = utcDayFloor(new Date(instRow.serviceDate));
+   539→    const from = resident.membershipEffectiveFrom ? new Date(resident.membershipEffectiveFrom) : null;
+   540→    const until = resident.membershipEffectiveUntil ? new Date(resident.membershipEffectiveUntil) : null;
+   541→    const snapshot = parseSnapshot(instRow.definitionVersion?.configSnapshotJson);
+   542→    const visible =
+   543→      snapshot?.defaultVisible !== undefined && snapshot?.defaultVisible !== null
+   544→        ? Boolean(snapshot.defaultVisible)
+   545→        : instRow.definition?.defaultVisible ?? true;
+   546→
+   547→    const ctx: MealEvalContext = {
+   548→      visible,
+   549→      calendarDisabled: disableEvents.some((e) => dayCoveredBy(dayStart, e)),
+   550→      onLeave: leaves.some((l) => l.residentId === rm.residentId && dayCoveredBy(dayStart, l)),
+   551→      restricted: restrictedByResident.get(rm.residentId) ?? false,
+   552→      adminOverride: rm.adminOverrideState ?? null,
+   553→      selected: rm.residentSelectedState ?? null,
+   554→      baseline: rm.baselineState === "OFF" ? "OFF" : "ON",
+   555→      membershipInactive: !!(until && until.getTime() < dayStart.getTime()),
+   556→      joinedAfterCutoff: !!(from && from.getTime() > new Date(instRow.cutoffAt).getTime()),
+   557→    };
+   558→    const result = evaluateResidentMeal(rm, ctx);
+   559→    await client.residentMeal.update({
+   560→      where: { id: rm.id },
+   561→      data: {
+   562→        effectiveState: result.effectiveState,
+   563→        effectiveReason: result.effectiveReason,
+   564→        policyState: ctx.restricted ? "RESTRICTED" : null,
+   565→        leaveState: ctx.onLeave ? "ON_LEAVE" : null,
+   566→        lockedAt: now, // freeze (spec §36)
+   567→      },
+   568→    });
+   569→    locked++;
+   570→  }
+   571→  return { lockedResidentMeals: locked, updatedInstances };
+   572→}
+   573→
+   574→/* ----------------------------------------------------------------------------
+   575→ * 3b) refreshUnlockedEffective — live re-evaluation of unlocked rows
+   576→ * ------------------------------------------------------------------------- */
+   577→
+   578→/**
+   579→ * Re-evaluate every UNLOCKED ResidentMeal in range against live facts
+   580→ * (calendar events, approved leave, deficit policy, membership). Locked rows
+   581→ * are frozen (spec §36) and never touched. Rows whose computed state is
+   582→ * unchanged are not written (idempotent reads). `version` is NOT bumped — the
+   583→ * optimistic-concurrency token only guards resident selections.
+   584→ * Called by the read paths so calendar/leave/policy changes reflect without
+   585→ * eager rewrites (lazy materialization — rows are never rewritten eagerly).
+   586→ */
+   587→export async function refreshUnlockedEffective(
+   588→  institutionId: string,
+   589→  residentId: string | null,
+   590→  fromKey: string,
+   591→  toKey: string,
+   592→  client: Client = db
+   593→): Promise<number> {
+   594→  if (fromKey > toKey) return 0;
+   595→  const fromMid = localMidnight(fromKey);
+   596→  const toMid = localMidnight(toKey);
+   597→  const rms = (await client.residentMeal.findMany({
+   598→    where: {
+   599→      lockedAt: null,
+   600→      ...(residentId ? { residentId } : {}),
+   601→      mealInstance: { institutionId, serviceDate: { gte: fromMid, lte: toMid } },
+   602→    },
+   603→  })) as Record<string, any>[];
+   604→  if (rms.length === 0) return 0;
+   605→
+   606→  const instanceIds = [...new Set(rms.map((r) => r.mealInstanceId))];
+   607→  const instanceRows = (await client.mealInstance.findMany({
+   608→    where: { id: { in: instanceIds } },
+   609→    include: { definition: true, definitionVersion: true },
+   610→  })) as Record<string, any>[];
+   611→  const instById = new Map(instanceRows.map((i) => [i.id, i]));
+   612→
+   613→  const residentIds = [...new Set(rms.map((r) => r.residentId))];
+   614→  const residents = (await client.user.findMany({
+   615→    where: { id: { in: residentIds } },
+   616→  })) as Record<string, any>[];
+   617→  const residentById = new Map(residents.map((r) => [r.id, r]));
+   618→
+   619→  const disableEvents = (await client.calendarEvent.findMany({
+   620→    where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
+   621→  })) as { startDate: Date; endDate: Date }[];
+   622→  const leaves = (await client.leaveRequest.findMany({
+   623→    where: { residentId: { in: residentIds }, status: "APPROVED", startDate: { lte: toMid }, endDate: { gte: fromMid } },
+   624→  })) as { residentId: string; startDate: Date; endDate: Date }[];
+   625→
+   626→  const inst = await getInstitution(institutionId);
+   627→  const policyOn = !!inst?.settings.deficitPolicyEnabled && !!inst?.settings.restrictMealsOnDeficit;
+   628→  const restrictedByResident = new Map<string, boolean>();
+   629→  if (policyOn) {
+   630→    for (const rid of residentIds) {
+   631→      restrictedByResident.set(rid, await isMealRestricted(rid, client));
+   632→    }
+   633→  }
+   634→
+   635→  let updated = 0;
+   636→  for (const rm of rms) {
+   637→    const instRow = instById.get(rm.mealInstanceId);
+   638→    const resident = residentById.get(rm.residentId);
+   639→    if (!instRow || !resident) continue;
+   640→    const dayStart = utcDayFloor(new Date(instRow.serviceDate));
+   641→    const from = resident.membershipEffectiveFrom ? new Date(resident.membershipEffectiveFrom) : null;
+   642→    const until = resident.membershipEffectiveUntil ? new Date(resident.membershipEffectiveUntil) : null;
+   643→    const snapshot = parseSnapshot(instRow.definitionVersion?.configSnapshotJson);
+   644→    const visible =
+   645→      snapshot?.defaultVisible !== undefined && snapshot?.defaultVisible !== null
+   646→        ? Boolean(snapshot.defaultVisible)
+   647→        : instRow.definition?.defaultVisible ?? true;
+   648→
+   649→    const ctx: MealEvalContext = {
+   650→      visible,
+   651→      calendarDisabled: disableEvents.some((e) => dayCoveredBy(dayStart, e)),
+   652→      onLeave: leaves.some((l) => l.residentId === rm.residentId && dayCoveredBy(dayStart, l)),
+   653→      restricted: restrictedByResident.get(rm.residentId) ?? false,
+   654→      adminOverride: rm.adminOverrideState ?? null,
+   655→      selected: rm.residentSelectedState ?? null,
+   656→      baseline: rm.baselineState === "OFF" ? "OFF" : "ON",
+   657→      membershipInactive: !!(until && until.getTime() < dayStart.getTime()),
+   658→      joinedAfterCutoff: !!(from && from.getTime() > new Date(instRow.cutoffAt).getTime()),
+   659→    };
+   660→    const result = evaluateResidentMeal(rm, ctx);
+   661→    const nextPolicyState = ctx.restricted ? "RESTRICTED" : null;
+   662→    const nextLeaveState = ctx.onLeave ? "ON_LEAVE" : null;
+   663→    if (
+   664→      result.effectiveState === rm.effectiveState &&
+   665→      result.effectiveReason === rm.effectiveReason &&
+   666→      nextPolicyState === (rm.policyState ?? null) &&
+   667→      nextLeaveState === (rm.leaveState ?? null)
+   668→    ) {
+   669→      continue; // no change — no write (idempotent reads)
+   670→    }
+   671→    await client.residentMeal.update({
+   672→      where: { id: rm.id },
+   673→      data: {
+   674→        effectiveState: result.effectiveState,
+   675→        effectiveReason: result.effectiveReason,
+   676→        policyState: nextPolicyState,
+   677→        leaveState: nextLeaveState,
+   678→      },
+   679→    });
+   680→    updated++;
+   681→  }
+   682→  return updated;
+   683→}
+   684→
+   685→/* ----------------------------------------------------------------------------
+   686→ * Serializers (stable response shapes shared by routes)
+   687→ * ------------------------------------------------------------------------- */
+   688→
+   689→export type SerializedInstance = {
+   690→  id: string;
+   691→  mealInstanceId: string;
+   692→  name: string;
+   693→  icon: string | null;
+   694→  colorToken: string | null;
+   695→  mealType: string;
+   696→  serviceDate: string;
+   697→  serviceWindow: { startAt: string; endAt: string };
+   698→  cutoffAt: string;
+   699→  status: string;
+   700→  pricing: { strategy: string; fixedPriceMinor: number | null };
+   701→};
+   702→
+   703→export function serializeMealInstance(
+   704→  inst: Record<string, any>,
+   705→  def: Record<string, any> | null | undefined
+   706→): SerializedInstance {
+   707→  return {
+   708→    id: inst.id,
+   709→    mealInstanceId: inst.id,
+   710→    name: def?.name ?? "Meal",
+   711→    icon: def?.icon ?? null,
+   712→    colorToken: def?.colorToken ?? null,
+   713→    mealType: def?.mealType ?? "REGULAR",
+   714→    serviceDate: keyOfUtcDate(new Date(inst.serviceDate)),
+   715→    serviceWindow: {
+   716→      startAt: new Date(inst.serviceStartAt).toISOString(),
+   717→      endAt: new Date(inst.serviceEndAt).toISOString(),
+   718→    },
+   719→    cutoffAt: new Date(inst.cutoffAt).toISOString(),
+   720→    status: inst.status,
+   721→    pricing: {
+   722→      strategy: inst.priceStrategySnapshot ?? "FORMULA",
+   723→      fixedPriceMinor: inst.fixedPriceMinorSnapshot ?? null,
+   724→    },
+   725→  };
+   726→}
+   727→

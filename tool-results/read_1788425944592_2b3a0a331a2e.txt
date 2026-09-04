@@ -1,0 +1,733 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Admin Billing — periods with readiness gates, arithmetic confirmation,
+     5→ * generation results, snapshot views, reopen (48h) and bill adjustments.
+     6→ * GET /admin/billing/periods · GET .../readiness · POST .../generate ·
+     7→ * POST .../reopen · GET /admin/bills · POST /admin/bills/:id/adjustment
+     8→ */
+     9→
+    10→import { useEffect, useMemo, useState } from "react";
+    11→import { AnimatePresence, motion } from "framer-motion";
+    12→import {
+    13→  Banknote,
+    14→  CalendarRange,
+    15→  CheckCircle2,
+    16→  FileSpreadsheet,
+    17→  LockOpen,
+    18→  ReceiptText,
+    19→  RotateCcw,
+    20→  TriangleAlert,
+    21→  XCircle,
+    22→} from "lucide-react";
+    23→import { toast } from "sonner";
+    24→import PageHeader from "@/components/glass/PageHeader";
+    25→import GlassCard from "@/components/glass/GlassCard";
+    26→import StatusBadge from "@/components/glass/StatusBadge";
+    27→import Money from "@/components/glass/Money";
+    28→import EmptyState from "@/components/glass/EmptyState";
+    29→import ErrorState from "@/components/glass/ErrorState";
+    30→import { KpiGridSkeleton, ListSkeleton } from "@/components/glass/LoadingSkeleton";
+    31→import ConfirmDialog from "@/components/glass/ConfirmDialog";
+    32→import SegmentedControl from "@/components/glass/SegmentedControl";
+    33→import SectionHeading from "@/components/glass/SectionHeading";
+    34→import { GlassButton } from "@/components/glass/GlassButton";
+    35→import { useApiQuery, postJson } from "@/hooks/use-api-query";
+    36→import { useSession } from "@/hooks/use-session";
+    37→import { ApiClientError } from "@/lib/api";
+    38→import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+    39→import { cn } from "@/lib/utils";
+    40→import { useApiMetaQuery, errMessage, useInvalidate, metaNum, metaStr } from "./_shared/api";
+    41→import { MoneyField, TextAreaField } from "./_shared/fields";
+    42→import { KpiGrid, KeyValue } from "./_shared/chrome";
+    43→import { fmtDate, fmtDateTime } from "./_shared/format";
+    44→import type { BillingPeriodRow, BillRow } from "./_shared/types";
+    45→
+    46→const PERIODS_PATH = "/api/v1/admin/billing/periods";
+    47→const BILLS_PATH = "/api/v1/admin/bills";
+    48→
+    49→/* ------------------------------------------------------------------ view */
+    50→
+    51→export default function AdminBilling() {
+    52→  const [tab, setTab] = useState<"periods" | "bills">("periods");
+    53→  const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
+    54→
+    55→  const { data: periodsEnvelope, isLoading: periodsLoading, error: periodsError, refetch: periodsRefetch } =
+    56→    useApiMetaQuery<BillingPeriodRow[]>(PERIODS_PATH);
+    57→  const periods = periodsEnvelope?.data ?? [];
+    58→  const periodsMeta = periodsEnvelope?.meta ?? {};
+    59→  const currentPeriodId = typeof periodsMeta.currentPeriodId === "string" ? periodsMeta.currentPeriodId : null;
+    60→
+    61→  // auto-select the current period on first load (set-state-during-render pattern)
+    62→  const [autoSelectedFor, setAutoSelectedFor] = useState<string | null>(null);
+    63→  if (selectedPeriodId == null && currentPeriodId && autoSelectedFor !== currentPeriodId) {
+    64→    setAutoSelectedFor(currentPeriodId);
+    65→    setSelectedPeriodId(currentPeriodId);
+    66→  }
+    67→
+    68→  const selected = periods.find((p) => p.id === selectedPeriodId) ?? null;
+    69→
+    70→  const billsEnvelopeQuery = useApiMetaQuery<BillRow[]>(BILLS_PATH, undefined, {
+    71→    enabled: tab === "bills",
+    72→  });
+    73→  const bills = billsEnvelopeQuery.data?.data ?? [];
+    74→  const billsMeta = billsEnvelopeQuery.data?.meta ?? {};
+    75→
+    76→  if (periodsError) {
+    77→    return (
+    78→      <div className="space-y-6">
+    79→        <PageHeader title="Billing" subtitle="Generate monthly bills from verified data — every number is reconciled first." />
+    80→        <ErrorState
+    81→          code={(periodsError as ApiClientError | undefined)?.code}
+    82→          message={(periodsError as ApiClientError | undefined)?.message}
+    83→          onRetry={() => void periodsRefetch()}
+    84→        />
+    85→      </div>
+    86→    );
+    87→  }
+    88→
+    89→  return (
+    90→    <div className="space-y-5">
+    91→      <PageHeader
+    92→        title="Billing"
+    93→        subtitle="Generate monthly bills from verified data — every number is reconciled first."
+    94→        actions={undefined}
+    95→      />
+    96→
+    97→      <KpiGrid
+    98→        loading={tab === "bills" && billsEnvelopeQuery.isLoading}
+    99→        kpis={[
+   100→          { label: "Total Billed", value: metaStr(billsMeta, "totalBilledFormatted") ?? "—", icon: <FileSpreadsheet />, sub: "All generated bills" },
+   101→          { label: "Total Collected", value: metaStr(billsMeta, "totalCollectedFormatted") ?? "—", icon: <Banknote />, sub: "Payments applied" },
+   102→          { label: "Overdue Bills", value: String(metaNum(billsMeta, "overdueCount") ?? "—"), icon: <TriangleAlert />, sub: "Past due date" },
+   103→        ]}
+   104→      />
+   105→
+   106→      <SegmentedControl
+   107→        aria-label="Billing view"
+   108→        options={[
+   109→          { value: "periods", label: "Periods" },
+   110→          { value: "bills", label: "All Bills" },
+   111→        ]}
+   112→        value={tab}
+   113→        onChange={(v) => setTab(v as "periods" | "bills")}
+   114→      />
+   115→
+   116→      {tab === "periods" ? (
+   117→        <PeriodsTab
+   118→          periods={periods}
+   119→          loading={periodsLoading}
+   120→          currentPeriodId={currentPeriodId}
+   121→          selected={selected}
+   122→          onSelect={(id) => setSelectedPeriodId(id)}
+   123→        />
+   124→      ) : (
+   125→        <BillsTab bills={bills} loading={billsEnvelopeQuery.isLoading} />
+   126→      )}
+   127→    </div>
+   128→  );
+   129→}
+   130→
+   131→/* --------------------------------------------------------------- periods */
+   132→
+   133→function PeriodsTab({
+   134→  periods,
+   135→  loading,
+   136→  currentPeriodId,
+   137→  selected,
+   138→  onSelect,
+   139→}: {
+   140→  periods: BillingPeriodRow[];
+   141→  loading: boolean;
+   142→  currentPeriodId: string | null;
+   143→  selected: BillingPeriodRow | null;
+   144→  onSelect: (id: string) => void;
+   145→}) {
+   146→  if (loading) {
+   147→    return (
+   148→      <div className="space-y-3">
+   149→        <ListSkeleton rows={2} />
+   150→      </div>
+   151→    );
+   152→  }
+   153→
+   154→  if (periods.length === 0) {
+   155→    return <EmptyState icon={CalendarRange} title="No billing periods" description="The first period opens automatically when the mess starts." />;
+   156→  }
+   157→
+   158→  return (
+   159→    <div className="space-y-4">
+   160→      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+   161→        <AnimatePresence initial={false}>
+   162→          {periods.map((p) => {
+   163→            const active = selected?.id === p.id;
+   164→            const isCurrent = p.id === currentPeriodId;
+   165→            return (
+   166→              <motion.div key={p.id} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+   167→                <GlassCard
+   168→                  interactive
+   169→                  onClick={() => onSelect(p.id)}
+   170→                  className={cn("p-4", active && "ring-2 ring-ring/60")}
+   171→                >
+   172→                  <div className="flex items-center justify-between gap-2">
+   173→                    <p className="text-sm font-semibold">{p.monthLabel}</p>
+   174→                    <div className="flex items-center gap-1.5">
+   175→                      {isCurrent && <span className="rounded-pill bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">Current</span>}
+   176→                      <StatusBadge status={p.status} />
+   177→                    </div>
+   178→                  </div>
+   179→                  <p className="kpi-num mt-1.5 text-[12px] text-muted-foreground">
+   180→                    {p.billCount} bill{p.billCount === 1 ? "" : "s"}
+   181→                    {p.mealChargeMinorSnapshot != null && (
+   182→                      <>
+   183→                        {" · charge "}
+   184→                        <Money minor={p.mealChargeMinorSnapshot} plain />
+   185→                      </>
+   186→                    )}
+   187→                  </p>
+   188→                  {p.billedAt && <p className="mt-0.5 text-[11px] text-muted-foreground/75">Billed {fmtDate(p.billedAt)}</p>}
+   189→                </GlassCard>
+   190→              </motion.div>
+   191→            );
+   192→          })}
+   193→        </AnimatePresence>
+   194→      </div>
+   195→
+   196→      {selected && selected.status !== "BILLED" && selected.status !== "REOPENED" && (
+   197→        <ReadinessPanel period={selected} />
+   198→      )}
+   199→      {selected && (selected.status === "BILLED" || selected.status === "REOPENED") && (
+   200→        <BilledPanel period={selected} />
+   201→      )}
+   202→    </div>
+   203→  );
+   204→}
+   205→
+   206→/* ------------------------------------------------------------- readiness */
+   207→
+   208→interface ReadinessData {
+   209→  period: { id: string; year: number; month: number; monthLabel: string; status: string; billedAt: string | null };
+   210→  checks: { key: string; label: string; pass: boolean }[];
+   211→  ready: boolean;
+   212→  summary: {
+   213→    residentCount: number;
+   214→    residentMealCount: number;
+   215→    guestMealCount: number;
+   216→    eligibleExpensesMinor: number;
+   217→    eligibleExpensesFormatted: string;
+   218→    approvedPaymentsMinor: number;
+   219→    approvedPaymentsFormatted: string;
+   220→    guestPriceMinor: number;
+   221→    guestPriceFormatted: string;
+   222→    mealChargeFormatted: string;
+   223→    formulaVersion?: { version: number; expressionSource: string; humanPreview: string } | null;
+   224→  };
+   225→  arithmeticChallenge: { a: number; b: number };
+   226→}
+   227→
+   228→interface GenerateResult {
+   229→  billCount: number;
+   230→  mealChargeMinor: number;
+   231→  mealChargeFormatted: string;
+   232→  totalBilledMinor: number;
+   233→  totalBilledFormatted: string;
+   234→  totalDueMinor: number;
+   235→  totalDueFormatted: string;
+   236→  totalPaymentsAppliedMinor: number;
+   237→  totalPaymentsAppliedFormatted: string;
+   238→}
+   239→
+   240→function ReadinessPanel({ period }: { period: BillingPeriodRow }) {
+   241→  const readinessPath = `${PERIODS_PATH}/${period.id}/readiness`;
+   242→  const { data, isLoading, error, refetch } = useApiQuery<ReadinessData>(readinessPath);
+   243→  const [answer, setAnswer] = useState("");
+   244→  const [generating, setGenerating] = useState(false);
+   245→  const [result, setResult] = useState<GenerateResult | null>(null);
+   246→  const invalidate = useInvalidate();
+   247→
+   248→  if (isLoading) {
+   249→    return (
+   250→      <GlassCard className="space-y-4 p-4 sm:p-6">
+   251→        <SectionHeading>Readiness · {period.monthLabel}</SectionHeading>
+   252→        <ListSkeleton rows={4} />
+   253→      </GlassCard>
+   254→    );
+   255→  }
+   256→
+   257→  if (error || !data) {
+   258→    return (
+   259→      <GlassCard className="p-4 sm:p-6">
+   260→        <SectionHeading>Readiness · {period.monthLabel}</SectionHeading>
+   261→        <div className="mt-3">
+   262→          <ErrorState
+   263→            code={(error as ApiClientError | undefined)?.code}
+   264→            message={(error as ApiClientError | undefined)?.message}
+   265→            onRetry={() => void refetch()}
+   266→          />
+   267→        </div>
+   268→      </GlassCard>
+   269→    );
+   270→  }
+   271→
+   272→  const failed = data.checks.filter((c) => !c.pass);
+   273→  const mealChargeBroken = /NaN/i.test(data.summary.mealChargeFormatted ?? "");
+   274→  const challengeOk = Number(answer) === data.arithmeticChallenge.a + data.arithmeticChallenge.b;
+   275→  const canGenerate = data.ready && challengeOk && !mealChargeBroken;
+   276→
+   277→  async function generate() {
+   278→    setGenerating(true);
+   279→    try {
+   280→      const res = await postJson<GenerateResult>(`${PERIODS_PATH}/${period.id}/generate`, {
+   281→        a: data!.arithmeticChallenge.a,
+   282→        b: data!.arithmeticChallenge.b,
+   283→        answer: Number(answer),
+   284→      });
+   285→      setResult(res);
+   286→      invalidate([PERIODS_PATH, BILLS_PATH, "/api/v1/admin/dashboard", "/api/v1/admin/funds"]);
+   287→      toast.success("Bills generated", { description: `${period.monthLabel} · ${res.billCount} bills · ${res.totalBilledFormatted}` });
+   288→    } catch (err) {
+   289→      toast.error(errMessage(err));
+   290→    } finally {
+   291→      setGenerating(false);
+   292→    }
+   293→  }
+   294→
+   295→  if (result) {
+   296→    return (
+   297→      <GlassCard className="space-y-4 p-4 sm:p-6">
+   298→        <SectionHeading>Billing generated · {period.monthLabel}</SectionHeading>
+   299→        <div className="grid grid-cols-2 gap-3 min-[420px]:grid-cols-4">
+   300→          <KeyValue stacked label="Bills" value={<span className="kpi-num text-lg font-semibold">{result.billCount}</span>} />
+   301→          <KeyValue stacked label="Meal charge" value={<span className="kpi-num text-lg font-semibold">{result.mealChargeFormatted}</span>} />
+   302→          <KeyValue stacked label="Total billed" value={<span className="kpi-num text-lg font-semibold">{result.totalBilledFormatted}</span>} />
+   303→          <KeyValue stacked label="Total due" value={<span className="kpi-num text-lg font-semibold">{result.totalDueFormatted}</span>} />
+   304→        </div>
+   305→        <p className="text-[12px] leading-relaxed text-muted-foreground">
+   306→          A frozen snapshot of every input was stored with a checksum. Residents have been notified. Corrections happen
+   307→          through bill adjustments only.
+   308→        </p>
+   309→        <div className="flex justify-end">
+   310→          <GlassButton variant="secondary" onClick={() => setResult(null)}>
+   311→            Back to readiness
+   312→          </GlassButton>
+   313→        </div>
+   314→      </GlassCard>
+   315→    );
+   316→  }
+   317→
+   318→  return (
+   319→    <GlassCard className="space-y-5 p-4 sm:p-6">
+   320→      <SectionHeading>Readiness · {period.monthLabel}</SectionHeading>
+   321→
+   322→      {/* summary numbers */}
+   323→      <div className="grid grid-cols-2 gap-3 min-[420px]:grid-cols-3 lg:grid-cols-6">
+   324→        <KeyValue stacked label="Residents" value={<span className="kpi-num text-base font-semibold">{data.summary.residentCount}</span>} />
+   325→        <KeyValue stacked label="Resident meals" value={<span className="kpi-num text-base font-semibold">{data.summary.residentMealCount}</span>} />
+   326→        <KeyValue stacked label="Guest meals" value={<span className="kpi-num text-base font-semibold">{data.summary.guestMealCount}</span>} />
+   327→        <KeyValue stacked label="Expenses" value={<span className="kpi-num text-base font-semibold">{data.summary.eligibleExpensesFormatted}</span>} />
+   328→        <KeyValue stacked label="Payments" value={<span className="kpi-num text-base font-semibold">{data.summary.approvedPaymentsFormatted}</span>} />
+   329→        <KeyValue
+   330→          stacked
+   331→          label="Meal charge"
+   332→          value={
+   333→            <span className="kpi-num text-base font-semibold">
+   334→              {mealChargeBroken ? "—" : data.summary.mealChargeFormatted}
+   335→            </span>
+   336→          }
+   337→        />
+   338→      </div>
+   339→      {mealChargeBroken && (
+   340→        <p className="text-[12px] leading-relaxed text-warning">
+   341→          The meal charge can't be computed yet — approve expenses so the formula has numbers to work with.
+   342→        </p>
+   343→      )}
+   344→
+   345→      {/* checklist */}
+   346→      <div>
+   347→        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   348→          Checks {failed.length === 0 ? "— all clear" : `— ${failed.length} blocking`}
+   349→        </p>
+   350→        <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
+   351→          {data.checks.map((check) => (
+   352→            <div
+   353→              key={check.key}
+   354→              className={cn(
+   355→                "glass-inset flex items-center gap-2.5 rounded-md px-3.5 py-2.5",
+   356→                !check.pass && "border border-warning/30"
+   357→              )}
+   358→            >
+   359→              {check.pass ? (
+   360→                <CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
+   361→              ) : (
+   362→                <XCircle className="size-4 shrink-0 text-warning" aria-hidden />
+   363→              )}
+   364→              <p className="min-w-0 flex-1 truncate text-[13px] font-medium" title={check.label}>
+   365→                {check.label}
+   366→              </p>
+   367→            </div>
+   368→          ))}
+   369→        </div>
+   370→      </div>
+   371→
+   372→      {/* arithmetic confirmation */}
+   373→      <div className="glass-inset space-y-3.5 rounded-md p-4">
+   374→        <p className="text-[13px] leading-relaxed text-muted-foreground">
+   375→          This generates immutable bills for every resident. To confirm you're ready, solve:
+   376→        </p>
+   377→        <div className="flex items-center justify-center gap-3">
+   378→          <span className="kpi-num text-2xl font-semibold">{data.arithmeticChallenge.a}</span>
+   379→          <span className="text-2xl font-semibold">+</span>
+   380→          <span className="kpi-num text-2xl font-semibold">{data.arithmeticChallenge.b}</span>
+   381→          <span className="text-2xl font-semibold">=</span>
+   382→          <input
+   383→            type="number"
+   384→            inputMode="numeric"
+   385→            value={answer}
+   386→            onChange={(e) => setAnswer(e.target.value)}
+   387→            aria-label="Answer"
+   388→            className="glass h-11 w-20 rounded-md text-center text-lg font-semibold outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+   389→            placeholder="?"
+   390→          />
+   391→        </div>
+   392→        <div className="flex items-center justify-between gap-3">
+   393→          <p className="text-[11px] leading-relaxed text-muted-foreground">
+   394→            {data.ready ? "All checks pass — waiting on your confirmation." : "Resolve the failing checks above first."}
+   395→          </p>
+   396→          <GlassButton
+   397→            variant="primary"
+   398→            icon={<ReceiptText />}
+   399→            disabled={!canGenerate}
+   400→            loading={generating}
+   401→            onClick={() => void generate()}
+   402→          >
+   403→            Generate bills
+   404→          </GlassButton>
+   405→        </div>
+   406→      </div>
+   407→    </GlassCard>
+   408→  );
+   409→}
+   410→
+   411→/* ---------------------------------------------------------------- billed */
+   412→
+   413→interface PeriodDetailData {
+   414→  period: BillingPeriodRow & { billedAt: string | null; closedAt: string | null; formulaVersionId: string | null };
+   415→  snapshot: {
+   416→    id: string;
+   417→    checksum: string;
+   418→    createdAt: string;
+   419→    residentCount: number;
+   420→    residentMealCount: number;
+   421→    guestMealCount: number;
+   422→    eligibleExpensesFormatted: string;
+   423→    approvedPaymentsFormatted: string;
+   424→    mealChargeMinor: number;
+   425→    mealChargeFormatted: string;
+   426→    formula: { version: number; expression: string; mealChargeMinor: number } | null;
+   427→  } | null;
+   428→  bills: (BillRow & { residentName: string })[];
+   429→}
+   430→
+   431→function BilledPanel({ period }: { period: BillingPeriodRow }) {
+   432→  const { data, isLoading, error, refetch } = useApiQuery<PeriodDetailData>(`${PERIODS_PATH}/${period.id}`);
+   433→  const [reopenOpen, setReopenOpen] = useState(false);
+   434→  const [acting, setActing] = useState(false);
+   435→  const invalidate = useInvalidate();
+   436→  const { institution } = useSession();
+   437→  const tz = institution?.timezone ?? "Asia/Kolkata";
+   438→
+   439→  // 48h reopen window (server enforces; this is a UX hint)
+   440→  const reopenWindowOpen = useMemo(() => {
+   441→    if (!period.billedAt) return false;
+   442→    return Date.now() - new Date(period.billedAt).getTime() < 48 * 3600 * 1000;
+   443→  }, [period.billedAt]);
+   444→
+   445→  async function reopen(reason: string | undefined) {
+   446→    setActing(true);
+   447→    try {
+   448→      await postJson(`${PERIODS_PATH}/${period.id}/reopen`, { reason });
+   449→      invalidate([PERIODS_PATH, BILLS_PATH]);
+   450→      toast.success("Period reopened", { description: "Bills remain authoritative — corrections happen via adjustments." });
+   451→      setReopenOpen(false);
+   452→    } catch (err) {
+   453→      toast.error(errMessage(err));
+   454→    } finally {
+   455→      setActing(false);
+   456→    }
+   457→  }
+   458→
+   459→  if (isLoading) {
+   460→    return (
+   461→      <GlassCard className="space-y-4 p-4 sm:p-6">
+   462→        <SectionHeading>Snapshot · {period.monthLabel}</SectionHeading>
+   463→        <ListSkeleton rows={4} />
+   464→      </GlassCard>
+   465→    );
+   466→  }
+   467→
+   468→  if (error || !data) {
+   469→    return (
+   470→      <GlassCard className="p-4 sm:p-6">
+   471→        <SectionHeading>Snapshot · {period.monthLabel}</SectionHeading>
+   472→        <div className="mt-3">
+   473→          <ErrorState code={(error as ApiClientError | undefined)?.code} message={(error as ApiClientError | undefined)?.message} onRetry={() => void refetch()} />
+   474→        </div>
+   475→      </GlassCard>
+   476→    );
+   477→  }
+   478→
+   479→  return (
+   480→    <GlassCard className="space-y-5 p-4 sm:p-6">
+   481→      <SectionHeading
+   482→        action={
+   483→          reopenWindowOpen ? (
+   484→            <GlassButton variant="destructive" size="sm" icon={<RotateCcw />} onClick={() => setReopenOpen(true)}>
+   485→              Reopen…
+   486→            </GlassButton>
+   487→          ) : (
+   488→            <span className="text-[11px] text-muted-foreground">Reopen window closed</span>
+   489→          )
+   490→        }
+   491→      >
+   492→        Snapshot · {period.monthLabel} · billed {period.billedAt ? fmtDate(period.billedAt) : "—"}
+   493→      </SectionHeading>
+   494→
+   495→      {data.snapshot && (
+   496→        <div className="grid grid-cols-2 gap-3 min-[420px]:grid-cols-4">
+   497→          <KeyValue stacked label="Residents" value={<span className="kpi-num text-base font-semibold">{data.snapshot.residentCount}</span>} />
+   498→          <KeyValue stacked label="Resident meals" value={<span className="kpi-num text-base font-semibold">{data.snapshot.residentMealCount}</span>} />
+   499→          <KeyValue stacked label="Guest meals" value={<span className="kpi-num text-base font-semibold">{data.snapshot.guestMealCount}</span>} />
+   500→          <KeyValue stacked label="Meal charge" value={<span className="kpi-num text-base font-semibold">{data.snapshot.mealChargeFormatted}</span>} />
+   501→          <KeyValue stacked label="Expenses" value={<span className="kpi-num text-base font-semibold">{data.snapshot.eligibleExpensesFormatted}</span>} />
+   502→          <KeyValue stacked label="Payments" value={<span className="kpi-num text-base font-semibold">{data.snapshot.approvedPaymentsFormatted}</span>} />
+   503→          <KeyValue stacked label="Checksum" value={<span className="font-mono text-[11px]">{data.snapshot.checksum}</span>} />
+   504→          <KeyValue stacked label="Formula" value={data.snapshot.formula ? `v${data.snapshot.formula.version}` : "—"} />
+   505→        </div>
+   506→      )}
+   507→
+   508→      {/* bills table */}
+   509→      <div>
+   510→        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   511→          Bills · {data.bills.length}
+   512→        </p>
+   513→        <div className="glass-inset overflow-hidden rounded-md">
+   514→          <div className="hidden grid-cols-[9rem_1fr_7rem_7rem_7rem] gap-2 px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground min-[420px]:grid">
+   515→            <span>Number</span>
+   516→            <span>Resident</span>
+   517→            <span className="text-right">Subtotal</span>
+   518→            <span className="text-right">Paid</span>
+   519→            <span className="text-right">Due</span>
+   520→          </div>
+   521→          <div className="max-h-72 divide-y divide-border/50 overflow-y-auto">
+   522→            {data.bills.map((b) => (
+   523→              <div key={b.id} className="grid grid-cols-2 gap-2 px-3.5 py-2.5 min-[420px]:grid-cols-[9rem_1fr_7rem_7rem_7rem] min-[420px]:items-center">
+   524→                <span className="kpi-num truncate font-mono text-[12px] font-semibold">{b.billNumber}</span>
+   525→                <span className="truncate text-[13px] font-medium">{b.residentName}</span>
+   526→                <span className="text-right text-[13px] min-[420px]:text-right"><Money minor={b.subtotalMinor} /></span>
+   527→                <span className="text-right text-[13px] text-muted-foreground min-[420px]:text-right"><Money minor={b.paymentsMinor} /></span>
+   528→                <span className="flex justify-end">
+   529→                  <StatusBadge status={b.status} label={<Money minor={b.totalDueMinor} plain />} />
+   530→                </span>
+   531→              </div>
+   532→            ))}
+   533→          </div>
+   534→        </div>
+   535→        <p className="kpi-num mt-1.5 text-[11px] text-muted-foreground/75">
+   536→          Generated {data.period.billedAt ? fmtDateTime(data.period.billedAt, tz) : "—"}
+   537→        </p>
+   538→      </div>
+   539→
+   540→      {reopenOpen && (
+   541→        <ConfirmDialog
+   542→          open
+   543→          onOpenChange={(open) => !open && setReopenOpen(false)}
+   544→          title={`Reopen ${period.monthLabel}`}
+   545→          description={
+   546→            <>
+   547→              Reopening marks the period as reopened for review — the generated bills remain authoritative and are never
+   548→              recalculated. Any correction goes through bill adjustments. This is allowed only within 48 hours of
+   549→              generating the bills.
+   550→            </>
+   551→          }
+   552→          confirmLabel="Reopen period"
+   553→          tone="destructive"
+   554→          requireReason
+   555→          reasonPlaceholder="Why is this period being reopened? (required)"
+   556→          loading={acting}
+   557→          onConfirm={(reason) => void reopen(reason)}
+   558→        />
+   559→      )}
+   560→    </GlassCard>
+   561→  );
+   562→}
+   563→
+   564→/* ----------------------------------------------------------------- bills */
+   565→
+   566→function BillsTab({ bills, loading }: { bills: BillRow[]; loading: boolean }) {
+   567→  const [adjusting, setAdjusting] = useState<BillRow | null>(null);
+   568→  const invalidate = useInvalidate();
+   569→  const { institution } = useSession();
+   570→  const tz = institution?.timezone ?? "Asia/Kolkata";
+   571→
+   572→  if (loading) {
+   573→    return <ListSkeleton rows={5} />;
+   574→  }
+   575→
+   576→  if (bills.length === 0) {
+   577→    return <EmptyState icon={ReceiptText} title="No bills yet" description="Bills appear after a billing period is generated." />;
+   578→  }
+   579→
+   580→  return (
+   581→    <>
+   582→      <div className="space-y-2.5">
+   583→        {bills.map((b) => (
+   584→          <GlassCard key={b.id} className="p-4">
+   585→            <div className="flex items-start gap-3.5">
+   586→              <span className="glass-inset flex size-11 shrink-0 items-center justify-center rounded-pill text-primary [&_svg]:size-5">
+   587→                <ReceiptText aria-hidden />
+   588→              </span>
+   589→              <div className="min-w-0 flex-1">
+   590→                <div className="flex flex-wrap items-center gap-2">
+   591→                  <p className="kpi-num truncate text-sm font-semibold">{b.billNumber}</p>
+   592→                  <StatusBadge status={b.status} />
+   593→                </div>
+   594→                <p className="mt-0.5 truncate text-[13px] text-muted-foreground">
+   595→                  {b.residentName ?? "Resident"} · {b.period ? `${b.period.year}-${String(b.period.month).padStart(2, "0")}` : "—"}
+   596→                </p>
+   597→                <p className="kpi-num mt-1 text-[11px] text-muted-foreground/80">
+   598→                  {b.residentMealCount} meals · {b.guestMealCount} guests · due {b.dueDate ? fmtDate(b.dueDate) : "—"}
+   599→                </p>
+   600→                <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+   601→                  <span>
+   602→                    Subtotal <Money minor={b.subtotalMinor} />
+   603→                  </span>
+   604→                  {b.adjustmentsMinor !== 0 && (
+   605→                    <span>
+   606→                      Adjustments <Money minor={b.adjustmentsMinor} withSign />
+   607→                    </span>
+   608→                  )}
+   609→                  <span>
+   610→                    Paid <Money minor={b.paymentsMinor} />
+   611→                  </span>
+   612→                  <span className="font-semibold text-foreground">
+   613→                    Due <Money minor={b.totalDueMinor} />
+   614→                  </span>
+   615→                </div>
+   616→              </div>
+   617→            </div>
+   618→            <div className="mt-3 flex justify-end">
+   619→              <GlassButton variant="secondary" size="sm" icon={<LockOpen />} onClick={() => setAdjusting(b)}>
+   620→                Adjustment…
+   621→              </GlassButton>
+   622→            </div>
+   623→          </GlassCard>
+   624→        ))}
+   625→      </div>
+   626→
+   627→      {adjusting && (
+   628→        <AdjustmentDialog
+   629→          bill={adjusting}
+   630→          tz={tz}
+   631→          onClose={() => setAdjusting(null)}
+   632→          onSaved={() => invalidate([BILLS_PATH, PERIODS_PATH])}
+   633→        />
+   634→      )}
+   635→    </>
+   636→  );
+   637→}
+   638→
+   639→function AdjustmentDialog({
+   640→  bill,
+   641→  tz,
+   642→  onClose,
+   643→  onSaved,
+   644→}: {
+   645→  bill: BillRow;
+   646→  tz: string;
+   647→  onClose: () => void;
+   648→  onSaved: () => void;
+   649→}) {
+   650→  const [amount, setAmount] = useState("");
+   651→  const [reason, setReason] = useState("");
+   652→  const [saving, setSaving] = useState(false);
+   653→  const [fields, setFields] = useState<Record<string, string>>({});
+   654→
+   655→  const amountValid = /^-?\d+(\.\d{1,2})?$/.test(amount.trim()) && Number(amount) !== 0;
+   656→  const reasonValid = reason.trim().length >= 3;
+   657→
+   658→  async function save() {
+   659→    setSaving(true);
+   660→    setFields({});
+   661→    try {
+   662→      await postJson(`/api/v1/admin/bills/${bill.id}/adjustment`, {
+   663→        amount: amount.trim(),
+   664→        reason: reason.trim(),
+   665→      });
+   666→      toast.success("Bill adjusted", {
+   667→        description: `${bill.billNumber} · ${Number(amount) < 0 ? "reduced" : "increased"} by ₹${Math.abs(Number(amount)).toFixed(2)}`,
+   668→      });
+   669→      onSaved();
+   670→      onClose();
+   671→    } catch (err) {
+   672→      if (err instanceof ApiClientError && err.fields) setFields(err.fields);
+   673→      toast.error(errMessage(err));
+   674→    } finally {
+   675→      setSaving(false);
+   676→    }
+   677→  }
+   678→
+   679→  return (
+   680→    <Dialog open onOpenChange={(open) => !open && onClose()}>
+   681→      <DialogContent className="glass-strong rounded-[28px] border-0 p-0 sm:max-w-md">
+   682→        <div className="flex max-h-[82vh] flex-col">
+   683→          <div className="px-5 pt-5 sm:px-6 sm:pt-6">
+   684→            <DialogTitle className="text-left text-lg font-semibold tracking-tight">Adjust {bill.billNumber}</DialogTitle>
+   685→            <DialogDescription className="mt-1.5 text-left text-[13px] leading-relaxed text-muted-foreground">
+   686→              Closed-period corrections happen through adjustments only — the original bill stays intact and the change
+   687→              is audited.
+   688→            </DialogDescription>
+   689→          </div>
+   690→          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">
+   691→            <div className="space-y-4">
+   692→              <div className="glass-inset grid grid-cols-3 gap-2 rounded-md p-3.5">
+   693→                <KeyValue stacked label="Subtotal" value={<Money minor={bill.subtotalMinor} />} />
+   694→                <KeyValue stacked label="Paid" value={<Money minor={bill.paymentsMinor} />} />
+   695→                <KeyValue stacked label="Due" value={<Money minor={bill.totalDueMinor} />} />
+   696→              </div>
+   697→              <MoneyField
+   698→                label="Adjustment amount"
+   699→                value={amount}
+   700→                onChange={setAmount}
+   701→                allowNegative
+   702→                placeholder="-50.00 or 50.00"
+   703→                error={fields.amount ?? (amount.trim() !== "" && !amountValid ? "Use a non-zero amount like -50.00 or 50.00." : undefined)}
+   704→                hint="Negative reduces what the resident owes; positive increases it."
+   705→              />
+   706→              <TextAreaField
+   707→                label="Reason"
+   708→                value={reason}
+   709→                onChange={setReason}
+   710→                rows={2}
+   711→                maxLength={500}
+   712→                placeholder="Why is this correction needed? (required)"
+   713→                error={fields.reason ?? (reason.trim() !== "" && !reasonValid ? "A short reason is required." : undefined)}
+   714→              />
+   715→              <p className="kpi-num text-[11px] text-muted-foreground/75">
+   716→                Generated {fmtDateTime(bill.generatedAt, tz)}
+   717→              </p>
+   718→            </div>
+   719→          </div>
+   720→          <div className="safe-b flex items-center justify-end gap-2 border-t border-border/50 px-5 py-4 sm:px-6">
+   721→            <GlassButton variant="ghost" onClick={onClose} disabled={saving}>
+   722→              Cancel
+   723→            </GlassButton>
+   724→            <GlassButton variant="primary" loading={saving} disabled={!amountValid || !reasonValid} onClick={() => void save()}>
+   725→              Apply adjustment
+   726→            </GlassButton>
+   727→          </div>
+   728→        </div>
+   729→      </DialogContent>
+   730→    </Dialog>
+   731→  );
+   732→}
+   733→

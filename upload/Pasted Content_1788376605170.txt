@@ -1,0 +1,7631 @@
+# MASTER IMPLEMENTATION PROMPT — SECURE, HIGH-PERFORMANCE RESIDENT MEAL, FINANCE & OPERATIONS PLATFORM
+
+You are the principal software architect, staff backend engineer, staff frontend engineer, database engineer, security engineer, product designer, QA engineer, and reliability engineer responsible for building this application from scratch.
+
+This is not a prototype.
+
+This is not a UI mockup.
+
+This is not a demo.
+
+Build it as a production-quality application whose priorities, in strict order, are:
+
+1. Data correctness
+2. Financial correctness
+3. Security
+4. Reliability
+5. Auditability
+6. Maintainability
+7. Ease of use for non-technical people
+8. Performance
+9. Accessibility
+10. Visual quality
+11. Animation quality
+12. Developer experience
+
+Never sacrifice items 1–7 merely to make the UI look impressive.
+
+The finished product should feel like a multi-million-dollar modern Apple-inspired application with a carefully engineered Liquid Glass visual language, but its backend and database must behave like a serious financial/operations system.
+
+---
+
+# 0. FIRST RULE: DO NOT START CODING BLINDLY
+
+Before creating implementation code:
+
+1. Analyze this entire specification.
+2. Produce the final module map.
+3. Produce the dependency graph.
+4. Produce the database schema.
+5. Produce important state machines.
+6. Produce database invariants.
+7. Produce transaction boundaries.
+8. Produce API contracts.
+9. Produce responsive navigation architecture.
+10. Produce design tokens.
+11. Produce security threat assumptions.
+12. Produce test strategy.
+13. Produce migration strategy.
+14. Verify currently supported stable dependency versions.
+15. Only then begin implementation.
+
+Do not repeatedly stop for minor design questions.
+
+When a small ambiguity exists:
+
+* choose the safest behavior;
+* choose the least destructive behavior;
+* choose the least surprising behavior for a non-technical user;
+* document the decision;
+* preserve historical data.
+
+Never invent major new product modules that were not requested.
+
+---
+
+# 1. VERSION POLICY
+
+The technology baseline as of September 2026 is approximately:
+
+* Node.js 24 LTS
+* Next.js 16.3.x Active LTS
+* React 19.2
+* NestJS 12
+* PostgreSQL 18.x
+* Prisma ORM 8
+* Tailwind CSS 4.3
+* Motion for React 13.x
+* Redis 8.x
+
+However:
+
+DO NOT blindly install these exact versions months or years later.
+
+Immediately before dependency installation:
+
+1. verify the newest stable production release;
+2. verify security advisories;
+3. prefer Active LTS/LTS versions;
+4. avoid beta/RC/canary releases;
+5. pin exact resolved versions in the lockfile;
+6. document intentional version choices;
+7. never perform automatic breaking-major upgrades in production.
+
+For Next.js specifically, use the newest security-patched Active LTS release.
+
+For PostgreSQL, use the newest stable supported major, NOT an unreleased beta.
+
+---
+
+# 2. REQUIRED HIGH-LEVEL ARCHITECTURE
+
+Build a MODULAR MONOLITH.
+
+Do NOT start with microservices.
+
+Required logical structure:
+
+```text
+Browser / PWA
+      │
+      ▼
+Next.js Web Application
+      │
+      │ HTTPS / REST
+      ▼
+NestJS API
+      │
+      ├──────────── PostgreSQL
+      │
+      ├──────────── Redis
+      │
+      ├──────────── Private Object Storage
+      │
+      └──────────── Outbox
+                         │
+                         ▼
+                     Worker
+```
+
+Repository:
+
+```text
+/
+├── apps/
+│   ├── web/
+│   ├── api/
+│   └── worker/
+│
+├── packages/
+│   ├── contracts/
+│   ├── database/
+│   ├── config/
+│   ├── validation/
+│   ├── observability/
+│   ├── design-system/
+│   └── shared/
+│
+├── infrastructure/
+├── scripts/
+├── docs/
+└── tests/
+```
+
+Use:
+
+* pnpm workspaces
+* Turborepo or equivalent lightweight monorepo orchestration
+* strict TypeScript
+* one dependency lockfile
+* shared lint configuration
+* shared tsconfig
+* shared contracts
+* reproducible builds
+
+Do not create arbitrary package fragmentation.
+
+Every package must have a clear reason to exist.
+
+---
+
+# 3. FRONTEND STACK
+
+Use:
+
+```text
+Next.js
+React
+TypeScript strict mode
+Tailwind CSS
+Radix UI primitives
+Motion for React
+TanStack Query
+React Hook Form
+Zod / Standard Schema-compatible validation
+Lucide icons or similarly consistent open icon set
+```
+
+Do NOT build the application from stock component-library styling.
+
+Radix/shadcn-style primitives may be used for accessibility and behavior, but completely own the visual design.
+
+Never allow the result to look like:
+
+* default shadcn
+* default Bootstrap
+* default Material UI
+* a generic admin dashboard
+* a template marketplace dashboard
+* AI-generated purple gradient SaaS
+* giant chart-filled enterprise software
+
+Build a custom design system.
+
+---
+
+# 4. BACKEND STACK
+
+Use:
+
+```text
+Node.js LTS
+NestJS
+Fastify adapter
+TypeScript
+Prisma ORM
+PostgreSQL
+Redis
+BullMQ or equivalent mature Redis-backed job processing
+Pino structured logging
+OpenTelemetry
+OpenAPI
+```
+
+NestJS must run through Fastify rather than Express unless a verified compatibility reason prevents it.
+
+Use REST rather than GraphQL.
+
+Reason:
+
+* simpler authorization
+* simpler auditing
+* clearer mutation semantics
+* easier caching
+* easier testing
+* predictable contracts
+* easier support for non-realtime financial workflows
+
+Version APIs:
+
+```text
+/api/v1/...
+```
+
+---
+
+# 5. DATABASE
+
+Use PostgreSQL as the authoritative datastore.
+
+PostgreSQL is the source of truth.
+
+NOT:
+
+* Redis
+* browser state
+* React state
+* cached API data
+* localStorage
+* generated frontend calculations
+
+Prisma is an access layer.
+
+Prisma must NOT dictate database architecture.
+
+Use raw SQL migrations where PostgreSQL features are necessary for:
+
+* advanced constraints
+* partial indexes
+* exclusion constraints
+* specialized indexes
+* security permissions
+* immutable tables
+* triggers where truly justified
+
+---
+
+# 6. REDIS RESPONSIBILITY
+
+Redis is EPHEMERAL INFRASTRUCTURE.
+
+Use it only for:
+
+* rate limiting
+* distributed locks where appropriate
+* queue transport
+* safe caching
+* short-lived sessions only if specifically architected that way
+* temporary coordination
+
+Never make Redis the only copy of:
+
+* payments
+* bills
+* meals
+* ledger entries
+* expenses
+* audit events
+* user records
+* formula versions
+
+Losing Redis must not corrupt financial or historical data.
+
+---
+
+# 7. OBJECT STORAGE
+
+Use private S3-compatible object storage for:
+
+* payment proofs
+* expense receipts
+* market-task purchase proofs
+* approved supporting documents
+* exports
+
+Development:
+
+* MinIO is acceptable.
+
+Production:
+
+* mature S3-compatible managed storage.
+
+Never store raw uploaded binary documents directly in normal relational database rows.
+
+Store metadata in PostgreSQL.
+
+---
+
+# 8. EXACT ROLES
+
+ONLY TWO AUTHORIZATION ROLES EXIST:
+
+```text
+ADMIN
+RESIDENT
+```
+
+Do not create:
+
+* SUPER_ADMIN
+* MANAGER
+* MODERATOR
+* ACCOUNTANT
+* EDITOR
+* OPERATOR
+
+The UI can call ADMIN "Admin".
+
+Backend role is:
+
+```text
+ADMIN
+```
+
+The other role is:
+
+```text
+RESIDENT
+```
+
+Authorization must exist in backend guards and domain services.
+
+Hiding frontend buttons is NOT authorization.
+
+---
+
+# 9. MULTI-INSTITUTION DECISION
+
+Architect the data model with an `institution_id` boundary from day one so data ownership is explicit.
+
+However, do NOT expose complex multi-tenant administration if it is not required.
+
+Every operational entity belongs to exactly one institution.
+
+Examples:
+
+```text
+institution_id
+```
+
+exists on appropriate:
+
+* users
+* meals
+* expenses
+* bills
+* payments
+* formulas
+* settings
+* policies
+* tasks
+* announcements
+* audit events
+
+Never allow cross-institution record access.
+
+---
+
+# 10. AUTHENTICATION ARCHITECTURE
+
+Use secure server-managed sessions.
+
+Prefer opaque random session tokens rather than exposing authorization state in editable browser tokens.
+
+Cookie:
+
+```text
+__Host-session
+```
+
+Properties:
+
+```text
+Secure
+HttpOnly
+SameSite=Lax or stricter where compatible
+Path=/
+no Domain attribute
+```
+
+Store only an opaque identifier in the browser.
+
+Store a HASH of the session token server-side.
+
+Never store plaintext reusable session tokens in the database.
+
+---
+
+# 11. PASSWORD STORAGE
+
+Use Argon2id.
+
+Parameters must be tuned on production hardware rather than copied blindly.
+
+Target a secure computational cost that remains practical for authentication.
+
+Store algorithm parameters alongside the password hash.
+
+Never:
+
+* plaintext
+* SHA256 passwords
+* MD5
+* reversible encryption
+* custom password crypto
+
+---
+
+# 12. ADMIN MFA
+
+Admin accounts must support strong MFA.
+
+Preferred:
+
+```text
+WebAuthn / passkey
+```
+
+Fallback:
+
+```text
+TOTP
+```
+
+For particularly sensitive actions require recent authentication.
+
+Examples:
+
+* generate billing
+* reopen billing period
+* change active formula
+* issue refund
+* export all data
+* change security settings
+
+---
+
+# 13. REGISTRATION FLOW
+
+Resident:
+
+```text
+Register
+   ↓
+Enter information
+   ↓
+Accept current policy versions
+   ↓
+Submit
+   ↓
+PENDING_APPROVAL
+```
+
+Admin can:
+
+```text
+APPROVE
+REQUEST_CHANGES
+REJECT
+```
+
+After approval:
+
+```text
+ACTIVE
+```
+
+Resident status state machine:
+
+```text
+PENDING_APPROVAL
+      │
+      ├──> CHANGES_REQUESTED
+      │
+      ├──> REJECTED
+      │
+      └──> ACTIVE
+                 │
+                 ├──> INACTIVE
+                 └──> PENDING_DELETION
+```
+
+Never model this as five independent Boolean columns.
+
+---
+
+# 14. POLICY ACCEPTANCE
+
+Policies must be versioned.
+
+Never simply store:
+
+```text
+accepted_terms = true
+```
+
+Store:
+
+```text
+policy_id
+policy_version_id
+user_id
+accepted_at
+ip metadata if appropriate
+user agent metadata if appropriate
+```
+
+If policy changes later, previous acceptance history remains.
+
+---
+
+# 15. TIME ARCHITECTURE
+
+Institution has one business timezone:
+
+```text
+institution.timezone
+```
+
+Example:
+
+```text
+Asia/Kolkata
+```
+
+Store timestamps as UTC.
+
+Convert to institution timezone when evaluating:
+
+* meal cutoffs
+* meal service times
+* billing periods
+* leave dates
+* holidays
+* policy deadlines
+* scheduled deletion
+* task deadlines
+
+Never trust browser/device clock for authoritative decisions.
+
+---
+
+# 16. SERVER TIME IS AUTHORITATIVE
+
+Resident changing device time must not bypass meal cutoff.
+
+Every time-sensitive write is validated by backend server time.
+
+Frontend may show a countdown, but backend performs final authorization.
+
+---
+
+# 17. MONEY MODEL
+
+Never use JavaScript floating-point values as authoritative money.
+
+Store money using integer minor units.
+
+For INR:
+
+```text
+₹100.25
+```
+
+becomes:
+
+```text
+10025 paise
+```
+
+Use names such as:
+
+```text
+amount_minor
+price_minor
+balance_minor
+```
+
+If PostgreSQL decimal representation is necessary, use explicit fixed precision.
+
+Never use:
+
+```text
+float
+double precision
+```
+
+for authoritative financial values.
+
+---
+
+# 18. CURRENCY CONFIGURATION
+
+Institution:
+
+```text
+currency_code = INR
+currency_minor_digits = 2
+```
+
+Centralize rounding.
+
+Never allow different pages to independently round financial calculations.
+
+---
+
+# 19. FINANCIAL LEDGER
+
+Implement an immutable double-entry ledger internally.
+
+Residents do NOT need to see accounting terminology.
+
+Backend should maintain:
+
+```text
+ledger_accounts
+ledger_journals
+ledger_entries
+```
+
+A journal contains one business transaction.
+
+Entries must balance.
+
+Conceptually:
+
+```text
+SUM(debits) = SUM(credits)
+```
+
+Posted journals cannot be edited.
+
+A correction creates another journal.
+
+Examples:
+
+Payment:
+
+```text
+Dr Cash/Bank
+Cr Resident Balance / Receivable
+```
+
+Expense:
+
+```text
+Dr Expense
+Cr Cash/Payable
+```
+
+Refund:
+
+```text
+Dr Resident Balance Liability
+Cr Cash/Bank
+```
+
+Exact chart-of-account design should be documented.
+
+---
+
+# 20. IMMUTABLE FINANCIAL HISTORY
+
+After approval, never edit:
+
+* payment
+* expense
+* refund
+* bill
+* posted ledger journal
+
+Wrong transaction?
+
+Create:
+
+```text
+reversal
+correction
+adjustment
+```
+
+Do not mutate history.
+
+---
+
+# 21. DATABASE PERMISSIONS
+
+Separate database credentials:
+
+```text
+migration role
+runtime API role
+worker role
+read-only operational role if required
+```
+
+Runtime API must not own the schema.
+
+Runtime API must not perform DDL.
+
+Prevent normal runtime role from updating/deleting append-only:
+
+* audit records
+* posted journals
+* billing snapshots
+
+Use database permission boundaries where practical.
+
+---
+
+# 22. CORE DATABASE ENTITIES
+
+Design normalized PostgreSQL tables around approximately the following domains.
+
+Do not blindly copy field names without examining relationships, but preserve these concepts.
+
+## Institution
+
+```text
+institutions
+institution_settings
+institution_security_settings
+```
+
+Important properties:
+
+```text
+id
+name
+timezone
+currency
+status
+created_at
+updated_at
+```
+
+---
+
+# 23. USER DOMAIN
+
+```text
+users
+user_profiles
+user_policy_acceptances
+user_status_history
+sessions
+mfa_credentials
+password_reset_tokens
+```
+
+`users`:
+
+```text
+id
+institution_id
+role
+status
+email/username
+password_hash
+membership_effective_from
+membership_effective_until
+created_at
+updated_at
+```
+
+Use opaque UUID-style identifiers.
+
+Never expose sequential IDs as authorization.
+
+---
+
+# 24. MEAL DEFINITIONS
+
+Create:
+
+```text
+meal_definitions
+```
+
+Represents configuration such as:
+
+```text
+Lunch
+Dinner
+Breakfast
+Special Dinner
+Festival Meal
+```
+
+Fields/concepts:
+
+```text
+id
+institution_id
+name
+description
+icon
+color_token
+meal_type
+active
+default_state
+default_visibility
+pricing_strategy
+fixed_price_minor nullable
+service_schedule
+service_start_local
+service_end_local
+cutoff_strategy
+cutoff_offset
+cutoff_local_time
+internal_notes
+created_at
+updated_at
+archived_at
+delete_requested_at
+```
+
+Meal types can include:
+
+```text
+REGULAR
+SPECIAL
+GUEST_ONLY
+FESTIVAL
+CUSTOM
+```
+
+---
+
+# 25. MEAL DEFINITION VERSIONS
+
+Configuration changes must preserve history.
+
+Use:
+
+```text
+meal_definition_versions
+```
+
+Store snapshots/versioned settings.
+
+Changing Lunch from a 9:00 cutoff to 10:00 must not rewrite the meaning of historical Lunch instances.
+
+---
+
+# 26. MEAL INSTANCES
+
+Create:
+
+```text
+meal_instances
+```
+
+Example:
+
+```text
+Lunch — 2026-09-02
+```
+
+Instance stores resolved configuration for that service.
+
+Fields/concepts:
+
+```text
+id
+meal_definition_id
+meal_definition_version_id
+service_date
+service_start_at
+service_end_at
+cutoff_at
+lock_at
+status
+price_strategy_snapshot
+created_at
+```
+
+Unique constraint:
+
+```text
+meal_definition + service occurrence
+```
+
+No duplicate service instance.
+
+---
+
+# 27. RESIDENT MEAL RECORDS
+
+Create:
+
+```text
+resident_meals
+```
+
+Concepts:
+
+```text
+id
+institution_id
+resident_id
+meal_instance_id
+
+baseline_state
+resident_selected_state
+policy_state
+leave_state
+admin_override_state
+
+effective_state
+effective_reason
+
+locked_at
+created_at
+updated_at
+version
+```
+
+Unique:
+
+```text
+resident_id + meal_instance_id
+```
+
+---
+
+# 28. MEAL STATE PRECEDENCE
+
+Define ONE deterministic rule engine.
+
+Suggested conceptual order:
+
+```text
+Does meal instance exist?
+       ↓
+Is resident membership active for that time?
+       ↓
+Is meal visible/applicable?
+       ↓
+Does calendar disable it?
+       ↓
+Does approved leave affect it?
+       ↓
+Does financial restriction affect it?
+       ↓
+Has resident changed it before cutoff?
+       ↓
+Has admin overridden it?
+       ↓
+Has instance locked?
+       ↓
+FINAL EFFECTIVE STATE
+```
+
+Admin override is authoritative for that instance, but all overridden values must retain history.
+
+---
+
+# 29. OVERRIDE RULE
+
+Do not permanently mark:
+
+```text
+override = true
+```
+
+based only on history.
+
+Displayed override exists when:
+
+```text
+admin_override_state != baseline_without_admin_override
+```
+
+Example:
+
+```text
+default ON
+admin changes OFF
+→ ADMIN OVERRIDE
+```
+
+Admin changes back:
+
+```text
+default ON
+admin ON
+→ no current override badge
+```
+
+Audit still records both actions.
+
+---
+
+# 30. MID-MONTH JOINING
+
+Resident has:
+
+```text
+membership_effective_from
+```
+
+If resident joins after a meal cutoff:
+
+```text
+do not create an automatic ON meal
+```
+
+Example:
+
+```text
+Joined 15:30
+
+Lunch cutoff 10:00
+→ unavailable automatically
+
+Dinner cutoff 17:00
+→ default state can apply
+```
+
+Admin may add historical consumed meal using explicit override/correction.
+
+Require reason.
+
+Audit it.
+
+---
+
+# 31. USER-FACING MEAL STATES
+
+Residents should see simple language only:
+
+```text
+ON
+OFF
+LOCKED
+ADMIN OVERRIDE
+ON LEAVE
+NOT AVAILABLE
+```
+
+Do not expose internal engine terminology.
+
+---
+
+# 32. MEAL LOCKING
+
+State machine:
+
+```text
+SCHEDULED
+OPEN
+LOCKED
+SERVICE_ACTIVE
+COMPLETED
+CANCELLED
+```
+
+Backend transitions based on server time or explicit administrative rules.
+
+Residents cannot modify after cutoff/lock.
+
+Admin may override after lock with:
+
+* explicit reason;
+* audit record;
+* concurrency protection.
+
+---
+
+# 33. BILLED HISTORICAL MEALS
+
+If meal belongs to a CLOSED/BILLED period, an admin must not silently mutate billing.
+
+Historical correction should result in:
+
+* adjustment;
+* billing revision where allowed;
+* or next-period credit/debit adjustment.
+
+Original bill remains preserved.
+
+---
+
+# 34. GUEST MEALS
+
+Use separate domain:
+
+```text
+guest_meal_requests
+guest_meals
+```
+
+Lifecycle:
+
+```text
+REQUESTED
+CONFIRMED
+LOCKED
+CANCELLED
+CONSUMED
+```
+
+Record:
+
+```text
+host_resident_id
+meal_instance_id
+quantity
+unit_price_minor
+total_price_minor
+created_at
+locked_at
+```
+
+Guest meals must contribute correctly to:
+
+* meal count
+* guest income
+* billing
+* formula inputs
+
+---
+
+# 35. LEAVE REQUESTS
+
+Create:
+
+```text
+leave_requests
+```
+
+Fields:
+
+```text
+resident_id
+start_date
+end_date
+reason
+status
+created_at
+reviewed_at
+reviewed_by
+review_reason
+```
+
+State machine:
+
+```text
+PENDING
+APPROVED
+REJECTED
+CANCELLED
+```
+
+Approved leave:
+
+* automatically affects applicable future/unlocked meals;
+* does NOT silently rewrite already locked meals.
+
+Locked meals require admin correction.
+
+---
+
+# 36. CALENDAR
+
+Create:
+
+```text
+calendar_events
+```
+
+Types:
+
+```text
+HOLIDAY
+FESTIVAL
+MAINTENANCE
+CUSTOM
+```
+
+Fields:
+
+```text
+name
+description
+start_date
+end_date
+type
+disable_meals
+created_by
+```
+
+Calendar rules affect meal-policy evaluation.
+
+Do not unnecessarily rewrite thousands of future rows if dynamic policy evaluation is safer.
+
+At lock/snapshot time, freeze effective outcome.
+
+---
+
+# 37. PAYMENT DOMAIN
+
+Create:
+
+```text
+payments
+payment_proofs
+payment_status_history
+```
+
+Payment fields:
+
+```text
+id
+institution_id
+resident_id
+amount_minor
+method
+reference
+notes
+status
+idempotency_key
+submitted_at
+reviewed_at
+reviewed_by
+rejection_reason
+approved_journal_id
+void_journal_id
+```
+
+Methods may include:
+
+```text
+UPI
+CASH
+BANK_TRANSFER
+OTHER
+```
+
+State:
+
+```text
+PENDING
+APPROVED
+REJECTED
+VOIDED
+REFUNDED/PARTIALLY_REFUNDED when needed
+```
+
+No financial "Edit".
+
+---
+
+# 38. PAYMENT APPROVAL
+
+Approval transaction:
+
+```text
+BEGIN
+
+lock payment row
+
+verify status = PENDING
+
+mark approved
+
+create balanced ledger journal
+
+write audit event
+
+write outbox event
+
+COMMIT
+```
+
+All-or-nothing.
+
+Two admins approving simultaneously must not generate duplicate money.
+
+---
+
+# 39. REFUNDS
+
+Create:
+
+```text
+refunds
+```
+
+Before refunding, determine available resident credit.
+
+Admin can choose:
+
+```text
+Carry Forward
+Issue Refund
+```
+
+Refund requires:
+
+* amount
+* resident
+* reason
+* destination/reference where appropriate
+* recent admin authentication
+* balanced ledger journal
+* audit
+
+State:
+
+```text
+PENDING
+PROCESSING
+COMPLETED
+FAILED
+VOIDED where logically valid
+```
+
+Never silently reduce the original payment.
+
+---
+
+# 40. EXPENSE DOMAIN
+
+Create:
+
+```text
+expense_categories
+expenses
+expense_items
+expense_proofs
+expense_status_history
+```
+
+Expense:
+
+```text
+id
+institution_id
+date
+category_id
+status
+source
+description
+comment
+submitted_by
+approved_by
+total_minor
+created_at
+```
+
+Expense item:
+
+```text
+item_name
+quantity
+unit
+unit_price_minor
+line_total_minor
+```
+
+UI may begin with one item but domain should support multiple sensible line items.
+
+---
+
+# 41. EXPENSE STATES
+
+```text
+DRAFT
+PENDING
+APPROVED
+REJECTED
+VOIDED
+```
+
+Pending/draft expense can be deleted if it has never affected accounting.
+
+Approved expense:
+
+```text
+cannot be deleted
+```
+
+Can only be voided/reversed with reason.
+
+---
+
+# 42. FUNDS
+
+Do not create one vague mutable `balance` column as the source of truth.
+
+Derive/account using ledger.
+
+Expose friendly projections:
+
+```text
+Total Deposits
+Available Balance
+Charges
+Credits
+Refunds
+Amount to Pay
+```
+
+Admin may additionally see:
+
+```text
+Deficit
+```
+
+Resident UI should prefer:
+
+```text
+Amount to Pay
+```
+
+rather than accounting jargon.
+
+---
+
+# 43. DEFICIT POLICY
+
+Create versioned policy configuration:
+
+```text
+deficit_threshold_minor
+grace_period_days
+restrict_meals
+policy_enabled
+```
+
+Resident financial-policy state:
+
+```text
+AVAILABLE
+GRACE_PERIOD
+RESTRICTED
+EXEMPTED
+```
+
+Do NOT instantly disable meals merely because balance temporarily becomes negative.
+
+Consider:
+
+* pending approved payment;
+* grace period;
+* policy exemption.
+
+---
+
+# 44. POLICY EXEMPTIONS
+
+Create:
+
+```text
+policy_exemptions
+```
+
+Fields:
+
+```text
+resident_id
+policy_type
+reason
+starts_at
+expires_at
+approved_by
+created_at
+```
+
+Expiry automatically triggers reevaluation.
+
+Never create permanent invisible bypasses.
+
+---
+
+# 45. FORMULA ENGINE — CRITICAL
+
+This module is security-critical.
+
+There are two UX input modes:
+
+```text
+Natural Language
+Formula
+```
+
+Both must compile into exactly the SAME safe internal AST.
+
+Never execute:
+
+```text
+eval()
+Function()
+dynamic JavaScript
+raw user SQL
+shell commands
+```
+
+---
+
+# 46. FORMULA VARIABLES
+
+Maintain an explicit whitelist.
+
+Examples:
+
+```text
+total_market_cost
+total_guest_income
+total_consumed_resident_meals
+total_guest_meals
+total_approved_expenses
+resident_consumed_meals
+resident_guest_meals
+```
+
+Every variable has:
+
+```text
+identifier
+human-readable label
+description
+type
+unit
+scope
+source
+```
+
+---
+
+# 47. FORMULA OPERATORS
+
+Initially support only safe deterministic operations:
+
+```text
++
+-
+*
+/
+()
+SUM
+MIN
+MAX
+ROUND
+IF
+```
+
+Potential future additions require explicit review.
+
+Do NOT try to implement Microsoft Excel.
+
+---
+
+# 48. FORMULA AST
+
+Example:
+
+```json
+{
+  "type": "divide",
+  "left": {
+    "type": "subtract",
+    "left": { "type": "variable", "name": "total_market_cost" },
+    "right": { "type": "variable", "name": "total_guest_income" }
+  },
+  "right": {
+    "type": "variable",
+    "name": "total_consumed_resident_meals"
+  }
+}
+```
+
+Evaluator operates on validated AST, never raw text.
+
+---
+
+# 49. NATURAL LANGUAGE FORMULAS
+
+Admin can write:
+
+```text
+Subtract guest income from total market cost,
+then divide the result by consumed resident meals.
+```
+
+System parses it into candidate AST.
+
+Before saving, UI MUST show:
+
+```text
+I understood this as:
+
+(Total Market Cost - Guest Income)
+÷ Resident Consumed Meals
+
+Example using current data:
+
+₹42,000 - ₹2,000
+= ₹40,000
+
+₹40,000 ÷ 1,000
+= ₹40.00 per meal
+```
+
+Buttons:
+
+```text
+Cancel
+Save Formula
+```
+
+Natural-language output must never execute without validation.
+
+---
+
+# 50. FORMULA VERSIONING
+
+Create:
+
+```text
+formula_definitions
+formula_versions
+```
+
+Version fields:
+
+```text
+version
+expression_source
+compiled_ast
+created_by
+created_at
+effective_from
+effective_until
+reason
+checksum
+```
+
+Never overwrite old version.
+
+---
+
+# 51. FORMULA CHANGE DURING MONTH
+
+Default safest behavior:
+
+```text
+New formula applies from the next billing period.
+```
+
+If Admin intentionally selects current OPEN period:
+
+1. show impact simulation;
+2. show current formula;
+3. show proposed formula;
+4. show old calculated meal charge;
+5. show new calculated meal charge;
+6. require explicit confirmation;
+7. version the formula;
+8. audit action.
+
+A CLOSED/BILLED period cannot be recalculated by ordinary formula editing.
+
+---
+
+# 52. BILLING PERIODS
+
+Create:
+
+```text
+billing_periods
+```
+
+Unique:
+
+```text
+institution + year + month
+```
+
+State:
+
+```text
+OPEN
+CLOSING
+CLOSED
+BILLED
+REOPENED
+```
+
+Do not create bills for future months.
+
+---
+
+# 53. BILLING READINESS CHECK
+
+Before generation, verify:
+
+```text
+no unresolved critical meal inconsistencies
+no unprocessed financial records required for period
+no invalid formula
+no divide-by-zero result
+no orphan financial references
+approved payments match ledger
+approved expenses match ledger
+guest meal totals reconcile
+resident meal totals reconcile
+no duplicate meal instances
+no duplicate resident meals
+required task expenses processed
+billing period still OPEN
+```
+
+Display human-readable results.
+
+---
+
+# 54. BILLING CONFIRMATION UI
+
+Example:
+
+```text
+August 2026 Billing
+
+126 residents
+4,827 resident meals
+214 guest meals
+₹184,320 eligible expenses
+₹72,000 approved payments
+₹38.18 meal charge
+
+✓ Payments reconciled
+✓ Expenses reconciled
+✓ Formula valid
+✓ Meal records complete
+✓ No blocking tasks
+✓ Snapshot ready
+```
+
+Then:
+
+```text
+Confirm you reviewed the period
+
+2 + 9 = [      ]
+```
+
+Primary button:
+
+```text
+Generate & Close August
+```
+
+Arithmetic confirmation prevents accidental clicks.
+
+It is not authentication.
+
+---
+
+# 55. BILLING GENERATION TRANSACTION
+
+Acquire billing-period lock.
+
+Then:
+
+```text
+BEGIN
+
+verify period OPEN
+
+set CLOSING
+
+run readiness checks again server-side
+
+capture immutable snapshot
+
+calculate all bills
+
+create bill lines
+
+create ledger postings if required
+
+set CLOSED/BILLED
+
+write audit event
+
+write outbox events
+
+COMMIT
+```
+
+Use advisory lock or equivalent plus database row lock.
+
+Running generation twice must NOT duplicate bills.
+
+---
+
+# 56. BILLING SNAPSHOT
+
+Create:
+
+```text
+billing_snapshots
+billing_snapshot_records
+```
+
+Snapshot includes immutable representation/checksums of:
+
+* relevant residents
+* meal records
+* guest meals
+* eligible expenses
+* approved payments
+* refunds
+* formula versions
+* policies
+* pricing
+* adjustments
+
+A later configuration change must never modify historical bill result.
+
+---
+
+# 57. BILLS
+
+Create:
+
+```text
+bills
+bill_lines
+bill_adjustments
+```
+
+Bill state:
+
+```text
+GENERATED
+PARTIALLY_PAID
+PAID
+OVERDUE
+VOIDED only through controlled exceptional workflow
+```
+
+Bill:
+
+```text
+resident_id
+billing_period_id
+snapshot_id
+bill_number
+subtotal_minor
+credits_minor
+payments_minor
+total_due_minor
+due_date
+generated_at
+```
+
+---
+
+# 58. BILL CALCULATION PROVENANCE
+
+Every amount should be explainable.
+
+Example resident UI:
+
+```text
+August 2026
+
+Resident meals
+43 × ₹38.18      ₹1,641.74
+
+Guest meals
+4 × ₹55.00         ₹220.00
+
+Adjustments          -₹100.00
+
+Total               ₹1,761.74
+
+Payments            -₹1,500.00
+
+Amount to Pay          ₹261.74
+```
+
+Button:
+
+```text
+View calculation
+```
+
+Never display unexplained magic totals.
+
+---
+
+# 59. CLOSED-PERIOD CORRECTIONS
+
+Never silently edit historical billing.
+
+Use:
+
+```text
+Adjustment
+Credit
+Debit Adjustment
+Reversal
+Revision
+```
+
+Original financial history remains.
+
+---
+
+# 60. MARKET TASK DOMAIN
+
+Create:
+
+```text
+tasks
+task_items
+task_assignments
+task_submissions
+task_submission_items
+```
+
+Task types can support:
+
+```text
+MARKET_PURCHASE
+GENERAL
+```
+
+Admin creates shopping task:
+
+```text
+description
+items
+expected quantity
+units
+estimated amount where appropriate
+assigned resident
+date/deadline
+notes
+```
+
+---
+
+# 61. MARKET TASK FLOW
+
+```text
+ASSIGNED
+   ↓
+Resident:
+   ├── REJECTED with reason
+   └── ACCEPTED
+           ↓
+       IN_PROGRESS
+           ↓
+       SUBMITTED
+           ↓
+Admin:
+   ├── REJECTED_BY_ADMIN
+   └── APPROVED
+```
+
+Submission contains temporary purchase information.
+
+It is NOT official expense yet.
+
+---
+
+# 62. MARKET EXPENSE APPROVAL
+
+On admin approval:
+
+```text
+BEGIN
+
+lock task submission
+
+verify not previously approved
+
+create official expense
+
+create expense items
+
+link source_task_submission_id
+
+post appropriate ledger operation when expense approved
+
+update task
+
+audit
+
+outbox
+
+COMMIT
+```
+
+Unique constraint:
+
+```text
+source_task_submission_id
+```
+
+must prevent duplicate official expenses.
+
+---
+
+# 63. ANNOUNCEMENTS
+
+Create:
+
+```text
+announcements
+announcement_targets
+```
+
+Fields:
+
+```text
+title
+message
+type
+priority
+target
+publish_at
+expires_at optional
+pinned
+created_by
+```
+
+Types:
+
+```text
+INFO
+ALERT
+WARNING
+MAINTENANCE
+EVENT
+```
+
+Priorities:
+
+```text
+NORMAL
+HIGH
+URGENT
+CRITICAL
+```
+
+Targets:
+
+```text
+EVERYONE
+RESIDENTS
+ADMINS
+specific residents if later necessary
+```
+
+Render as escaped plain text or sanitized restricted markup.
+
+Never render arbitrary HTML.
+
+---
+
+# 64. NOTIFICATIONS
+
+Notifications are SYSTEM GENERATED.
+
+Create:
+
+```text
+notifications
+notification_deliveries
+```
+
+Examples:
+
+* payment approved
+* payment rejected
+* bill generated
+* leave approved
+* task assigned
+* task rejected
+* upcoming meal cutoff
+* refund completed
+
+Announcements and notifications are separate domains.
+
+---
+
+# 65. AUDIT SYSTEM
+
+Create append-only:
+
+```text
+audit_events
+```
+
+Record:
+
+```text
+id
+institution_id
+actor_user_id
+actor_role
+action
+entity_type
+entity_id
+request_id
+occurred_at
+reason
+before_summary
+after_summary
+metadata
+ip metadata where appropriate
+user agent metadata where appropriate
+```
+
+High-risk actions should include old/new state.
+
+Examples:
+
+* formula changed
+* meal overridden
+* user approved
+* user deactivated
+* expense voided
+* payment approved
+* payment rejected
+* refund created
+* bill generated
+* billing reopened
+* policy exemption
+* deletion requested
+
+Normal app runtime should not update/delete audit rows.
+
+---
+
+# 66. OPTIONAL TAMPER-EVIDENT AUDIT CHAIN
+
+For stronger integrity, support:
+
+```text
+previous_event_hash
+event_hash
+```
+
+Hash canonical event representation.
+
+This supplements database permissions.
+
+It does not replace backups or access control.
+
+---
+
+# 67. DELETION SYSTEM
+
+Create:
+
+```text
+deletion_requests
+```
+
+States:
+
+```text
+QUEUED
+SCHEDULED
+BLOCKED
+COMPLETED
+CANCELLED
+```
+
+Record:
+
+```text
+entity_type
+entity_id
+requested_by
+requested_at
+scheduled_for
+reason
+blocked_reason
+completed_at
+```
+
+---
+
+# 68. DELETE VS ARCHIVE
+
+Archive:
+
+```text
+future use stops
+history preserved
+restorable
+```
+
+Delete:
+
+```text
+future use stops
+moves into deletion workflow
+may eventually be purged if safe
+```
+
+Financial/history rows generally remain permanently according to retention policy.
+
+---
+
+# 69. MEAL DELETION BEHAVIOR
+
+If Lunch is deleted on 10 August:
+
+```text
+10 August instance remains historically valid
+11 August onward no new Lunch instances
+definition moves to deletion state
+historical ResidentMeal records remain
+```
+
+Scheduled purge may occur later only if database references and retention policies allow.
+
+Prefer tombstoning historical configuration instead of destructive physical deletion.
+
+---
+
+# 70. FILE UPLOAD SECURITY
+
+Allowed proof formats initially:
+
+```text
+JPEG
+PNG
+PDF
+```
+
+Maximum:
+
+```text
+2 MB
+```
+
+Validate BOTH:
+
+```text
+extension
+actual file signature/MIME
+```
+
+Never trust browser-provided content type alone.
+
+Use:
+
+* random object keys
+* private bucket
+* malware scanning where available
+* upload quarantine
+* scan state
+* authenticated download
+* short-lived signed access URLs
+
+Never make receipts publicly enumerable.
+
+---
+
+# 71. IDEMPOTENCY
+
+Required for:
+
+* payment submission
+* payment approval
+* refund creation
+* expense creation
+* guest meal creation
+* bill generation
+* task expense approval
+* important repeated mutations
+
+Accept:
+
+```text
+Idempotency-Key
+```
+
+or generate operation IDs where appropriate.
+
+Persist result for a bounded time/domain.
+
+Double-tap must not duplicate records.
+
+---
+
+# 72. CONCURRENCY
+
+Protect race conditions.
+
+Examples:
+
+Two admins:
+
+```text
+approve same payment
+```
+
+Only one succeeds.
+
+Two requests:
+
+```text
+generate same month bills
+```
+
+Only one generates.
+
+Resident toggles exactly at cutoff:
+
+backend transaction/server-time check decides.
+
+Use:
+
+* row locks
+* optimistic version columns
+* unique constraints
+* advisory locks
+* serializable transactions selectively
+
+Do not use serializable isolation globally without need.
+
+---
+
+# 73. OUTBOX PATTERN
+
+Create:
+
+```text
+outbox_events
+```
+
+Business transaction:
+
+```text
+database state
++
+audit event
++
+outbox event
+```
+
+must commit together where needed.
+
+Worker then processes:
+
+* notification
+* email
+* push
+* secondary processing
+
+Failure to send notification must not roll back approved payment.
+
+---
+
+# 74. BACKGROUND WORK
+
+Use worker for:
+
+* notifications
+* email
+* exports
+* malware scan
+* scheduled meal generation
+* scheduled deletion processing
+* billing side effects that do not affect calculation commit
+* backup monitoring
+* periodic integrity checks
+
+Do NOT make ordinary:
+
+* meal toggle
+* payment submit
+* admin approve
+* profile update
+
+unnecessarily asynchronous.
+
+---
+
+# 75. RETRY POLICY
+
+Background jobs:
+
+* explicit retry count
+* exponential backoff
+* idempotent handlers
+* dead-letter/failed state
+* observable failure
+* operator retry
+
+Never infinitely retry poison jobs.
+
+---
+
+# 76. GLOBAL SEARCH
+
+Do NOT deploy Elasticsearch initially.
+
+Use PostgreSQL:
+
+* full-text search
+* trigram search
+* indexed normalized fields
+
+Search only meaningful entities:
+
+```text
+Residents
+Payments
+Bills
+Expenses
+Tasks
+```
+
+Results grouped by type.
+
+Authorization applies before returning results.
+
+A resident must never discover another resident through search.
+
+---
+
+# 77. PAGINATION
+
+All growing lists use cursor-based pagination where appropriate.
+
+Examples:
+
+* transactions
+* expenses
+* notifications
+* audit records
+* residents
+* tasks
+
+Avoid fetching thousands of rows and filtering in browser.
+
+---
+
+# 78. API RESPONSE STYLE
+
+Use predictable API envelopes.
+
+Errors contain:
+
+```text
+code
+message
+field errors where applicable
+request_id
+```
+
+Never leak:
+
+* SQL errors
+* stack traces
+* filesystem paths
+* secrets
+* internal service topology
+
+Use domain codes such as:
+
+```text
+MEAL_CUTOFF_PASSED
+PAYMENT_ALREADY_REVIEWED
+BILLING_PERIOD_CLOSED
+FORMULA_DIVIDE_BY_ZERO
+INSUFFICIENT_REFUND_CREDIT
+```
+
+Frontend converts them into plain-language explanations.
+
+---
+
+# 79. OPENAPI
+
+Generate current OpenAPI specification from backend.
+
+Generate typed client contracts for frontend.
+
+Do not hand-maintain duplicate interface definitions.
+
+Contract changes should fail CI if incompatible without deliberate versioning.
+
+---
+
+# 80. SECURITY HEADERS
+
+Implement strong web security headers.
+
+At minimum review:
+
+* Content-Security-Policy
+* frame restrictions
+* Referrer-Policy
+* Permissions-Policy
+* HSTS
+* MIME sniffing prevention
+
+Avoid:
+
+```text
+unsafe-eval
+```
+
+Avoid uncontrolled inline scripts.
+
+Use framework-supported nonce/hashing patterns.
+
+---
+
+# 81. CSRF
+
+Because authentication uses cookies:
+
+protect state-changing requests from CSRF.
+
+Use appropriate:
+
+* SameSite cookie policy
+* origin verification
+* CSRF token mechanism
+
+Do not assume SameSite alone solves every deployment topology.
+
+---
+
+# 82. CORS
+
+Prefer SAME ORIGIN production architecture.
+
+For example:
+
+```text
+https://app.example.com
+```
+
+reverse proxies:
+
+```text
+/api/*
+```
+
+to API.
+
+Do not use:
+
+```text
+Access-Control-Allow-Origin: *
+```
+
+with authenticated operations.
+
+---
+
+# 83. RATE LIMITS
+
+Rate-limit:
+
+* login
+* registration
+* password reset
+* MFA validation
+* proof submission
+* expensive searches
+* export creation
+* formula parse requests
+
+Use user/IP/context aware strategies.
+
+Never rate-limit internal critical callbacks so aggressively that reliability breaks.
+
+---
+
+# 84. SESSION REVOCATION
+
+Support:
+
+* logout current device
+* logout all devices
+* session rotation after login/MFA/security changes
+* immediate session revocation after account deactivation
+* admin ability to invalidate resident sessions where required
+
+---
+
+# 85. LOGGING
+
+Use structured Pino logs.
+
+Every request gets:
+
+```text
+request_id
+trace_id
+```
+
+Log:
+
+* route
+* status
+* duration
+* sanitized actor identifier
+* error code
+
+Do NOT log:
+
+* passwords
+* session tokens
+* MFA secrets
+* full payment proofs
+* sensitive uploaded documents
+* raw authentication headers
+
+Redact PII appropriately.
+
+---
+
+# 86. OBSERVABILITY
+
+Use OpenTelemetry for:
+
+* traces
+* metrics
+* context propagation
+
+Monitor:
+
+* API latency
+* DB query latency
+* DB pool saturation
+* failed login count
+* queue depth
+* failed jobs
+* billing generation duration
+* reconciliation failures
+* object-storage failures
+* error rate
+
+---
+
+# 87. DATABASE QUERY PERFORMANCE
+
+Every frequently queried relationship requires intentionally designed indexes.
+
+Examples:
+
+```text
+resident_meals(resident_id, meal_instance_id)
+meal_instances(service_date, meal_definition_id)
+payments(resident_id, status, submitted_at)
+expenses(status, date)
+bills(resident_id, billing_period_id)
+notifications(user_id, read_at, created_at)
+tasks(assigned_resident_id, status)
+audit_events(entity_type, entity_id, occurred_at)
+```
+
+Use partial indexes for frequent status queries where useful.
+
+Inspect actual `EXPLAIN ANALYZE`.
+
+Do not create indexes blindly.
+
+---
+
+# 88. N+1 PREVENTION
+
+No page should issue one database query per row.
+
+Inspect:
+
+* resident 360
+* meal count
+* payment lists
+* billing history
+
+Use:
+
+* joins
+* batched queries
+* controlled includes
+* projections
+
+Do not over-fetch entire entity graphs.
+
+---
+
+# 89. TRANSACTION BOUNDARIES
+
+Explicitly document transactions for:
+
+* payment approval
+* payment void
+* refund
+* expense approval
+* expense void
+* meal admin override
+* market expense approval
+* formula activation
+* billing period close
+* bill generation
+* resident approval when meal generation is affected
+
+Never scatter related writes across unrelated requests.
+
+---
+
+# 90. DATABASE MIGRATIONS
+
+Production rules:
+
+NEVER:
+
+```text
+drop production database
+reset production database
+prisma migrate reset
+force-sync schema
+```
+
+Use migration history.
+
+Migration workflow:
+
+```text
+migration generated
+↓
+review SQL
+↓
+test against realistic copy
+↓
+backup / PITR verified
+↓
+migration check
+↓
+deploy compatible app
+↓
+validate
+```
+
+Use expand-contract pattern for dangerous schema changes.
+
+Large indexes:
+
+```text
+CREATE INDEX CONCURRENTLY
+```
+
+where appropriate.
+
+---
+
+# 91. BACKUPS
+
+Production PostgreSQL must support:
+
+* encrypted backups
+* point-in-time recovery
+* WAL retention where supported
+* geographic redundancy according to deployment needs
+* defined retention
+* automated backup monitoring
+
+Backup is not complete until restore is tested.
+
+---
+
+# 92. RESTORE VERIFICATION
+
+Periodically restore backup into isolated environment.
+
+Run integrity checks.
+
+Admin system-health UI can expose only high-level:
+
+```text
+Last backup: Successful
+Last restore verification: Successful
+```
+
+Never expose backup credentials.
+
+---
+
+# 93. RESPONSIVE DESIGN — NON-NEGOTIABLE
+
+Design MOBILE FIRST.
+
+Minimum supported logical viewport around:
+
+```text
+320px width
+```
+
+Primary design targets:
+
+```text
+Mobile
+Tablet
+Desktop
+Large Desktop
+```
+
+Do NOT build desktop first and shrink it.
+
+---
+
+# 94. "DO NOT COLLAPSE PAGES" RULE
+
+Responsive design must never remove important functionality.
+
+Do NOT:
+
+* hide required fields on mobile
+* hide admin features merely because screen is small
+* replace whole pages with unexplained accordion stacks
+* omit tables/data on mobile
+* create desktop-only actions
+
+Instead:
+
+```text
+reflow
+resize
+reorder
+change navigation presentation
+change card density
+use sheets for contextual controls
+```
+
+Same information architecture remains available.
+
+---
+
+# 95. BREAKPOINT BEHAVIOR
+
+Use responsive design plus container queries.
+
+Approximate behavior:
+
+## Mobile
+
+```text
+320–767px
+```
+
+* single primary content column
+* bottom navigation
+* full-width cards
+* floating bottom actions where appropriate
+* bottom sheets
+* large touch targets
+* no horizontal page scrolling
+
+## Tablet
+
+```text
+768–1199px
+```
+
+* wider content
+* two-column sections where beneficial
+* navigation rail or adaptive sidebar
+* detail panes where enough room exists
+
+## Desktop
+
+```text
+1200px+
+```
+
+* persistent sidebar
+* main content
+* optional contextual third pane
+* restrained max content width
+* multiple columns where useful
+
+Do not stretch cards across a 4K screen unnecessarily.
+
+---
+
+# 96. NAVIGATION — ADMIN
+
+Mobile bottom navigation should remain approximately:
+
+```text
+Home
+Meals
+Money
+Tasks
+More
+```
+
+Money opens/directs to:
+
+* Payments
+* Funds
+* Expenses
+* Billing
+
+More contains:
+
+* Residents
+* Meal Configuration
+* Formula Engine
+* Calendar
+* Announcements
+* Notifications
+* Settings
+
+Desktop sidebar can directly expose more routes.
+
+Route architecture remains separate.
+
+---
+
+# 97. ADMIN ROUTES
+
+Use clear routes similar to:
+
+```text
+/admin/dashboard
+/admin/meals
+/admin/payments
+/admin/residents
+/admin/residents/:id
+/admin/funds
+/admin/expenses
+/admin/meal-configuration
+/admin/formulas
+/admin/billing
+/admin/tasks
+/admin/calendar
+/admin/announcements
+/admin/notifications
+/admin/settings
+```
+
+---
+
+# 98. RESIDENT NAVIGATION
+
+Mobile:
+
+```text
+Home
+Meals
+Billing
+Payments
+Tasks
+```
+
+Secondary utilities:
+
+* notification bell
+* profile/settings
+* logout
+
+---
+
+# 99. RESIDENT ROUTES
+
+```text
+/app/dashboard
+/app/meals
+/app/billing
+/app/payments
+/app/tasks
+/app/profile
+/app/notifications
+```
+
+---
+
+# 100. VISUAL DIRECTION
+
+The application should feel:
+
+```text
+premium
+quiet
+high confidence
+soft
+tactile
+precise
+fast
+modern
+luxurious
+understandable
+```
+
+Inspired by Apple's current Liquid Glass philosophy.
+
+Do NOT literally clone copyrighted Apple app layouts or proprietary assets.
+
+Create an original design language with similar qualities:
+
+* real backdrop blur
+* translucent but readable materials
+* layered depth
+* rounded geometry
+* subtle specular highlights
+* spring-based movement
+* high-quality typography
+* minimal visual noise
+
+---
+
+# 101. GLASS MUST NOT BE TOO TRANSPARENT
+
+Critical requirement:
+
+The interface should NOT look like nearly invisible transparent cards.
+
+Content readability is more important than transparency.
+
+Approximate light glass:
+
+```css
+background: rgba(255, 255, 255, 0.76–0.88);
+backdrop-filter:
+  blur(20px–28px)
+  saturate(135%–155%);
+```
+
+Approximate dark glass:
+
+```css
+background: rgba(18, 20, 24, 0.76–0.90);
+backdrop-filter:
+  blur(20px–28px)
+  saturate(130%–150%);
+```
+
+Tune per context.
+
+Do not blindly use one opacity everywhere.
+
+---
+
+# 102. GLASS LAYER CONSTRUCTION
+
+A premium glass surface can combine:
+
+```text
+base translucent fill
+backdrop blur
+saturation
+1px outer border
+subtle inner highlight
+soft ambient shadow
+very subtle top-edge specular highlight
+```
+
+Avoid:
+
+* neon outlines
+* extreme rainbow gradients
+* enormous shadows
+* 50 stacked glass layers
+* unreadable blur
+
+---
+
+# 103. BLUR PERFORMANCE
+
+Actual blur is required, but use it intelligently.
+
+Do not stack:
+
+```text
+blurred parent
+  └── blurred child
+       └── blurred child
+```
+
+everywhere.
+
+Persistent surfaces allowed:
+
+* navigation
+* important top bars
+* dialogs
+* sheets
+* major cards
+
+Small nested controls can use semi-opaque material without additional backdrop-filter.
+
+This prevents GPU overload.
+
+---
+
+# 104. BLUR FALLBACK
+
+If `backdrop-filter` is unsupported:
+
+use a more opaque solid/frosted fill.
+
+The interface must remain readable.
+
+Never depend on blur for contrast.
+
+---
+
+# 105. BORDER RADII
+
+Create intentional radius tokens.
+
+Example:
+
+```text
+--radius-xs: 10px
+--radius-sm: 14px
+--radius-md: 18px
+--radius-lg: 22px
+--radius-xl: 28px
+--radius-sheet: 32px
+--radius-pill: 999px
+```
+
+Do not randomly assign radius values.
+
+---
+
+# 106. SPACING SYSTEM
+
+Use consistent 4px-derived spacing tokens.
+
+Common:
+
+```text
+4
+8
+12
+16
+20
+24
+32
+40
+48
+64
+```
+
+Mobile content padding:
+
+approximately:
+
+```text
+16px
+```
+
+Tablet:
+
+```text
+20–24px
+```
+
+Desktop:
+
+```text
+24–32px
+```
+
+Avoid arbitrary margins.
+
+---
+
+# 107. TYPOGRAPHY
+
+Use system-first typography.
+
+On Apple devices:
+
+system naturally feels Apple-like.
+
+Fallback to high-quality variable sans-serif such as Inter where required.
+
+Do NOT bundle unauthorized proprietary fonts.
+
+Define semantic typography:
+
+```text
+Display
+Page Title
+Section Title
+Card Title
+Body
+Body Strong
+Caption
+Label
+Numeric KPI
+Monospace/Data when necessary
+```
+
+Numbers should use tabular numerals where appropriate.
+
+---
+
+# 108. COLOR SYSTEM
+
+Keep visual palette restrained.
+
+Suggested conceptual families:
+
+```text
+Frost
+Graphite
+Cloud
+Ink
+Blue Accent
+Emerald Success
+Amber Warning
+Red Danger
+```
+
+Semantic color is more important than decorative color.
+
+Do not give every meal/card a saturated background.
+
+Meal configuration color should appear as controlled accent:
+
+* icon chip
+* small edge
+* indicator
+* subtle tint
+
+not overwhelming solid cards.
+
+---
+
+# 109. ACCESSIBILITY CONTRAST
+
+Glass surfaces still require readable contrast.
+
+Meet current WCAG expectations.
+
+Do not use:
+
+```text
+light gray text on translucent white
+dark gray text on translucent black
+```
+
+without sufficient contrast.
+
+---
+
+# 110. DARK MODE
+
+Support:
+
+```text
+System
+Light
+Dark
+```
+
+Dark mode must be designed separately rather than CSS-inverted.
+
+Glass material becomes denser.
+
+Shadows become softer.
+
+Borders/highlights adapt.
+
+---
+
+# 111. ANIMATION SYSTEM
+
+Animation exists on virtually every direct interaction, but it must feel intentional.
+
+Use:
+
+* transform
+* opacity
+* clip-path sparingly
+* filter sparingly
+* shared layout transitions
+* spring physics
+
+Avoid animating:
+
+* width/height repeatedly where transform can work
+* huge box shadows every frame
+* enormous blurred layers
+* expensive full-page filters
+
+---
+
+# 112. BUTTON INTERACTION
+
+Every clickable button should feel tactile.
+
+Example behavior:
+
+Pointer hover:
+
+```text
+slight highlight
+1–2px perceived lift
+```
+
+Pointer/touch down:
+
+```text
+scale ~0.97–0.985
+shadow compresses
+specular highlight shifts slightly
+```
+
+Release:
+
+```text
+spring back
+```
+
+Do not delay actual action until animation finishes.
+
+---
+
+# 113. CARD INTERACTION
+
+Interactive cards:
+
+```text
+hover:
+subtle elevation + highlight
+
+press:
+scale ~0.992
+
+release:
+spring
+```
+
+Non-interactive cards must not pretend to be clickable.
+
+---
+
+# 114. TOGGLE ANIMATION
+
+Meal ON/OFF control:
+
+* thumb uses physical spring
+* track interpolates state
+* icon/label cross-fades
+* state text updates
+* successful backend confirmation subtly settles
+
+If server rejects due cutoff:
+
+* toggle springs back
+* concise inline explanation appears
+
+Example:
+
+```text
+Lunch is already locked.
+Admin can still override it.
+```
+
+---
+
+# 115. PAGE TRANSITIONS
+
+Page navigation should feel immediate.
+
+Use:
+
+```text
+small opacity transition
+4–10px vertical/scale movement
+shared layout transitions where meaningful
+```
+
+Typical visual transition:
+
+```text
+180–280ms
+```
+
+Do not use 700ms cinematic transitions.
+
+Navigation must never feel slow because of animation.
+
+---
+
+# 116. SHEETS AND DIALOGS
+
+Bottom sheet mobile:
+
+```text
+backdrop fades
+sheet springs upward
+background slightly scales only if performant
+drag indicator
+large rounded top corners
+```
+
+Desktop:
+
+centered glass dialog or side sheet depending task.
+
+Important forms should not open as tiny popovers.
+
+---
+
+# 117. KPI ANIMATION
+
+Animate KPI number changes subtly.
+
+Example:
+
+```text
+₹1,240 → ₹1,460
+```
+
+Use number interpolation once on meaningful update.
+
+Do not continuously animate data on every React render.
+
+---
+
+# 118. TAB/FILTER ANIMATION
+
+Selected indicator moves with shared layout animation.
+
+Filters should feel like one connected control.
+
+Avoid independently flashing every pill.
+
+---
+
+# 119. LIST ANIMATION
+
+When item is:
+
+* approved
+* removed from pending
+* added
+* status changed
+
+use subtle layout transition.
+
+Do not make rows jump abruptly.
+
+---
+
+# 120. TOASTS
+
+Premium glass toast.
+
+Behavior:
+
+```text
+enter: translate + fade + spring
+exit: fade + slight translation
+```
+
+Messages:
+
+```text
+Payment approved
+Expense voided
+Meal updated
+```
+
+Use consistent verbs.
+
+---
+
+# 121. REDUCED MOTION
+
+Honor:
+
+```css
+prefers-reduced-motion
+```
+
+When enabled:
+
+* remove unnecessary springs
+* reduce movement
+* preserve immediate state feedback
+
+Accessibility is mandatory.
+
+---
+
+# 122. MOTION PERFORMANCE
+
+Target:
+
+```text
+60fps minimum
+120Hz-friendly where hardware supports it
+```
+
+Animate compositor-friendly properties.
+
+Use Motion's lazy-loading facilities where appropriate.
+
+Do not bundle the entire animation engine unnecessarily on static pages.
+
+---
+
+# 123. TOUCH TARGETS
+
+Minimum comfortable touch target roughly:
+
+```text
+44×44px
+```
+
+Primary actions often larger.
+
+Never build tiny 24px icon buttons requiring perfect accuracy.
+
+---
+
+# 124. LOADING STATES
+
+Every screen requires appropriate:
+
+```text
+initial loading
+refreshing
+empty
+error
+offline/network failure
+permission failure
+```
+
+Use skeletons matching actual layout.
+
+Do not use giant generic spinners for entire pages unnecessarily.
+
+---
+
+# 125. OPTIMISTIC UI POLICY
+
+Optimistic UI is allowed only when correctness is preserved.
+
+Meal toggle:
+
+may animate optimistically but MUST rollback if server rejects.
+
+Financial actions:
+
+do not show irreversible success until backend confirms transaction.
+
+Billing generation:
+
+show clear progress/state from authoritative operation.
+
+---
+
+# 126. NETWORK FAILURE
+
+Never silently queue financial or cutoff-sensitive actions for later.
+
+If resident toggles meal without network:
+
+```text
+Could not save the change.
+Check your connection and try again before the cutoff.
+```
+
+Do NOT save offline and submit after cutoff without user knowledge.
+
+---
+
+# 127. ADMIN DASHBOARD
+
+Header:
+
+```text
+Good Morning, Admin ☀️
+```
+
+Greeting based on institution-local time.
+
+Do not hardcode Morning.
+
+Suggested sections:
+
+```text
+Greeting
+
+4 KPIs maximum:
+Residents
+Meals Today
+Available Funds
+Meal Charge
+
+Needs Attention
+
+Recent Activity
+```
+
+Needs Attention aggregates:
+
+* pending resident approvals
+* pending payments
+* leave requests
+* market task submissions
+* billing blockers
+* critical deficit/policy issues
+
+Do not add unnecessary charts.
+
+---
+
+# 128. ADMIN DASHBOARD MOBILE
+
+Single column.
+
+KPI cards may use:
+
+```text
+2×2 grid
+```
+
+if comfortable.
+
+Needs Attention follows.
+
+Recent activity follows.
+
+No sideways scrolling dashboard.
+
+---
+
+# 129. ADMIN DASHBOARD DESKTOP
+
+Possible:
+
+```text
+┌─────────────────────────────────────┐
+│ Greeting                            │
+├──────────┬──────────┬───────┬───────┤
+│ KPI      │ KPI      │ KPI   │ KPI   │
+├─────────────────────┬───────────────┤
+│ Needs Attention     │ Recent        │
+│                     │ Activity      │
+└─────────────────────┴───────────────┘
+```
+
+Do not stretch beyond readable width.
+
+---
+
+# 130. ADMIN MEAL COUNT
+
+Top:
+
+```text
+date selector
+```
+
+KPIs:
+
+```text
+Total Meals This Month
+Guest Meals This Month
+Meals Off This Month
+```
+
+Today's meal cards:
+
+```text
+Lunch
+43 confirmed
+5 guests
+2 off
+Locked
+
+Dinner
+48 confirmed
+1 guest
+3 off
+Open until 5:00 PM
+```
+
+Then resident list.
+
+---
+
+# 131. RESIDENT LIST IN MEAL COUNT
+
+Mobile:
+
+```text
+Sahid Haque
+50 meals this month
+Lunch ON • Dinner OFF
+                     >
+```
+
+Tap opens resident meal detail.
+
+Do not put every possible action on the row.
+
+Admin can search.
+
+---
+
+# 132. ADMIN MEAL OVERRIDE UX
+
+Detail:
+
+```text
+Lunch
+Current: ON
+Baseline: ON
+Locked: Yes
+
+[Turn Off]
+```
+
+If admin changes locked meal:
+
+dialog:
+
+```text
+Turn Lunch off for Sahid?
+
+This meal is already locked.
+The change will be recorded as an admin override.
+
+Reason
+[________________]
+
+Cancel
+Override Meal
+```
+
+After success:
+
+```text
+OFF
+Admin Override
+```
+
+If returned to baseline:
+
+remove current override badge but retain activity history.
+
+---
+
+# 133. PAYMENTS ADMIN
+
+KPIs:
+
+```text
+Received This Month
+Pending Approval
+Refunds This Month
+```
+
+Controls:
+
+```text
+Search
+Filter
+Refund action/context
+```
+
+Filter sheet:
+
+```text
+All
+Pending
+Approved
+Rejected
+Voided
+Refunded
+Deletion Queue where logically applicable
+```
+
+Payment card:
+
+```text
+Sahid Haque
+₹2,000
+UPI
+Pending
+2 Sep • 8:42 PM
+
+[Review]
+```
+
+Review page/sheet:
+
+* proof
+* amount
+* method
+* reference
+* notes
+* submission time
+* resident current balance
+
+Actions:
+
+```text
+Approve
+Reject
+```
+
+Approved records do not show Edit.
+
+---
+
+# 134. RESIDENTS ADMIN
+
+KPIs:
+
+```text
+Total Residents
+Active
+Pending
+```
+
+Total excludes admins and unapproved residents as specified.
+
+Controls:
+
+```text
+Search
+Filter
+```
+
+Resident card:
+
+```text
+Sahid Haque
+Active
+Available balance ₹1,920
+
+[View] [•••]
+```
+
+Pending:
+
+```text
+Sahid Haque
+Pending approval
+
+[Review] [Approve]
+```
+
+---
+
+# 135. RESIDENT 360 VIEW
+
+Use one route.
+
+Header:
+
+```text
+Sahid Haque
+Active
+Joined 14 Aug 2026
+Available balance ₹1,920
+```
+
+Sections/tabs:
+
+```text
+Overview
+Meals
+Funds
+Payments
+Bills
+Tasks
+Activity
+```
+
+Mobile tabs can horizontally scroll within the tab control only; page itself does not horizontally scroll.
+
+Do not duplicate separate business logic.
+
+---
+
+# 136. FUNDS ADMIN
+
+KPIs:
+
+```text
+Deposits This Month
+Available Funds
+Total Deficit
+```
+
+Resident cards:
+
+```text
+Sahid Haque
+Deposits ₹3,000
+Consumed ₹2,150
+Available ₹850
+```
+
+Deficit:
+
+```text
+Amount to Pay ₹1,200
+Grace until 4 Sep
+```
+
+Admin actions in detail:
+
+```text
+Apply restriction
+Create exemption
+View calculation
+```
+
+---
+
+# 137. EXPENSES ADMIN
+
+KPIs:
+
+```text
+Expenses This Month
+Entries This Month
+Remaining Funds
+```
+
+Primary:
+
+```text
+Add Expense
+```
+
+Expense form:
+
+```text
+Date
+Category
+Item
+Quantity
+Unit
+Unit Price
+Calculated Total
+Proof
+Comment
+```
+
+Allow additional items.
+
+Total calculates automatically.
+
+Backend recalculates independently.
+
+History:
+
+```text
+Grocery
+₹1,850
+Approved
+2 Sep
+
+[View]
+```
+
+Approved:
+
+```text
+Void
+```
+
+not Delete.
+
+---
+
+# 138. MEAL CONFIGURATION
+
+KPIs:
+
+```text
+Configured Meals
+Active
+Inactive
+```
+
+Primary:
+
+```text
+Create Meal
+```
+
+Do not display one gigantic form.
+
+Use step-based form:
+
+```text
+1. Basic Info
+2. Schedule
+3. Cutoff
+4. Pricing
+5. User Defaults
+6. Review
+```
+
+Steps belong to one workflow, not separate routes.
+
+---
+
+# 139. MEAL CONFIGURATION FIELDS
+
+Basic:
+
+```text
+Name
+Description
+Icon
+Color
+Meal Type
+```
+
+Schedule:
+
+```text
+Daily recurring
+Specific date / one-time
+Selected weekdays where useful
+Service start
+Service end
+```
+
+Cutoff:
+
+```text
+Same day
+Previous day
+Custom offset
+
+Cutoff time
+```
+
+Pricing:
+
+```text
+Formula-calculated
+Fixed price
+```
+
+Defaults:
+
+```text
+Default ON/OFF
+Visible to residents ON/OFF
+```
+
+Internal notes:
+
+admin-only.
+
+---
+
+# 140. MEAL CONFIG LIST
+
+Each card:
+
+```text
+Lunch
+Regular
+Daily
+12:30 PM – 2:00 PM
+Cutoff 9:00 AM
+Default ON
+Active
+
+[View/Edit] [•••]
+```
+
+Overflow:
+
+```text
+Archive
+Delete
+```
+
+Delete uses safe deletion queue.
+
+---
+
+# 141. FORMULA ENGINE UI
+
+This must feel approachable.
+
+Header:
+
+```text
+Meal Charge Formula
+```
+
+Current formula card:
+
+```text
+Active Formula
+(Total Market Cost - Guest Income)
+÷ Resident Consumed Meals
+
+Current estimate
+₹38.18 / meal
+```
+
+Buttons:
+
+```text
+Edit Formula
+View History
+```
+
+Edit:
+
+toggle/segmented control:
+
+```text
+Plain Language
+Formula
+```
+
+---
+
+# 142. FORMULA EXPLANATION
+
+Always provide:
+
+```text
+How this works
+```
+
+Example:
+
+```text
+Market expenses      ₹184,200
+Guest income         -₹10,000
+                     ─────────
+Resident cost         ₹174,200
+
+Resident meals            4,563
+
+₹174,200 ÷ 4,563
+= ₹38.18 per meal
+```
+
+This reduces disputes.
+
+---
+
+# 143. BILLING ADMIN
+
+KPIs:
+
+```text
+Total Billed
+Total Collected
+Overdue
+```
+
+Primary:
+
+```text
+Generate Bills
+```
+
+Period selector only allows eligible previous/current closed logic according to business rules.
+
+Never future period.
+
+Show readiness before generation.
+
+---
+
+# 144. NOTIFICATIONS ADMIN
+
+Filter:
+
+```text
+All
+Unread
+Info
+Success
+Warnings
+Alerts
+```
+
+Group sensibly:
+
+```text
+Today
+Yesterday
+Earlier This Month
+```
+
+Notifications page defaults to current relevant timeframe.
+
+---
+
+# 145. ANNOUNCEMENTS ADMIN
+
+Create form:
+
+```text
+Title
+Message
+Type
+Priority
+Target
+Publish date
+Optional expiry
+Pin to dashboard
+```
+
+Primary:
+
+```text
+Publish Announcement
+```
+
+Show preview before critical/urgent publish.
+
+---
+
+# 146. TASK ADMIN
+
+List filters:
+
+```text
+All
+Assigned
+Accepted
+In Progress
+Submitted
+Needs Review
+Completed
+Rejected
+```
+
+Create:
+
+```text
+Task type
+Resident
+Date
+Description
+Items
+Quantities
+Units
+Estimated amount optional
+Notes
+```
+
+Submitted task review shows uploaded proofs before creating official expense.
+
+---
+
+# 147. CALENDAR ADMIN
+
+Calendar + list.
+
+Primary:
+
+```text
+Create Event
+```
+
+Fields:
+
+```text
+Name
+Description
+Start
+End
+Type
+Disable meals during this period
+```
+
+Before save show impact:
+
+```text
+This will disable 6 configured meal services
+from 3 Oct through 5 Oct.
+```
+
+---
+
+# 148. SETTINGS ADMIN
+
+Sections only:
+
+```text
+Institution
+Meals & Policies
+Billing
+Notifications
+Appearance
+Security
+Data & Export
+```
+
+Do not turn Settings into a junk drawer.
+
+---
+
+# 149. DATA EXPORT
+
+Admin selects:
+
+```text
+Data scope
+Date range
+Format
+```
+
+Sensitive export requires recent authentication.
+
+Generate asynchronously.
+
+Export artifact private and expires after configured period.
+
+Audit:
+
+```text
+who
+when
+what scope
+```
+
+---
+
+# 150. RESIDENT DASHBOARD
+
+Header:
+
+```text
+Good Evening, Sahid 🌙
+```
+
+KPIs:
+
+```text
+Meals Today
+Available Balance
+Current Bill
+Payment Status
+```
+
+Then:
+
+```text
+Today's Meals
+
+Lunch
+ON
+12:30 PM–2:00 PM
+Cutoff passed • Locked
+
+Dinner
+ON
+8:00 PM–9:30 PM
+Change until 5:00 PM
+```
+
+Then resident-only Recent Activity.
+
+No other residents' activity.
+
+---
+
+# 151. RESIDENT MEALS
+
+KPIs:
+
+```text
+Meals ON This Month
+Meals OFF This Month
+Locked Confirmed Meals
+```
+
+Actions:
+
+```text
+Guest Meal
+Apply for Leave
+```
+
+Views:
+
+```text
+Agenda
+Calendar
+Day
+```
+
+Agenda automatically positions near current date.
+
+Do not hide past/future access.
+
+---
+
+# 152. RESIDENT MEAL CARD
+
+Example:
+
+```text
+Lunch
+12:30 PM–2:00 PM
+
+ON
+
+Change until 9:00 AM
+```
+
+Locked:
+
+```text
+Lunch
+ON
+Locked
+```
+
+Admin override:
+
+```text
+Dinner
+OFF
+Admin Override
+```
+
+Clearly show status.
+
+---
+
+# 153. RESIDENT GUEST MEAL
+
+Form:
+
+```text
+Date
+Meal
+Guest quantity
+Optional note
+```
+
+Before submit show:
+
+```text
+Lunch
+Your meal: 1
+Guests: 2
+Total meals: 3
+Estimated guest charge: ₹110
+Cutoff: 9:00 AM
+```
+
+Backend validates cutoff.
+
+---
+
+# 154. RESIDENT LEAVE
+
+Form:
+
+```text
+Start date
+End date
+Reason
+Applicable meals
+```
+
+Default:
+
+```text
+All meals
+```
+
+Preview:
+
+```text
+If approved, 12 future unlocked meals will be turned off.
+2 already locked meals will not change automatically.
+```
+
+Status visible.
+
+---
+
+# 155. RESIDENT BILLING
+
+KPIs:
+
+```text
+Current Amount to Pay
+Overdue
+Payment Status
+```
+
+Show unsettled bill prominently.
+
+History defaults to requested/current month scope but allows explicit period navigation.
+
+Pay Bill:
+
+```text
+Select bill
+Amount
+Method
+Reference
+Proof
+Notes
+```
+
+Submission creates pending payment.
+
+Admin verifies later.
+
+---
+
+# 156. RESIDENT PAYMENTS
+
+KPIs:
+
+```text
+Deposits This Month
+Pending Approval
+Refund Pending
+```
+
+Primary:
+
+```text
+Submit Payment
+```
+
+Fields:
+
+```text
+Amount
+Method
+Reference
+Proof
+Notes
+```
+
+List filters:
+
+```text
+All
+Pending
+Approved
+Rejected
+Voided
+Refunded
+```
+
+---
+
+# 157. RESIDENT TASKS
+
+Assigned task:
+
+```text
+Market Purchase
+Due 4 Sep
+
+Rice 10 kg
+Oil 5 L
+Vegetables ...
+
+[Accept]
+[Reject]
+```
+
+Reject requires reason.
+
+Accepted task provides:
+
+```text
+Start submission
+```
+
+Submission captures:
+
+* actual items
+* quantities
+* units
+* prices
+* receipts
+* comment
+
+Resident must clearly see:
+
+```text
+Waiting for admin verification
+```
+
+It does not enter official expenses until approved.
+
+---
+
+# 158. GLOBAL ACTIVITY PRIVACY
+
+Resident sees:
+
+```text
+their own events
+admin/system actions affecting them
+global announcements
+```
+
+Resident must never see:
+
+* another person's payment
+* another person's balance
+* another person's meals
+* another person's leave
+* another person's task
+
+Backend enforces this.
+
+---
+
+# 159. SEARCH AND FILTER MOBILE UX
+
+Do not show eight status pills taking half the screen.
+
+Use:
+
+```text
+[ Search payments… ] [Filter]
+```
+
+Tap Filter opens glass bottom sheet.
+
+Desktop can show more inline filters.
+
+---
+
+# 160. DANGEROUS ACTIONS
+
+Use red only for actual dangerous/destructive actions:
+
+```text
+Void
+Delete
+Reject
+Deactivate
+Close Billing
+Reopen Billing
+```
+
+Do not color ordinary warnings red.
+
+---
+
+# 161. CONFIRMATION COPY
+
+Never use only:
+
+```text
+Are you sure?
+```
+
+Explain consequence.
+
+Example:
+
+```text
+Void this ₹1,850 expense?
+
+The original entry will remain in history,
+but it will no longer count toward active expense totals.
+
+Reason
+[________________]
+
+Cancel
+Void Expense
+```
+
+---
+
+# 162. FORM VALIDATION
+
+Client validates for speed.
+
+Server validates independently.
+
+Database enforces final integrity.
+
+Three layers:
+
+```text
+Frontend UX validation
+Backend domain validation
+Database constraints
+```
+
+Never trust client validation.
+
+---
+
+# 163. EMPTY STATES
+
+Useful:
+
+```text
+No pending payments
+
+Payments submitted by residents will appear here.
+```
+
+with relevant action only.
+
+Do not use decorative paragraphs.
+
+---
+
+# 164. ERROR STATES
+
+Specific:
+
+```text
+This meal locked at 9:00 AM.
+Your change was not saved.
+```
+
+Not:
+
+```text
+Something went wrong.
+```
+
+Generic fallback can exist only for unexpected errors and includes request ID.
+
+---
+
+# 165. DATABASE CONSTRAINT EXAMPLES
+
+Enforce:
+
+```text
+payment amount > 0
+refund amount > 0
+guest quantity >= 1
+expense quantity > 0
+unit price >= 0
+
+unique resident + meal instance
+unique meal definition + occurrence
+unique resident + billing period + revision
+unique approved expense source task submission
+```
+
+Foreign keys must be explicit.
+
+Think carefully about `ON DELETE`.
+
+Avoid cascading historical financial deletion.
+
+---
+
+# 166. SOFT DELETION
+
+Where soft deletion is necessary, use consistent:
+
+```text
+deleted_at
+deleted_by
+```
+
+Do not put random `is_deleted` booleans throughout database.
+
+Financial rows should generally use domain states, not deletion.
+
+---
+
+# 167. READ MODELS / KPI PERFORMANCE
+
+Do not calculate giant dashboard aggregations in browser.
+
+Use backend query services.
+
+For critical financial values:
+
+derive from authoritative records.
+
+For high-volume noncritical KPIs:
+
+allow controlled cached read projections with explicit invalidation.
+
+Never let cache change financial truth.
+
+---
+
+# 168. CACHE POLICY
+
+Good cache candidates:
+
+* institution appearance settings
+* active meal-definition metadata
+* static lookup data
+
+Be cautious caching:
+
+* balances
+* meal lock state
+* payment approval state
+* billing readiness
+
+If cached, use extremely clear invalidation and server-authoritative mutation responses.
+
+---
+
+# 169. PERFORMANCE TARGETS
+
+Target strong real-world Web Vitals:
+
+```text
+LCP < 2.5s at 75th percentile
+INP < 200ms
+CLS < 0.1
+```
+
+Interactive feedback should generally begin immediately.
+
+Backend:
+
+simple indexed reads should normally be far below hundreds of milliseconds under normal load.
+
+Track p50/p95/p99.
+
+Do not promise impossible latency over arbitrary networks.
+
+---
+
+# 170. FRONTEND JS BUDGET
+
+Use Server Components where valuable.
+
+Keep client components at interaction boundaries.
+
+Do not add `"use client"` to entire application trees.
+
+Lazy-load:
+
+* complex charts if ever used
+* formula editor
+* large dialogs
+* optional administrative tools
+
+Avoid massive utility libraries.
+
+---
+
+# 171. IMAGE/ICON PERFORMANCE
+
+Use SVG icons.
+
+Do not load hundreds of icon modules unnecessarily.
+
+Optimize user-upload preview.
+
+Receipts should not be rendered full resolution when thumbnails suffice.
+
+---
+
+# 172. API TIMEOUTS
+
+Set explicit:
+
+* DB query timeout strategy
+* external storage timeout
+* email timeout
+* worker job timeout
+
+Never allow requests to hang indefinitely.
+
+---
+
+# 173. HEALTH ENDPOINTS
+
+Provide:
+
+```text
+/health/live
+/health/ready
+```
+
+Readiness checks required infrastructure.
+
+Do not return credentials or sensitive environment data.
+
+---
+
+# 174. TEST STACK
+
+Use:
+
+```text
+Vitest
+Playwright
+Testcontainers
+Fastify injection/Supertest equivalent where appropriate
+axe accessibility checks
+fast-check or equivalent property-based testing for critical math
+```
+
+---
+
+# 175. UNIT TESTS
+
+Required especially for:
+
+* meal precedence
+* cutoff computation
+* membership-effective logic
+* deficit grace logic
+* formula parser
+* formula evaluator
+* monetary rounding
+* bill calculation
+* refund eligibility
+* state transitions
+
+---
+
+# 176. PROPERTY TESTS
+
+Critical formulas should be tested against:
+
+* zero values
+* huge values
+* tiny values
+* negative-invalid inputs
+* divide by zero
+* repeated rounding
+* random meal counts
+* random expense totals
+
+Assertions:
+
+* no floating-point drift
+* deterministic result
+* no NaN
+* no Infinity
+* expected invariants
+
+---
+
+# 177. INTEGRATION TESTS
+
+Use real PostgreSQL.
+
+Do not mock database for all integration tests.
+
+Test:
+
+* constraints
+* transactions
+* locks
+* rollback
+* duplicate idempotency key
+* concurrent approval
+* billing generation
+* migration behavior
+
+---
+
+# 178. CONCURRENCY TESTS
+
+Explicitly simulate:
+
+```text
+two payment approvals
+two billing generation calls
+two admin overrides
+resident mutation at cutoff boundary
+duplicate task approval
+```
+
+Verify one authoritative result.
+
+---
+
+# 179. E2E TESTS
+
+Playwright flows:
+
+Admin:
+
+```text
+login
+approve resident
+create meal
+override meal
+approve payment
+create expense
+configure formula
+run billing readiness
+generate billing
+assign task
+approve submitted purchase
+```
+
+Resident:
+
+```text
+register
+login after approval
+toggle meal
+guest meal
+leave request
+submit payment
+view bill
+handle task
+```
+
+---
+
+# 180. SECURITY TESTS
+
+Verify:
+
+Resident cannot:
+
+```text
+GET another resident bill
+GET another resident payment
+change another resident meal
+access admin API
+approve own payment
+```
+
+Attempt modified IDs manually.
+
+All must return authorization failure.
+
+---
+
+# 181. FILE SECURITY TESTS
+
+Try:
+
+* executable disguised as JPEG
+* wrong MIME
+* oversized file
+* PDF polyglot where detectable
+* unauthorized object access
+* expired signed URL
+
+Reject appropriately.
+
+---
+
+# 182. ACCESSIBILITY TESTS
+
+Verify:
+
+* keyboard navigation
+* focus visibility
+* screen-reader labels
+* dialog focus trapping
+* escape behavior
+* reduced motion
+* color contrast
+* controls not color-only
+
+---
+
+# 183. RESPONSIVE TEST MATRIX
+
+At minimum visually/e2e test:
+
+```text
+320×568
+360×800
+390×844
+412×915
+
+768×1024
+820×1180
+
+1280×720
+1440×900
+1920×1080
+```
+
+No:
+
+* clipped controls
+* inaccessible actions
+* horizontal page overflow
+* overlapping fixed navigation
+* hidden form fields
+
+---
+
+# 184. LIQUID GLASS PERFORMANCE TEST
+
+Test on modest mobile hardware.
+
+If repeated blur causes frame drops:
+
+first reduce:
+
+* nested backdrop filters
+* huge shadows
+* full-screen animated filters
+
+Do NOT immediately remove all glass.
+
+Optimize composition intelligently.
+
+---
+
+# 185. CI PIPELINE
+
+GitHub Actions or equivalent:
+
+```text
+install locked dependencies
+lint
+format check
+typecheck
+unit tests
+integration tests
+security tests
+build web
+build API
+build worker
+database migration validation
+Playwright smoke
+dependency vulnerability scan
+container scan
+```
+
+Pull request cannot merge if critical checks fail.
+
+---
+
+# 186. DEPENDENCY SECURITY
+
+Use:
+
+* automated dependency update PRs
+* lockfile
+* vulnerability scan
+* license visibility where needed
+* prompt review for major upgrades
+
+Never automatically deploy breaking major upgrade.
+
+---
+
+# 187. CONTAINERIZATION
+
+Production-quality Dockerfiles:
+
+* multi-stage builds
+* non-root runtime user
+* minimal runtime image
+* no build secrets copied into final image
+* health checks where appropriate
+* graceful shutdown
+
+Do not run DB as an unprotected development container in production.
+
+---
+
+# 188. LOCAL DEVELOPMENT
+
+Provide:
+
+```text
+docker compose up
+```
+
+for infrastructure such as:
+
+* PostgreSQL
+* Redis
+* MinIO
+* optional dev mail server
+
+Apps may run locally for hot reload.
+
+Seed command creates development-only data.
+
+Never let seed scripts run automatically against production.
+
+---
+
+# 189. ENVIRONMENT CONFIG
+
+Validate configuration at startup.
+
+Fail fast if required configuration missing.
+
+Example:
+
+```text
+DATABASE_URL
+REDIS_URL
+OBJECT_STORAGE_*
+SESSION_SECRET/KEYS
+APP_ORIGIN
+INSTITUTION_DEFAULT_TIMEZONE
+```
+
+Do not spread `process.env` calls throughout domain code.
+
+Use typed configuration module.
+
+---
+
+# 190. SECRET MANAGEMENT
+
+Production secrets belong in:
+
+* secret manager
+* protected environment variables
+
+Never:
+
+* Git
+* source code
+* frontend bundle
+* logs
+
+Rotate sensitive keys with documented procedure.
+
+---
+
+# 191. DATABASE SEEDING
+
+Development seed should create:
+
+* one admin
+* several residents
+* pending resident
+* active meals
+* meal instances
+* example payments
+* expenses
+* bills
+* tasks
+
+Make it obvious data is development-only.
+
+Use deterministic seeds where tests require reproducibility.
+
+---
+
+# 192. FRONTEND COMPONENT ARCHITECTURE
+
+Design-system primitives:
+
+```text
+GlassSurface
+GlassCard
+GlassSheet
+GlassDialog
+Button
+IconButton
+Input
+MoneyInput
+SearchField
+Select
+Combobox
+DatePicker
+TimePicker
+Toggle
+SegmentedControl
+StatusBadge
+KpiCard
+ListRow
+EmptyState
+ErrorState
+Skeleton
+Toast
+BottomNav
+NavigationRail
+Sidebar
+PageHeader
+FilterSheet
+ConfirmationDialog
+```
+
+Do not create duplicated card styles per route.
+
+---
+
+# 193. DOMAIN COMPONENTS
+
+Examples:
+
+```text
+MealCard
+MealStatusControl
+ResidentMealRow
+PaymentCard
+ExpenseCard
+BillCard
+BillCalculation
+ResidentSummary
+TaskCard
+FormulaPreview
+BillingReadinessCard
+ActivityItem
+```
+
+Domain component uses design primitives.
+
+Do not embed database access inside UI components.
+
+---
+
+# 194. DESIGN TOKENS
+
+Create CSS variables for:
+
+```text
+color
+glass fills
+border
+shadow
+blur
+radius
+spacing
+type
+motion duration
+motion easing/spring
+z-index
+```
+
+No scattered magic hex values.
+
+Example:
+
+```css
+--glass-surface-light:
+--glass-surface-dark:
+--glass-border-light:
+--glass-border-dark:
+--glass-blur-lg:
+--shadow-glass:
+--radius-card:
+--radius-sheet:
+```
+
+---
+
+# 195. Z-INDEX SYSTEM
+
+Define small intentional scale:
+
+```text
+base
+sticky
+navigation
+dropdown
+sheet
+modal
+toast
+critical overlay
+```
+
+Do not use:
+
+```text
+z-index: 999999999
+```
+
+randomly.
+
+---
+
+# 196. SAFE-AREA SUPPORT
+
+Mobile UI must respect:
+
+```css
+env(safe-area-inset-top)
+env(safe-area-inset-bottom)
+```
+
+Bottom navigation must never overlap iOS gesture area.
+
+---
+
+# 197. KEYBOARD SUPPORT MOBILE
+
+Forms must account for virtual keyboard.
+
+Primary action should not disappear under keyboard.
+
+Use proper input modes:
+
+Money:
+
+```text
+decimal/numeric
+```
+
+Email:
+
+```text
+email
+```
+
+Do not create custom keyboards.
+
+---
+
+# 198. MOBILE FORMS
+
+Prefer one clear vertical sequence.
+
+Sticky bottom action where useful:
+
+```text
+Save Changes
+```
+
+But ensure it does not hide last form field.
+
+Avoid multi-column forms on phone.
+
+---
+
+# 199. TABLET LAYOUT
+
+Tablet should NOT simply be a giant phone.
+
+Use:
+
+* two-column KPI layouts
+* master-detail where useful
+* navigation rail
+* more visible filters
+
+But maintain touch-friendly controls.
+
+---
+
+# 200. DESKTOP LAYOUT
+
+Desktop should NOT become a dense spreadsheet application.
+
+Use available space for:
+
+* contextual detail
+* readable side-by-side information
+* persistent navigation
+
+Maintain visual breathing room.
+
+---
+
+# 201. NO CLUTTER RULE
+
+Every page should answer:
+
+```text
+What is this page for?
+What needs attention?
+What is the primary action?
+What is the current state?
+```
+
+If an element does not help answer one of those, question whether it belongs.
+
+---
+
+# 202. PRIMARY ACTION RULE
+
+Usually one dominant primary action per page.
+
+Examples:
+
+```text
+Add Expense
+Create Meal
+Generate Bills
+Create Announcement
+Assign Task
+Submit Payment
+```
+
+Secondary actions visually quieter.
+
+Destructive actions separated.
+
+---
+
+# 203. ACTION OVERFLOW
+
+Do not render:
+
+```text
+Edit Delete Archive Activate Deactivate Request Changes
+```
+
+on one row.
+
+Use:
+
+```text
+[View] [•••]
+```
+
+Overflow menu holds infrequent actions.
+
+---
+
+# 204. STATUS LANGUAGE
+
+Use consistent labels everywhere.
+
+Never show:
+
+```text
+Approved
+```
+
+on one screen and:
+
+```text
+Verified
+```
+
+on another for same state unless semantics differ.
+
+Create central status vocabulary.
+
+---
+
+# 205. DATE/TIME LANGUAGE
+
+Non-technical display:
+
+```text
+2 Sep 2026
+8:30 PM
+```
+
+Detailed tooltip/detail may show exact timestamp.
+
+Institution timezone shown in settings.
+
+---
+
+# 206. ACTIVITY FEED
+
+Activity should be event-driven.
+
+Examples:
+
+```text
+Payment of ₹2,000 approved
+Lunch changed to OFF by Admin
+Leave request approved
+August bill generated
+Market task assigned
+```
+
+Avoid low-level technical log language.
+
+---
+
+# 207. NOTIFICATION READ STATE
+
+Use:
+
+```text
+read_at
+```
+
+rather than only Boolean where possible.
+
+Allows timeline/debugging.
+
+---
+
+# 208. ANNOUNCEMENT PINNING
+
+Pinned announcements display near dashboard top but must not permanently overwhelm page.
+
+Critical can use stronger treatment.
+
+Normal pinned card remains compact.
+
+---
+
+# 209. ACCESSIBILITY OF COLOR
+
+Every state has:
+
+```text
+color
++
+text
++
+icon where useful
+```
+
+Never red/green-only state differentiation.
+
+---
+
+# 210. ADMIN "NEEDS ATTENTION"
+
+This is a key workflow.
+
+Aggregate actionable counts only.
+
+Example:
+
+```text
+3 payments need review
+2 residents awaiting approval
+1 leave request
+2 task submissions need verification
+```
+
+Tap opens filtered relevant route.
+
+Do not include informational noise.
+
+---
+
+# 211. EMPTY ADMIN ATTENTION
+
+Display:
+
+```text
+You're all caught up
+```
+
+and no giant animation.
+
+---
+
+# 212. BACKEND DOMAIN MODULES
+
+Create modules roughly:
+
+```text
+AuthModule
+InstitutionModule
+UserModule
+PolicyModule
+
+MealConfigurationModule
+MealModule
+GuestMealModule
+LeaveModule
+CalendarModule
+
+LedgerModule
+PaymentModule
+RefundModule
+ExpenseModule
+FundsModule
+
+FormulaModule
+BillingModule
+
+TaskModule
+AnnouncementModule
+NotificationModule
+
+FileModule
+SearchModule
+AuditModule
+OutboxModule
+
+SettingsModule
+HealthModule
+```
+
+Dependencies flow intentionally.
+
+---
+
+# 213. DOMAIN DEPENDENCY RULE
+
+Example:
+
+```text
+Payment -> Ledger
+Expense -> Ledger
+Refund -> Ledger
+Billing -> Meals + Formula + Ledger read models
+Task -> Expense creation workflow
+```
+
+Do NOT allow every module to directly import every other module.
+
+Avoid circular dependencies.
+
+Use domain interfaces/events where sensible.
+
+---
+
+# 214. NO GENERIC GOD SERVICE
+
+Do not create:
+
+```text
+AppService
+DatabaseService
+UtilsService
+CommonService
+```
+
+containing hundreds of unrelated methods.
+
+Services should express domain responsibility.
+
+---
+
+# 215. REPOSITORY USAGE
+
+Do not create useless repository abstraction wrapping every ORM method one-for-one.
+
+Use repositories/query services when they:
+
+* protect domain queries
+* centralize complicated persistence
+* isolate transaction semantics
+
+Avoid ceremony for ceremony's sake.
+
+---
+
+# 216. DOMAIN COMMAND EXAMPLES
+
+Explicit application operations:
+
+```text
+ApproveResident
+ToggleResidentMeal
+OverrideResidentMeal
+SubmitPayment
+ApprovePayment
+RejectPayment
+IssueRefund
+CreateExpense
+VoidExpense
+ActivateFormulaVersion
+GenerateBillingPeriod
+AssignTask
+ApproveTaskSubmission
+ApproveLeave
+```
+
+Each operation validates authorization and state.
+
+---
+
+# 217. AUTHORIZATION MUST BE DOMAIN-AWARE
+
+Generic role guard:
+
+```text
+ADMIN
+```
+
+is not enough.
+
+Also verify ownership.
+
+Example:
+
+Resident calls:
+
+```text
+GET /api/v1/bills/:id
+```
+
+Backend checks:
+
+```text
+bill.resident_id === authenticated user
+```
+
+not merely role.
+
+---
+
+# 218. DATABASE TENANT FILTERING
+
+Every institutional query needs explicit institution boundary.
+
+Avoid accidentally querying by record ID alone when cross-institution collision/access is possible.
+
+---
+
+# 219. RECONCILIATION SERVICE
+
+Implement explicit financial reconciliation.
+
+Check:
+
+```text
+approved payments ↔ ledger
+approved expenses ↔ ledger
+refunds ↔ ledger
+bill postings ↔ ledger
+```
+
+Expose administrative readiness result.
+
+Reconciliation errors block final billing when relevant.
+
+---
+
+# 220. PERIODIC INTEGRITY CHECK
+
+Background integrity worker can periodically verify:
+
+```text
+duplicate meal risks
+orphan references
+ledger journal imbalance
+billing snapshot integrity
+missing expected relationships
+```
+
+Alert admin/operator on serious issue.
+
+Do not silently "fix" financial history automatically.
+
+---
+
+# 221. AUDIT VS ACTIVITY
+
+Audit:
+
+technical/security historical record.
+
+Activity:
+
+human-readable UI projection.
+
+Do not expose entire audit metadata to residents.
+
+---
+
+# 222. ERROR RECOVERY
+
+Every critical transaction must either:
+
+```text
+fully commit
+```
+
+or:
+
+```text
+fully rollback
+```
+
+If external side effect fails later:
+
+retry through outbox/worker.
+
+Never leave payment marked approved without associated posted ledger journal.
+
+---
+
+# 223. DEPLOYMENT STRATEGY
+
+Start simple.
+
+Production recommendation:
+
+```text
+containerized web
+containerized API
+containerized worker
+managed PostgreSQL
+managed Redis
+private object storage
+managed TLS/reverse proxy
+```
+
+Do not introduce Kubernetes unless actual scale/operations justify it.
+
+---
+
+# 224. SCALE ASSUMPTION
+
+Optimize for:
+
+* hundreds to thousands of residents per institution;
+* years of meal/payment history;
+* many financial records;
+* multiple concurrent admins.
+
+Architecture should comfortably scale far beyond a single household without becoming distributed-system complexity.
+
+---
+
+# 225. FUTURE SCALABILITY
+
+Keep boundaries clean enough to extract a service in the future if needed.
+
+Do NOT preemptively extract it now.
+
+---
+
+# 226. DATA EXPORT FORMATS
+
+Prefer:
+
+```text
+CSV
+JSON
+PDF only for human-readable reports where required
+```
+
+Never use spreadsheets as authoritative system database.
+
+---
+
+# 227. PWA
+
+The application may be installable as PWA.
+
+Support:
+
+* manifest
+* icons
+* standalone mode
+* appropriate caching of static assets
+
+Do NOT cache sensitive API responses indiscriminately.
+
+Do NOT implement offline financial mutation queues.
+
+---
+
+# 228. SERVICE WORKER
+
+Cache:
+
+```text
+static assets
+versioned application shell where safe
+```
+
+Never stale-cache:
+
+* payment approval
+* balances
+* bills
+* meal lock state
+
+without strict strategy.
+
+---
+
+# 229. FORM AUTOSAVE
+
+Do not autosave financial submissions.
+
+For long admin configuration forms, local draft autosave may be used where safe.
+
+Never mistake draft for saved configuration.
+
+Clearly label:
+
+```text
+Draft
+Saved
+```
+
+---
+
+# 230. CONFIRMATION LEVELS
+
+Routine reversible action:
+
+```text
+immediate
+```
+
+Moderate action:
+
+```text
+simple confirmation
+```
+
+High-risk action:
+
+```text
+consequence explanation + reason
+```
+
+Critical:
+
+```text
+recent authentication + readiness + explicit confirmation
+```
+
+Avoid confirmation fatigue.
+
+---
+
+# 231. BILLING REOPEN
+
+If supported:
+
+Require:
+
+* Admin
+* recent authentication
+* reason
+* no silent edits
+* audit
+* revision/correction workflow
+
+Reopening must not destroy original bill snapshot.
+
+---
+
+# 232. DATA RETENTION
+
+Define explicit retention policy.
+
+Financial/audit history should generally be retained according to operational/legal requirements.
+
+User deletion does not mean deleting referenced financial history.
+
+Support anonymization/tombstoning where appropriate without destroying accounting integrity.
+
+---
+
+# 233. DATA PRIVACY
+
+Least data exposure.
+
+Frontend APIs return only fields required by screen.
+
+Resident search endpoints cannot enumerate institution residents.
+
+Logs redact sensitive data.
+
+Exports are scoped.
+
+---
+
+# 234. NO HARDCODING BUSINESS CONFIGURATION
+
+Configurable:
+
+* timezone
+* meal schedules
+* cutoffs
+* default state
+* pricing strategy
+* formula
+* grace period
+* policy thresholds
+* billing due rules
+* file size if later exposed safely
+* institution details
+
+Security invariants remain hard rules.
+
+Do not make authorization configurable by residents.
+
+---
+
+# 235. FEATURE FLAGS
+
+Do not create a huge feature flag system initially.
+
+If needed for rollout, use simple server-controlled flags for unfinished risky modules.
+
+Never leave partially implemented functionality visible.
+
+---
+
+# 236. CODE QUALITY
+
+TypeScript:
+
+```text
+strict = true
+noImplicitAny
+strictNullChecks
+noUncheckedIndexedAccess where practical
+```
+
+No unexplained `any`.
+
+No massive files.
+
+No 1,500-line React components.
+
+No duplicated business logic.
+
+---
+
+# 237. COMMENT POLICY
+
+Comments explain:
+
+```text
+WHY
+```
+
+not obvious:
+
+```text
+WHAT
+```
+
+Critical financial algorithms should document assumptions and invariants.
+
+---
+
+# 238. NAMING
+
+Use domain terminology consistently.
+
+Examples:
+
+```text
+billingPeriod
+mealInstance
+residentMeal
+payment
+ledgerJournal
+formulaVersion
+policyExemption
+```
+
+Avoid vague:
+
+```text
+data
+info
+item2
+temp
+misc
+helper
+```
+
+---
+
+# 239. DATABASE NAMING
+
+Use one consistent convention.
+
+Example:
+
+```text
+snake_case PostgreSQL
+camelCase TypeScript
+```
+
+Map explicitly through ORM.
+
+---
+
+# 240. API NAMING
+
+Resources use nouns:
+
+```text
+/payments
+/bills
+/residents
+/meal-instances
+```
+
+Business commands may use explicit action routes when state transition deserves clarity:
+
+```text
+POST /payments/:id/approve
+POST /payments/:id/reject
+POST /meals/:id/override
+POST /billing-periods/:id/generate
+```
+
+Do not abuse generic PATCH for every critical domain transition.
+
+---
+
+# 241. MUTATION RESPONSE
+
+Return authoritative new state.
+
+Example after meal toggle:
+
+```json
+{
+  "state": "OFF",
+  "effectiveReason": "RESIDENT_SELECTION",
+  "locked": false,
+  "cutoffAt": "...",
+  "version": 7
+}
+```
+
+Frontend uses returned result.
+
+---
+
+# 242. OPTIMISTIC CONCURRENCY
+
+Include version/revision where records are frequently edited.
+
+Reject stale writes with clear code:
+
+```text
+RESOURCE_CHANGED
+```
+
+Frontend refreshes and tells user.
+
+---
+
+# 243. UI COPY
+
+Write from user's perspective.
+
+Use:
+
+```text
+Save changes
+Approve payment
+Turn meal off
+Generate bills
+```
+
+Avoid:
+
+```text
+Execute
+Submit payload
+Commit state
+Process entity
+```
+
+---
+
+# 244. "NON-TECHNICAL USER" TEST
+
+For every page ask:
+
+Could a resident or admin with no software/accounting knowledge understand:
+
+```text
+what they are seeing?
+what needs action?
+what happens when button is pressed?
+whether action succeeded?
+how to recover from failure?
+```
+
+If not, redesign.
+
+---
+
+# 245. PERFORMANCE VS CORRECTNESS
+
+If choosing between:
+
+```text
+50ms faster
+```
+
+and:
+
+```text
+guaranteed correct financial transaction
+```
+
+choose correctness.
+
+Then optimize safely.
+
+---
+
+# 246. QUERY PROFILING
+
+Before claiming "lightning fast":
+
+benchmark:
+
+* admin dashboard
+* meal-count page
+* resident 360
+* payments
+* billing readiness
+* global search
+
+Create realistic data volumes.
+
+Use query plans.
+
+---
+
+# 247. DATABASE CONNECTION POOL
+
+Configure according to deployment.
+
+Do not create one connection per request.
+
+Monitor saturation.
+
+Handle graceful shutdown.
+
+---
+
+# 248. GRACEFUL SHUTDOWN
+
+API and worker:
+
+* stop accepting new work
+* complete/abort safely
+* close queues
+* close DB pool
+* flush telemetry appropriately
+
+Billing/payment transaction must never be cut mid-operation without database rollback protection.
+
+---
+
+# 249. REQUEST SIZE LIMITS
+
+Set sensible maximum JSON body size.
+
+File upload path separately constrained.
+
+Do not allow unlimited bodies.
+
+---
+
+# 250. ANTI-AUTOMATION / BRUTE FORCE
+
+Authentication endpoints:
+
+* escalating rate limits
+* generic credential failure
+* logging
+* account protection
+
+Avoid easily exploitable account enumeration.
+
+---
+
+# 251. ADMIN SESSION UX
+
+When admin sensitive session expires:
+
+preserve safe form draft when possible.
+
+Prompt re-authentication.
+
+Then continue action only after verifying state still valid.
+
+---
+
+# 252. RESIDENT SESSION UX
+
+Do not unexpectedly destroy an unfinished safe form because session refresh happens.
+
+Use session refresh/rotation properly.
+
+Financial submission still validates everything server-side.
+
+---
+
+# 253. FORMULA TEST CASES
+
+Mandatory:
+
+```text
+(total_market_cost - total_guest_income)
+/ total_consumed_resident_meals
+```
+
+Test:
+
+```text
+0 resident meals
+0 expenses
+guest income > expenses
+very large values
+rounding boundaries
+formula version change
+closed period
+current open period
+```
+
+Divide by zero should produce:
+
+```text
+FORMULA_DIVIDE_BY_ZERO
+```
+
+and block billing.
+
+---
+
+# 254. BILL NUMBER
+
+Create human-facing IDs such as:
+
+```text
+BILL-202608-0127
+```
+
+Payment:
+
+```text
+PAY-202609-0042
+```
+
+Expense:
+
+```text
+EXP-202609-0098
+```
+
+Internal authorization still uses opaque ID.
+
+---
+
+# 255. ACTIVITY IDs
+
+Human-readable references can appear in details/support.
+
+Do not expose sequential DB PK.
+
+---
+
+# 256. NOTIFICATION DELIVERY FAILURE
+
+Notification status may fail without rolling back business action.
+
+Example:
+
+Payment approved but email service down:
+
+```text
+payment remains approved
+notification retry happens
+```
+
+Correct.
+
+---
+
+# 257. EMAIL/PUSH
+
+Treat as secondary delivery.
+
+In-app notification is authoritative user-facing notification history.
+
+Do not make financial operation depend on third-party messaging API availability.
+
+---
+
+# 258. APPEARANCE SETTINGS
+
+Allow only useful customization:
+
+```text
+System/Light/Dark
+Accent
+Comfortable/Compact where appropriate
+```
+
+Do not build drag-and-drop theme editor.
+
+---
+
+# 259. LIVE APPEARANCE PREVIEW
+
+Settings appearance section shows miniature preview.
+
+Updating appearance should animate smoothly.
+
+No full-page reload.
+
+---
+
+# 260. SKELETON DESIGN
+
+Skeletons use glass-friendly muted blocks.
+
+Do not animate aggressive bright shimmer.
+
+Respect reduced motion.
+
+---
+
+# 261. SCROLL BEHAVIOR
+
+Avoid scroll hijacking.
+
+Sticky headers may blur subtly.
+
+Agenda auto-scroll current date only on deliberate initial navigation, not fighting user scroll.
+
+---
+
+# 262. FOCUS
+
+Keyboard focus ring must remain clearly visible even on glass.
+
+Do not remove outline without accessible replacement.
+
+---
+
+# 263. MODALS
+
+Never stack modal on modal repeatedly.
+
+Use one flow/sheet.
+
+Critical confirmation can replace current sheet or use controlled nested dialog only where accessible.
+
+---
+
+# 264. DATA DENSITY
+
+Mobile:
+
+comfortable.
+
+Desktop:
+
+moderately denser.
+
+Do not make desktop text microscopic to fit more.
+
+---
+
+# 265. NO CHARTS UNLESS USEFUL
+
+Do not add decorative pie charts.
+
+If a chart does not change a decision, omit it.
+
+KPI + list is often better.
+
+---
+
+# 266. SEARCH DEBOUNCE
+
+Frontend search can debounce around 200–300ms.
+
+Cancel stale queries.
+
+Backend indexed.
+
+Never issue one request per keystroke without control.
+
+---
+
+# 267. URL STATE
+
+Useful list filters/search may live in URL query params for:
+
+* refresh persistence
+* back navigation
+* shareable admin state where safe
+
+Sensitive information must not be placed in URL.
+
+---
+
+# 268. FRONTEND SERVER STATE
+
+TanStack Query owns remote client-side server state.
+
+Do not mirror same API entity unnecessarily in Zustand and Context and local state simultaneously.
+
+---
+
+# 269. LOCAL UI STATE
+
+Use React/local state first.
+
+Use lightweight centralized UI state only when genuinely cross-tree.
+
+Avoid Redux-sized complexity unless demonstrably necessary.
+
+---
+
+# 270. FORMS
+
+React Hook Form + shared validation schemas.
+
+Server uses same conceptual contract but never assumes frontend ran validation.
+
+---
+
+# 271. RSC
+
+Use React Server Components for:
+
+* initial authenticated layouts
+* stable page shells
+* appropriate read-heavy server rendering
+
+Interactive meal toggles/forms/dialogs remain client boundaries.
+
+Do not make everything client-side.
+
+---
+
+# 272. NEXT.JS CACHING
+
+Be explicit.
+
+Do not accidentally cache authenticated dynamic financial responses globally.
+
+For sensitive/user-specific pages:
+
+use appropriate dynamic/no-store/private semantics.
+
+Never serve Resident A cached response to Resident B.
+
+---
+
+# 273. SECURITY REVIEW CHECKLIST BEFORE RELEASE
+
+Verify:
+
+```text
+authorization
+object ownership
+CSRF
+XSS
+CSP
+session handling
+password hashing
+MFA
+rate limits
+file validation
+SQL injection
+IDOR
+mass assignment
+secrets
+logs
+backups
+dependency advisories
+```
+
+---
+
+# 274. MASS ASSIGNMENT
+
+Never take incoming JSON and directly pass it into ORM update.
+
+Explicitly map allowed fields.
+
+Resident cannot submit:
+
+```text
+role: ADMIN
+status: APPROVED
+balance: ...
+```
+
+and have it honored.
+
+---
+
+# 275. CLIENT-SUPPLIED MONEY
+
+Frontend may calculate estimated total for UX.
+
+Backend calculates official line total from validated:
+
+```text
+quantity
+unit price
+```
+
+Do not trust submitted total.
+
+---
+
+# 276. CLIENT-SUPPLIED STATUS
+
+Never trust:
+
+```text
+status: APPROVED
+```
+
+from client.
+
+Status transitions happen via specific service commands.
+
+---
+
+# 277. CLIENT-SUPPLIED USER ID
+
+Resident-owned create endpoints derive resident from authenticated session where possible.
+
+Do not let resident choose arbitrary:
+
+```text
+resident_id
+```
+
+for own payment/leave/guest meal.
+
+---
+
+# 278. SOFT REAL-TIME
+
+Use query invalidation/polling initially.
+
+WebSocket/SSE only where actual value exists.
+
+No need for complex realtime infrastructure for every status.
+
+Notifications can update through sensible polling or SSE if implemented safely.
+
+---
+
+# 279. FORMULA PREVIEW PERFORMANCE
+
+Formula preview may use debounced API call.
+
+Backend evaluates safe AST.
+
+Never evaluate raw formula in browser as authoritative.
+
+---
+
+# 280. BILLING PERFORMANCE
+
+Billing generation processes residents in controlled batches inside consistent snapshot architecture.
+
+Do not keep one uncontrolled 20-minute web request.
+
+Operation can expose:
+
+```text
+CLOSING
+GENERATING
+COMPLETED
+FAILED
+```
+
+but final creation remains idempotent.
+
+---
+
+# 281. BILLING FAILURE
+
+If generation fails before transaction commit:
+
+period returns safely or remains recoverable according to operation state.
+
+Never leave:
+
+```text
+half residents billed
+half residents unbilled
+```
+
+without explicit controlled resumable architecture.
+
+Prefer deterministic all-or-recoverable generation.
+
+---
+
+# 282. AUDIT REASON
+
+Reasons required only for high-risk actions.
+
+Examples:
+
+* reject payment
+* void transaction
+* override locked meal
+* deactivate resident
+* issue refund
+* reopen billing
+* policy exemption
+* reject task submission
+
+Do not ask reason for routine toggle/save.
+
+---
+
+# 283. REASON STORAGE
+
+Reason is plain text with sane length limits.
+
+Escape/sanitize output.
+
+No rich HTML.
+
+---
+
+# 284. ADMIN EDIT RESIDENT
+
+Fields allowed depend on status.
+
+Identity/history changes that could affect billing require audit.
+
+Changing membership effective date into a closed period must be heavily restricted and not silently rewrite bills.
+
+---
+
+# 285. NEW USER DEFAULT MEALS
+
+When resident becomes active:
+
+generate/apply defaults only for eligible meal instances whose cutoffs remain open.
+
+Do not retroactively turn past meals ON.
+
+---
+
+# 286. FINANCIAL RESTRICTION VS LEAVE
+
+Meal engine must document precedence.
+
+Admin override wins final operational state.
+
+Policy/leave causes must remain visible in effective reason.
+
+---
+
+# 287. AUTOMATIC CALCULATIONS
+
+All dependent values refresh after relevant changes:
+
+* payment approval
+* expense approval
+* meal override
+* guest meal
+* formula activation
+* refund
+* leave
+* task expense approval
+
+Frontend refreshes relevant queries.
+
+Do not full-page reload.
+
+---
+
+# 288. EVENT INVALIDATION MAP
+
+Document which mutations invalidate:
+
+```text
+dashboard KPIs
+meal count
+resident 360
+funds
+billing readiness
+payment totals
+expense totals
+```
+
+Prevent stale UI.
+
+---
+
+# 289. MATERIALIZED AGGREGATES
+
+Do not use materialized views until data scale actually requires them.
+
+Start with indexed query/read services.
+
+If introduced later, document consistency and refresh semantics.
+
+---
+
+# 290. APP STARTUP
+
+API validates:
+
+* DB connection
+* schema compatibility
+* required config
+* object storage config
+* Redis availability according to degraded-mode policy
+
+Do not serve ready before critical dependencies ready.
+
+---
+
+# 291. DEGRADED MODE
+
+If Redis unavailable:
+
+core read operations may continue where safe.
+
+Queue-dependent actions should provide clear degraded status.
+
+Redis outage must not corrupt PostgreSQL.
+
+---
+
+# 292. OBJECT STORAGE OUTAGE
+
+Payment proof-required submission should fail cleanly before creating unusable pending record, or create explicit upload-pending state according to transaction design.
+
+Do not silently lose proof reference.
+
+---
+
+# 293. EMAIL OUTAGE
+
+Does not block core business operation.
+
+Use outbox retry.
+
+---
+
+# 294. FILE HASH
+
+Store cryptographic checksum for uploaded proof.
+
+Useful for integrity and duplicate diagnostics.
+
+---
+
+# 295. EXPORT SECURITY
+
+Generated export:
+
+* private
+* random object key
+* short expiration
+* audited access
+* optional one-time download semantics where appropriate
+
+---
+
+# 296. PRODUCTION ERROR TRACKING
+
+Integrate OpenTelemetry-compatible backend and frontend error monitoring.
+
+Capture:
+
+* stack
+* release version
+* request/trace ID
+
+Redact sensitive data.
+
+---
+
+# 297. RELEASE VERSION
+
+Expose application version in Settings/About for support.
+
+Do not expose internal secrets/build environment.
+
+---
+
+# 298. DATABASE VERSION
+
+Operational health may record schema migration version.
+
+Do not show to ordinary residents.
+
+---
+
+# 299. ADR DOCUMENTS
+
+Maintain lightweight Architecture Decision Records for important choices:
+
+```text
+modular monolith
+double-entry ledger
+session authentication
+formula AST
+billing snapshots
+outbox
+meal instance model
+```
+
+This makes maintenance easier.
+
+---
+
+# 300. DOCUMENTATION
+
+Provide:
+
+```text
+README
+local development
+architecture
+database model
+module map
+API documentation
+security model
+deployment
+backup/restore
+billing algorithm
+formula language
+state machines
+```
+
+Keep documentation synchronized.
+
+---
+
+# 301. REQUIRED STATE MACHINE DOCUMENTATION
+
+Document diagrams for:
+
+```text
+User
+Meal Instance
+Resident Meal
+Guest Meal
+Leave
+Payment
+Expense
+Refund
+Billing Period
+Bill
+Task
+Deletion Request
+```
+
+---
+
+# 302. REQUIRED DATABASE DIAGRAM
+
+Generate ERD.
+
+Include cardinality.
+
+Mark immutable domains.
+
+Mark tenant boundaries.
+
+Mark financial entities.
+
+---
+
+# 303. REQUIRED SECURITY MODEL
+
+Document:
+
+```text
+authentication
+session lifecycle
+role checks
+object ownership
+MFA
+CSRF
+CSP
+rate limits
+file security
+data encryption
+audit
+DB permissions
+backup
+```
+
+---
+
+# 304. REQUIRED TEST REPORT
+
+Before calling feature complete:
+
+run all:
+
+```text
+lint
+typecheck
+unit
+integration
+concurrency
+security
+e2e
+accessibility
+responsive
+production build
+```
+
+Report failures rather than hiding them.
+
+---
+
+# 305. BUILD ORDER
+
+Build in vertical slices.
+
+Recommended:
+
+## Phase 0 — Foundation
+
+* monorepo
+* config
+* PostgreSQL
+* Redis
+* object storage
+* observability
+* CI
+* design system base
+
+## Phase 1 — Auth & Users
+
+* registration
+* approval
+* sessions
+* policies
+* admin/resident authorization
+
+## Phase 2 — Meal Engine
+
+* meal config
+* versions
+* instances
+* resident state
+* override
+* guest meals
+* leave
+* calendar
+
+## Phase 3 — Finance
+
+* ledger
+* payments
+* funds
+* expenses
+* refunds
+
+## Phase 4 — Formula & Billing
+
+* formula AST
+* versioning
+* readiness
+* snapshot
+* bills
+* calculation provenance
+
+## Phase 5 — Tasks & Communications
+
+* market tasks
+* announcements
+* notifications
+
+## Phase 6 — Hardening
+
+* exports
+* audit review
+* backup validation
+* security
+* concurrency
+* performance
+* accessibility
+* full visual polish
+
+Do NOT build every frontend screen with fake data first and postpone backend integrity.
+
+Build vertical production slices.
+
+---
+
+# 306. DATABASE-FIRST SAFETY DURING AI DEVELOPMENT
+
+The AI agent must NEVER:
+
+```text
+reset database to fix migration error
+delete migration history
+drop tables with existing data casually
+replace migration with fresh schema
+change IDs casually
+edit production records manually
+```
+
+If migration problem appears:
+
+investigate and write safe forward migration.
+
+---
+
+# 307. NO FAKE COMPLETION
+
+Do not claim a feature works because:
+
+* page renders
+* button exists
+* endpoint returns 200
+* mock data displays
+
+Feature is complete only when:
+
+```text
+database
+backend
+authorization
+validation
+transaction
+audit
+frontend
+error states
+responsive UI
+tests
+```
+
+all work together.
+
+---
+
+# 308. NO PLACEHOLDER BUSINESS LOGIC
+
+Do not leave:
+
+```text
+TODO calculate bill
+TODO check balance
+TODO override logic
+Math.random()
+hardcoded ₹40
+hardcoded meal count
+```
+
+in production workflow.
+
+---
+
+# 309. NO HARDCODED TEST USERS IN UI
+
+Never ship:
+
+```text
+Admin
+Sahid
+John
+```
+
+as business values.
+
+Greeting uses authenticated profile.
+
+---
+
+# 310. SECURITY-PATCH DISCIPLINE
+
+Before final build:
+
+check current advisories for:
+
+* Next.js
+* React
+* Node.js
+* NestJS
+* Prisma
+* PostgreSQL
+* Redis
+* object-storage client
+* auth/crypto libraries
+
+Patch security issues before release.
+
+---
+
+# 311. FINAL VISUAL QUALITY GATE
+
+Inspect actual screenshots at mobile, tablet and desktop.
+
+Reject design if it looks:
+
+* generic
+* overly transparent
+* gray and lifeless
+* overly colorful
+* too dense
+* too empty
+* like default shadcn
+* like Material Design
+* like a crypto dashboard
+* like a basic CRUD panel
+
+The visual signature should be:
+
+```text
+dense frosted material
+soft rounded geometry
+precise typography
+clear hierarchy
+subtle depth
+tactile spring motion
+clean content
+excellent readability
+```
+
+---
+
+# 312. FINAL GLASS QUALITY RULE
+
+Glass is a MATERIAL, not decoration.
+
+A card should feel as though:
+
+* background light diffuses through it;
+* edges catch subtle highlights;
+* content sits clearly above the material;
+* the surface is translucent but substantial;
+* interaction slightly changes its physical response.
+
+Never just add:
+
+```css
+backdrop-filter: blur(10px)
+background: #ffffff22
+```
+
+and call it Liquid Glass.
+
+---
+
+# 313. MOTION QUALITY GATE
+
+Every common click/tap should provide immediate micro-feedback.
+
+But the product should never feel like every element is bouncing constantly.
+
+Motion hierarchy:
+
+```text
+tap feedback
+state transition
+navigation transition
+major sheet/dialog transition
+rare celebratory transition
+```
+
+No random animation.
+
+---
+
+# 314. FINAL DATABASE INVARIANTS
+
+The completed system must guarantee:
+
+```text
+A resident cannot have duplicate records for one meal instance.
+
+A payment cannot be approved twice.
+
+A task submission cannot create two official expenses.
+
+A billing period cannot generate duplicate bills.
+
+A posted financial transaction cannot be edited silently.
+
+A billing snapshot cannot change after generation.
+
+Historical meal configuration cannot change when the definition is edited.
+
+A resident cannot access another resident's private data.
+
+A formula cannot execute arbitrary code.
+
+A browser clock cannot bypass meal cutoff.
+
+A client cannot choose its own authorization role.
+
+A financial amount cannot depend on floating-point arithmetic.
+
+Redis loss cannot destroy authoritative business data.
+
+Notification failure cannot roll back financial approval.
+
+A destructive action cannot erase required accounting history.
+
+Every critical admin action is auditable.
+```
+
+---
+
+# 315. FINAL USER-EXPERIENCE INVARIANTS
+
+The completed system must guarantee:
+
+```text
+No required feature disappears on mobile.
+
+No page horizontally overflows under normal use.
+
+No critical action is represented only by an icon.
+
+No status depends only on color.
+
+No page floods the user with unnecessary actions.
+
+No financial total appears without an understandable explanation.
+
+No routine action requires unnecessary confirmation.
+
+No dangerous action happens without consequence awareness.
+
+No animation makes the application feel slower.
+
+No glass surface sacrifices readability.
+
+No technical accounting/backend terminology is unnecessarily exposed to residents.
+```
+
+---
+
+# 316. FINAL PERFORMANCE INVARIANTS
+
+The system should:
+
+```text
+render useful content quickly
+avoid N+1 queries
+paginate growing collections
+avoid unnecessary client JavaScript
+avoid unnecessary rerenders
+use indexes deliberately
+avoid nested blur overload
+cancel stale searches
+reuse query results safely
+invalidate data precisely
+keep interactions responsive
+```
+
+Measure performance.
+
+Do not merely claim it.
+
+---
+
+# 317. FINAL MAINTAINABILITY INVARIANTS
+
+Future engineers should be able to understand:
+
+```text
+where a business rule lives
+where financial truth lives
+where authorization is enforced
+why a database migration exists
+how a bill was calculated
+why a meal has its current state
+how a payment affected balance
+what an admin changed
+```
+
+without searching through duplicated frontend and backend logic.
+
+---
+
+# 318. DO NOT ADD THESE UNLESS EXPLICITLY REQUESTED
+
+Do NOT introduce:
+
+```text
+microservices
+Kubernetes
+Kafka
+event sourcing for the entire application
+blockchain
+generic workflow engine
+full Excel engine
+AI chatbot
+social feed
+payroll
+inventory ERP
+complex RBAC
+super-admin
+multiple unnecessary admin roles
+huge analytics suite
+dozens of charts
+```
+
+Keep the product focused.
+
+---
+
+# 319. FINAL IMPLEMENTATION PHILOSOPHY
+
+The ideal result is:
+
+```text
+Apple-quality interaction design
++
+banking-quality financial integrity
++
+simple household/institution usability
++
+strong PostgreSQL relational guarantees
++
+clean modular TypeScript architecture
++
+fast modern React rendering
++
+carefully controlled animation
++
+minimal operational complexity
+```
+
+Do not maximize the number of technologies.
+
+Maximize the quality of the system.
+
+---
+
+# 320. FINAL INSTRUCTION TO THE CODING AGENT
+
+Before writing production code:
+
+produce:
+
+1. final repository tree;
+2. final architecture diagram;
+3. domain module dependency diagram;
+4. database ERD;
+5. exact tables/columns/indexes/constraints;
+6. state-machine diagrams;
+7. critical transaction definitions;
+8. role/ownership authorization matrix;
+9. REST API map;
+10. responsive route/navigation map;
+11. complete Liquid Glass token system;
+12. animation token system;
+13. test matrix;
+14. CI/CD pipeline;
+15. migration strategy;
+16. backup/restore plan;
+17. observability plan;
+18. threat model;
+19. implementation phases.
+
+Then implement it.
+
+At every stage ask internally:
+
+```text
+Can this corrupt historical data?
+Can this duplicate money?
+Can this mutate a closed period?
+Can another resident access it?
+Can concurrent requests break it?
+Can a browser manipulate it?
+Can a network retry duplicate it?
+Can a formula execute unsafe input?
+Can an admin understand what will happen?
+Can a resident understand the screen?
+Does this remain usable at 320px?
+Does it remain elegant at 1920px?
+Is this animation meaningful?
+Is this glass readable?
+Is this dependency actually necessary?
+```
+
+If the answer reveals a weakness:
+
+fix the architecture rather than hiding the weakness in the UI.
+
+The completed system must be secure, deterministic, auditable, responsive, maintainable, extremely polished, and fast enough to feel instantaneous during normal daily operation.

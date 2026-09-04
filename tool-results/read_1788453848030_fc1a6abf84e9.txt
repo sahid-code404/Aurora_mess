@@ -1,0 +1,640 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Resident Tasks (#/app/tasks) — Task 5-b (spec §60-62, §157).
+     5→ * BoardOps composition: status KPIs → status-tinted task rows with inline
+     6→ * action footers (scroll-capped list).
+     7→ * ASSIGNED → Accept / Reject (reason required) → Start submission →
+     8→ * Submit purchase (items repeater with live totals, comment, receipt) →
+     9→ * "Waiting for admin verification" → APPROVED / REJECTED.
+    10→ */
+    11→
+    12→import { useMemo, useState } from "react";
+    13→import { toast } from "sonner";
+    14→import { motion } from "framer-motion";
+    15→import {
+    16→  CalendarClock,
+    17→  CheckCircle2,
+    18→  ChefHat,
+    19→  ClipboardList,
+    20→  Hourglass,
+    21→  ListChecks,
+    22→  PartyPopper,
+    23→  Plus,
+    24→  ShoppingCart,
+    25→  Sparkles,
+    26→  Trash2,
+    27→  TriangleAlert,
+    28→  type LucideIcon,
+    29→} from "lucide-react";
+    30→
+    31→import { useSession } from "@/hooks/use-session";
+    32→import { useApiQuery } from "@/hooks/use-api-query";
+    33→import GlassCard from "@/components/glass/GlassCard";
+    34→import { KpiCard } from "@/components/glass/KpiCard";
+    35→import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
+    36→import StatusBadge from "@/components/glass/StatusBadge";
+    37→import GlassButton from "@/components/glass/GlassButton";
+    38→import ConfirmDialog from "@/components/glass/ConfirmDialog";
+    39→import { EmptyState } from "@/components/glass/EmptyState";
+    40→import { ErrorState } from "@/components/glass/ErrorState";
+    41→import { ListSkeleton } from "@/components/glass/LoadingSkeleton";
+    42→
+    43→import { apiJson, apiMultipart, useInvalidateResident, RESIDENT_KEYS } from "./_shared/api";
+    44→import { formatMinor, friendlyError, todayKeyInTz } from "./_shared/format";
+    45→import {
+    46→  AmountInput,
+    47→  FileProofInput,
+    48→  GlassField,
+    49→  GlassInput,
+    50→  GlassTextarea,
+    51→  SheetDialog,
+    52→  SheetFooterActions,
+    53→  proofProblems,
+    54→} from "./_shared/ui";
+    55→import type { TaskDto } from "./_shared/types";
+    56→import { ApiClientError } from "@/lib/api";
+    57→import { cn } from "@/lib/utils";
+    58→
+    59→/* ------------------------------ task icons ------------------------------- */
+    60→
+    61→const TYPE_ICONS: Record<string, LucideIcon> = {
+    62→  MARKET_PURCHASE: ShoppingCart,
+    63→  GENERAL: ClipboardList,
+    64→  CLEANING: Sparkles,
+    65→  DECORATION: PartyPopper,
+    66→  COOKING: ChefHat,
+    67→};
+    68→
+    69→function typeIcon(taskType: string): LucideIcon {
+    70→  return TYPE_ICONS[taskType] ?? ListChecks;
+    71→}
+    72→
+    73→/** The two task kinds — shown as a chip on every row (lucide icon + label). */
+    74→const TASK_TYPE_LABELS: Record<string, string> = {
+    75→  MARKET_PURCHASE: "Market task",
+    76→  GENERAL: "Normal task",
+    77→};
+    78→
+    79→function TaskTypeChip({ taskType }: { taskType: string }) {
+    80→  const market = taskType === "MARKET_PURCHASE";
+    81→  const Icon = market ? ShoppingCart : ClipboardList;
+    82→  return (
+    83→    <span
+    84→      className={cn(
+    85→        "inline-flex shrink-0 items-center gap-1 rounded-pill border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap",
+    86→        market
+    87→          ? "border-warning/35 bg-warning/14 text-warning"
+    88→          : "border-primary/28 bg-primary/10 text-primary"
+    89→      )}
+    90→    >
+    91→      <Icon className="size-3" aria-hidden />
+    92→      {TASK_TYPE_LABELS[taskType] ?? taskType}
+    93→    </span>
+    94→  );
+    95→}
+    96→
+    97→/* ------------------------------ status tints ------------------------------- */
+    98→
+    99→/** Status-tinted icon tile (BoardOps task-row pattern). */
+   100→const STATUS_TILE: Record<string, string> = {
+   101→  ASSIGNED: "border-primary/28 bg-primary/12 text-primary",
+   102→  ACCEPTED: "border-success/30 bg-success/12 text-success",
+   103→  IN_PROGRESS: "border-warning/30 bg-warning/14 text-warning",
+   104→  SUBMITTED: "border-warning/30 bg-warning/14 text-warning",
+   105→  APPROVED: "border-success/30 bg-success/12 text-success",
+   106→  REJECTED: "border-danger/30 bg-danger/12 text-danger",
+   107→  REJECTED_BY_ADMIN: "border-danger/30 bg-danger/12 text-danger",
+   108→};
+   109→
+   110→function statusTile(status: string): string {
+   111→  return STATUS_TILE[status] ?? "border-border bg-muted/60 text-muted-foreground";
+   112→}
+   113→
+   114→/* ----------------------------- submission dialog ---------------------------- */
+   115→
+   116→interface DraftItem {
+   117→  itemName: string;
+   118→  quantity: string;
+   119→  unit: string;
+   120→  unitPrice: string;
+   121→}
+   122→
+   123→function itemLineTotalMinor(item: DraftItem): number | null {
+   124→  const qty = Number(item.quantity);
+   125→  if (!Number.isFinite(qty) || qty <= 0) return null;
+   126→  const price = Number(item.unitPrice);
+   127→  if (!Number.isFinite(price) || price <= 0) return null;
+   128→  // round-half-up like the server does (display only; server recomputes).
+   129→  return Math.round(qty * price * 100 + 1e-9);
+   130→}
+   131→
+   132→function initialItems(task: TaskDto): DraftItem[] {
+   133→  if (task.items.length === 0) {
+   134→    return [{ itemName: "", quantity: "1", unit: "", unitPrice: "" }];
+   135→  }
+   136→  return task.items.map((it) => ({
+   137→    itemName: it.itemName,
+   138→    quantity: String(it.expectedQuantity ?? 1),
+   139→    unit: it.unit ?? "",
+   140→    unitPrice: it.estimatedUnitPriceMinor != null ? (it.estimatedUnitPriceMinor / 100).toFixed(2) : "",
+   141→  }));
+   142→}
+   143→
+   144→function SubmissionDialog({
+   145→  task,
+   146→  open,
+   147→  onOpenChange,
+   148→}: {
+   149→  task: TaskDto;
+   150→  open: boolean;
+   151→  onOpenChange: (open: boolean) => void;
+   152→}) {
+   153→  const invalidate = useInvalidateResident();
+   154→  const [items, setItems] = useState<DraftItem[]>(() => initialItems(task));
+   155→  const [comment, setComment] = useState("");
+   156→  const [proof, setProof] = useState<File | null>(null);
+   157→  const [proofError, setProofError] = useState<string | null>(null);
+   158→  const [submitting, setSubmitting] = useState(false);
+   159→  const [error, setError] = useState<string | null>(null);
+   160→
+   161→  const totalMinor = useMemo(() => {
+   162→    let sum = 0;
+   163→    let valid = items.length > 0;
+   164→    for (const it of items) {
+   165→      const line = itemLineTotalMinor(it);
+   166→      if (line == null) {
+   167→        valid = false;
+   168→        continue;
+   169→      }
+   170→      sum += line;
+   171→    }
+   172→    return valid ? sum : null;
+   173→  }, [items]);
+   174→
+   175→  function patchItem(idx: number, patch: Partial<DraftItem>) {
+   176→    setItems((list) => list.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+   177→  }
+   178→
+   179→  async function submit() {
+   180→    if (!task || totalMinor == null) return;
+   181→    setSubmitting(true);
+   182→    setError(null);
+   183→    try {
+   184→      const payload = items.map((it) => ({
+   185→        itemName: it.itemName.trim(),
+   186→        quantity: Number(it.quantity),
+   187→        unit: it.unit.trim() || undefined,
+   188→        unitPrice: it.unitPrice,
+   189→      }));
+   190→      const form = new FormData();
+   191→      form.set("itemsJson", JSON.stringify(payload));
+   192→      if (comment.trim()) form.set("comment", comment.trim());
+   193→      if (proof) form.set("proof", proof);
+   194→      await apiMultipart(`/api/v1/tasks/${task.id}/submission`, form);
+   195→      invalidate([RESIDENT_KEYS.tasks, RESIDENT_KEYS.dashboard, RESIDENT_KEYS.notifications]);
+   196→      toast.success("Task submitted — waiting for admin verification", {
+   197→        description: `Total claimed ${formatMinor(totalMinor)} · the admin checks it before it enters official expenses.`,
+   198→      });
+   199→      onOpenChange(false);
+   200→    } catch (err) {
+   201→      if (err instanceof ApiClientError && err.fields && Object.keys(err.fields).length > 0) {
+   202→        setError(Object.values(err.fields)[0] ?? friendlyError(err));
+   203→      } else {
+   204→        setError(friendlyError(err, "We couldn't submit this task. Please try again."));
+   205→      }
+   206→    } finally {
+   207→      setSubmitting(false);
+   208→    }
+   209→  }
+   210→
+   211→  const canSubmit = totalMinor !== null && totalMinor > 0 && !proofError && !submitting;
+   212→
+   213→  return (
+   214→    <SheetDialog
+   215→      open={open}
+   216→      onOpenChange={(next) => {
+   217→        if (!submitting) onOpenChange(next);
+   218→      }}
+   219→      title="Submit purchase"
+   220→      description={`"${task.description}" — add what you bought and the prices you paid.`}
+   221→      footer={
+   222→        <SheetFooterActions onCancel={() => onOpenChange(false)}>
+   223→          <GlassButton loading={submitting} disabled={!canSubmit} onClick={() => void submit()}>
+   224→            Submit for verification
+   225→          </GlassButton>
+   226→        </SheetFooterActions>
+   227→      }
+   228→    >
+   229→      <div className="space-y-4">
+   230→        {/* items repeater */}
+   231→        <fieldset className="space-y-3">
+   232→          <legend className="mb-1 block text-xs font-medium text-muted-foreground">Items</legend>
+   233→          {items.map((item, idx) => {
+   234→            const lineTotal = itemLineTotalMinor(item);
+   235→            return (
+   236→              <div key={idx} className="glass-inset space-y-2.5 rounded-md p-3">
+   237→                <div className="flex items-center justify-between gap-2">
+   238→                  <span className="kpi-num text-xs font-semibold text-muted-foreground">Item {idx + 1}</span>
+   239→                  {items.length > 1 && (
+   240→                    <button
+   241→                      type="button"
+   242→                      aria-label={`Remove item ${idx + 1}`}
+   243→                      onClick={() => setItems((list) => list.filter((_, i) => i !== idx))}
+   244→                      className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+   245→                    >
+   246→                      <Trash2 className="size-4" aria-hidden />
+   247→                    </button>
+   248→                  )}
+   249→                </div>
+   250→                <GlassField label="Name">
+   251→                  <GlassInput
+   252→                    value={item.itemName}
+   253→                    maxLength={120}
+   254→                    placeholder="e.g. Basmati rice"
+   255→                    onChange={(e) => patchItem(idx, { itemName: e.target.value })}
+   256→                  />
+   257→                </GlassField>
+   258→                <div className="grid grid-cols-2 gap-2.5">
+   259→                  <GlassField label="Quantity">
+   260→                    <GlassInput
+   261→                      inputMode="decimal"
+   262→                      value={item.quantity}
+   263→                      placeholder="25"
+   264→                      onChange={(e) => {
+   265→                        const v = e.target.value.replace(/[^\d.]/g, "");
+   266→                        patchItem(idx, { quantity: v.slice(0, 9) });
+   267→                      }}
+   268→                    />
+   269→                  </GlassField>
+   270→                  <GlassField label="Unit">
+   271→                    <GlassInput
+   272→                      value={item.unit}
+   273→                      maxLength={20}
+   274→                      placeholder="kg / litres / pieces"
+   275→                      onChange={(e) => patchItem(idx, { unit: e.target.value })}
+   276→                    />
+   277→                  </GlassField>
+   278→                </div>
+   279→                <GlassField label="Unit price (₹)">
+   280→                  <AmountInput
+   281→                    ariaLabel={`Item ${idx + 1} unit price in rupees`}
+   282→                    value={item.unitPrice}
+   283→                    invalid={item.unitPrice.trim() !== "" && lineTotal == null}
+   284→                    onChange={(v) => patchItem(idx, { unitPrice: v })}
+   285→                  />
+   286→                </GlassField>
+   287→                <div className="flex items-baseline justify-between border-t border-border/70 pt-2">
+   288→                  <span className="text-xs text-muted-foreground">Line total</span>
+   289→                  <span className="kpi-num text-sm font-semibold">
+   290→                    {lineTotal != null ? formatMinor(lineTotal) : "—"}
+   291→                  </span>
+   292→                </div>
+   293→              </div>
+   294→            );
+   295→          })}
+   296→          <button
+   297→            type="button"
+   298→            onClick={() =>
+   299→              setItems((list) => [...list, { itemName: "", quantity: "1", unit: "", unitPrice: "" }])
+   300→            }
+   301→            className="glass-inset flex h-11 w-full items-center justify-center gap-2 rounded-md text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+   302→          >
+   303→            <Plus className="size-4" aria-hidden />
+   304→            Add another item
+   305→          </button>
+   306→        </fieldset>
+   307→
+   308→        <div className="glass-inset flex items-baseline justify-between rounded-md p-3.5">
+   309→          <span className="text-[13px] font-semibold">Total</span>
+   310→          <span className="kpi-num text-base font-semibold text-primary">
+   311→            {totalMinor != null ? formatMinor(totalMinor) : "—"}
+   312→          </span>
+   313→        </div>
+   314→
+   315→        <GlassField label="Comment (optional)" hint="Anything the admin should know — price changes, substitutions.">
+   316→          <GlassTextarea
+   317→            value={comment}
+   318→            maxLength={500}
+   319→            placeholder="e.g. Prices were higher this week"
+   320→            onChange={(e) => setComment(e.target.value)}
+   321→          />
+   322→        </GlassField>
+   323→
+   324→        <FileProofInput
+   325→          file={proof}
+   326→          error={proofError}
+   327→          onFile={(f) => {
+   328→            setProofError(f ? proofProblems(f) : null);
+   329→            setProof(f);
+   330→          }}
+   331→        />
+   332→
+   333→        {error && (
+   334→          <p role="alert" className="glass-inset rounded-md px-3 py-2 text-xs font-medium text-danger">
+   335→            {error}
+   336→          </p>
+   337→        )}
+   338→      </div>
+   339→    </SheetDialog>
+   340→  );
+   341→}
+   342→
+   343→/* --------------------------------- the view --------------------------------- */
+   344→
+   345→export default function ResidentTasks() {
+   346→  const { institution } = useSession();
+   347→  const tz = institution?.timezone ?? "Asia/Kolkata";
+   348→  const invalidate = useInvalidateResident();
+   349→
+   350→  const tasksQuery = useApiQuery<TaskDto[]>("/api/v1/tasks");
+   351→  const tasks = tasksQuery.data ?? [];
+   352→
+   353→  const [busyId, setBusyId] = useState<string | null>(null);
+   354→  const [rejectTask, setRejectTask] = useState<TaskDto | null>(null);
+   355→  const [submitTask, setSubmitTask] = useState<TaskDto | null>(null);
+   356→
+   357→  /** Status overview KPIs — client-side from the loaded tasks (BoardOps pattern). */
+   358→  const stats = useMemo(() => {
+   359→    const todayKey = todayKeyInTz(tz);
+   360→    let open = 0;
+   361→    let active = 0;
+   362→    let done = 0;
+   363→    let overdue = 0;
+   364→    for (const t of tasks) {
+   365→      if (t.status === "ASSIGNED" || t.status === "ACCEPTED") open += 1;
+   366→      else if (t.status === "IN_PROGRESS" || t.status === "SUBMITTED") active += 1;
+   367→      else if (t.status === "APPROVED") done += 1;
+   368→      const finished =
+   369→        t.status === "APPROVED" || t.status === "REJECTED" || t.status === "REJECTED_BY_ADMIN";
+   370→      if (!finished && t.dueDate && t.dueDate < todayKey) overdue += 1;
+   371→    }
+   372→    return { open, active, done, overdue };
+   373→  }, [tasks, tz]);
+   374→
+   375→  async function transition(
+   376→    task: TaskDto,
+   377→    action: "accept" | "start" | "reject",
+   378→    reason?: string
+   379→  ): Promise<void> {
+   380→    setBusyId(task.id);
+   381→    try {
+   382→      await apiJson(`/api/v1/tasks/${task.id}/${action}`, "POST", reason ? { reason } : {});
+   383→      invalidate([RESIDENT_KEYS.tasks, RESIDENT_KEYS.dashboard, RESIDENT_KEYS.notifications]);
+   384→      if (action === "accept") toast.success(`Task accepted — "${task.description}"`);
+   385→      if (action === "start") toast.success(`Task started — you can submit your purchase any time.`);
+   386→      if (action === "reject") toast.success("Task rejected — the admin has been notified.");
+   387→      if (action === "reject") setRejectTask(null);
+   388→    } catch (err) {
+   389→      if (err instanceof ApiClientError) {
+   390→        toast.error(err.message);
+   391→      } else {
+   392→        toast.error(friendlyError(err));
+   393→      }
+   394→    } finally {
+   395→      setBusyId(null);
+   396→    }
+   397→  }
+   398→
+   399→  return (
+   400→    <div className="space-y-4">
+   401→      {tasksQuery.isPending ? (
+   402→        <ListSkeleton rows={3} />
+   403→      ) : tasksQuery.isError ? (
+   404→        <ErrorState
+   405→          code={tasksQuery.error?.code}
+   406→          message={tasksQuery.error?.message}
+   407→          onRetry={() => void tasksQuery.refetch()}
+   408→        />
+   409→      ) : (
+   410→        <StaggerGroup className="space-y-4">
+   411→          {/* KPIs — my tasks at a glance */}
+   412→          <StaggerItem>
+   413→            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+   414→              <KpiCard label="Open" value={String(stats.open)} sub="needs action" icon={<ListChecks />} glow="primary" tone="primary" index={0} />
+   415→              <KpiCard label="In Progress" value={String(stats.active)} sub="incl. submitted" icon={<Hourglass />} glow="warning" tone="warning" index={1} />
+   416→              <KpiCard label="Done" value={String(stats.done)} sub="approved" icon={<CheckCircle2 />} glow="success" tone="success" index={2} />
+   417→              <KpiCard label="Overdue" value={String(stats.overdue)} sub="past due date" icon={<TriangleAlert />} glow="danger" tone="danger" index={3} />
+   418→            </div>
+   419→          </StaggerItem>
+   420→
+   421→          {tasks.length === 0 ? (
+   422→            <StaggerItem>
+   423→              <EmptyState
+   424→                icon={ListChecks}
+   425→                title="No tasks right now"
+   426→                description="When the admin assigns you a task, it will appear here with what to do and by when."
+   427→              />
+   428→            </StaggerItem>
+   429→          ) : (
+   430→            <StaggerItem>
+   431→              <div className="no-scrollbar max-h-[28rem] space-y-3 overflow-y-auto pr-1">
+   432→                {tasks.map((task, i) => {
+   433→                  const Icon = typeIcon(task.taskType);
+   434→                  const busy = busyId === task.id;
+   435→                  return (
+   436→                    <motion.div
+   437→                      key={task.id}
+   438→                      initial={{ opacity: 0, y: 6 }}
+   439→                      animate={{ opacity: 1, y: 0 }}
+   440→                      transition={{ delay: Math.min(i * 0.04, 0.2), duration: 0.25 }}
+   441→                    >
+   442→                      <GlassCard className="p-4">
+   443→                        <div className="flex items-start justify-between gap-3">
+   444→                          <div className="flex min-w-0 items-start gap-3">
+   445→                            <span
+   446→                              aria-hidden
+   447→                              className={cn(
+   448→                                "flex size-10 shrink-0 items-center justify-center rounded-md border",
+   449→                                statusTile(task.status)
+   450→                              )}
+   451→                            >
+   452→                              <Icon className="size-[18px]" aria-hidden />
+   453→                            </span>
+   454→                            <div className="min-w-0">
+   455→                              <p className="text-sm font-semibold leading-snug">{task.description}</p>
+   456→                              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+   457→                                {task.dueDate && (
+   458→                                  <span className="kpi-num inline-flex items-center gap-1.5">
+   459→                                    <CalendarClock className="size-3.5" aria-hidden />
+   460→                                    By {task.dueDate}
+   461→                                  </span>
+   462→                                )}
+   463→                                {task.estimatedAmountMinor != null && (
+   464→                                  <span className="kpi-num">About {formatMinor(task.estimatedAmountMinor)}</span>
+   465→                                )}
+   466→                                {task.items.length > 0 && (
+   467→                                  <span className="kpi-num">{task.items.length} item{task.items.length > 1 ? "s" : ""}</span>
+   468→                                )}
+   469→                              </div>
+   470→                            </div>
+   471→                          </div>
+   472→                          <StatusBadge status={task.status} className="shrink-0" />
+   473→                          <TaskTypeChip taskType={task.taskType} />
+   474→                        </div>
+   475→
+   476→                        {task.notes && (
+   477→                          <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">{task.notes}</p>
+   478→                        )}
+   479→
+   480→                        {/* items list */}
+   481→                        {task.items.length > 0 && (
+   482→                          <div className="mt-3 space-y-1.5">
+   483→                            {task.items.map((it) => (
+   484→                              <div
+   485→                                key={it.id}
+   486→                                className="glass-inset flex items-baseline justify-between gap-3 rounded-md px-3 py-2"
+   487→                              >
+   488→                                <span className="min-w-0 truncate text-[13px]">
+   489→                                  {it.itemName}
+   490→                                  <span className="kpi-num text-muted-foreground">
+   491→                                    {" · "}
+   492→                                    {it.expectedQuantity}
+   493→                                    {it.unit ? ` ${it.unit}` : ""}
+   494→                                  </span>
+   495→                                </span>
+   496→                                {it.estimatedUnitPriceMinor != null && (
+   497→                                  <span className="kpi-num shrink-0 text-xs text-muted-foreground">
+   498→                                    ~{formatMinor(it.estimatedUnitPriceMinor)} each
+   499→                                  </span>
+   500→                                )}
+   501→                              </div>
+   502→                            ))}
+   503→                          </div>
+   504→                        )}
+   505→
+   506→                        {/* state footer */}
+   507→                        <div className="mt-4 space-y-3 border-t border-border/70 pt-3.5">
+   508→                          {task.status === "ASSIGNED" && (
+   509→                            <div className="flex flex-wrap gap-2">
+   510→                              <GlassButton
+   511→                                size="sm"
+   512→                                loading={busy}
+   513→                                onClick={() => void transition(task, "accept")}
+   514→                              >
+   515→                                Accept
+   516→                              </GlassButton>
+   517→                              <GlassButton
+   518→                                size="sm"
+   519→                                variant="secondary"
+   520→                                disabled={busy}
+   521→                                onClick={() => setRejectTask(task)}
+   522→                              >
+   523→                                Reject
+   524→                              </GlassButton>
+   525→                            </div>
+   526→                          )}
+   527→
+   528→                          {task.status === "ACCEPTED" && (
+   529→                            <div className="flex flex-wrap items-center gap-2">
+   530→                              <GlassButton
+   531→                                size="sm"
+   532→                                loading={busy}
+   533→                                icon={<ShoppingCart />}
+   534→                                onClick={() => void transition(task, "start")}
+   535→                              >
+   536→                                Start submission
+   537→                              </GlassButton>
+   538→                              <span className="text-xs text-muted-foreground">
+   539→                                Accepted — start it when you're ready to shop.
+   540→                              </span>
+   541→                            </div>
+   542→                          )}
+   543→
+   544→                          {task.status === "IN_PROGRESS" && (
+   545→                            <GlassButton size="sm" icon={<ShoppingCart />} onClick={() => setSubmitTask(task)}>
+   546→                              Submit purchase
+   547→                            </GlassButton>
+   548→                          )}
+   549→
+   550→                          {task.status === "SUBMITTED" && (
+   551→                            <p className="glass-inset inline-flex items-start gap-2 rounded-md px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+   552→                              <Hourglass className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
+   553→                              Waiting for admin verification — it does not enter official expenses until
+   554→                              approved.
+   555→                            </p>
+   556→                          )}
+   557→
+   558→                          {task.status === "APPROVED" && task.submission && (
+   559→                            <p className="glass-inset inline-flex items-start gap-2 rounded-md px-3 py-2.5 text-xs leading-relaxed">
+   560→                              <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden />
+   561→                              <span>
+   562→                                Approved —{" "}
+   563→                                <span className="kpi-num font-semibold">
+   564→                                  {formatMinor(task.submission.claimedTotalMinor)}
+   565→                                </span>{" "}
+   566→                                recorded as an official expense.
+   567→                              </span>
+   568→                            </p>
+   569→                          )}
+   570→
+   571→                          {(task.status === "REJECTED" || task.status === "REJECTED_BY_ADMIN") && (
+   572→                            <p
+   573→                              className={cn(
+   574→                                "glass-inset inline-flex items-start gap-2 rounded-md px-3 py-2.5 text-xs leading-relaxed"
+   575→                              )}
+   576→                            >
+   577→                              <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-danger" aria-hidden />
+   578→                              <span className="text-danger">
+   579→                                {task.status === "REJECTED"
+   580→                                  ? `You rejected this task${task.rejectionReason ? `: ${task.rejectionReason}` : "."}`
+   581→                                  : `Rejected by the admin${task.adminReviewReason ? `: ${task.adminReviewReason}` : "."}`}
+   582→                              </span>
+   583→                            </p>
+   584→                          )}
+   585→
+   586→                          {task.status === "SUBMITTED" && task.submission && (
+   587→                            <p className="kpi-num text-xs text-muted-foreground">
+   588→                              Claimed total {formatMinor(task.submission.claimedTotalMinor)} ·{" "}
+   589→                              {new Intl.DateTimeFormat("en-IN", { timeZone: tz, day: "numeric", month: "short" }).format(
+   590→                                new Date(task.submission.submittedAt)
+   591→                              )}
+   592→                            </p>
+   593→                          )}
+   594→                        </div>
+   595→                      </GlassCard>
+   596→                    </motion.div>
+   597→                  );
+   598→                })}
+   599→              </div>
+   600→            </StaggerItem>
+   601→          )}
+   602→        </StaggerGroup>
+   603→      )}
+   604→
+   605→      {/* reject reason dialog (required) */}
+   606→      <ConfirmDialog
+   607→        open={rejectTask != null}
+   608→        onOpenChange={(open) => {
+   609→          if (!open) setRejectTask(null);
+   610→        }}
+   611→        title="Reject this task?"
+   612→        description={
+   613→          rejectTask
+   614→            ? `"${rejectTask.description}" will go back to the admin. Your reason is kept for the record.`
+   615→            : undefined
+   616→        }
+   617→        confirmLabel="Reject task"
+   618→        tone="destructive"
+   619→        requireReason
+   620→        reasonPlaceholder="Why can't you take this on? (required)"
+   621→        loading={busyId === rejectTask?.id}
+   622→        onConfirm={(reason) => {
+   623→          if (rejectTask && reason) void transition(rejectTask, "reject", reason);
+   624→        }}
+   625→      />
+   626→
+   627→      {submitTask ? (
+   628→        <SubmissionDialog
+   629→          key={submitTask.id}
+   630→          task={submitTask}
+   631→          open
+   632→          onOpenChange={(open) => {
+   633→            if (!open) setSubmitTask(null);
+   634→          }}
+   635→        />
+   636→      ) : null}
+   637→    </div>
+   638→  );
+   639→}
+   640→

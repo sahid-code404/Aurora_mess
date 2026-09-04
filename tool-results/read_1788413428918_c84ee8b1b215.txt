@@ -1,0 +1,921 @@
+     1→/**
+     2→ * BILLING — period lifecycle, readiness gate, immutable snapshot and bill
+     3→ * generation (spec §52-59).
+     4→ *
+     5→ * INVARIANTS:
+     6→ *  - Billing periods are unique per (institution, year, month); only the CURRENT
+     7→ *    month may ever be created (no future months — §52).
+     8→ *  - Generation is serialized through a status guard (OPEN → CLOSING) inside a
+     9→ *    single transaction: concurrent or repeated generation fails cleanly with
+    10→ *    BILLING_ALREADY_BILLED / BILLING_PERIOD_CLOSED.
+    11→ *  - Readiness is re-run INSIDE the transaction — anything unready rolls the
+    12→ *    period back to OPEN (no half-closed states).
+    13→ *  - ALL inputs are frozen into BillingSnapshot (payload + sha256 checksum).
+    14→ *    BILLED periods are never recalculated; corrections happen via bill
+    15→ *    adjustments only (§59).
+    16→ *  - Every bill carries provenance lines (quantity × unit price, payments
+    17→ *    applied, formula text) — never an unexplained total (§58, §275).
+    18→ *  - Journals: per bill, Dr RESIDENT_FUNDS (subtotal) / Cr MEAL_CHARGE_INCOME
+    19→ *    (resident meal part) + Cr GUEST_INCOME (guest part), refType BILL.
+    20→ */
+    21→import { createHash } from "node:crypto";
+    22→import { db } from "@/lib/db";
+    23→import { ApiError, CODES } from "@/lib/errors";
+    24→import { getInstitution } from "@/lib/institution";
+    25→import { appendAudit } from "@/lib/audit";
+    26→import { appendOutbox } from "@/lib/outbox";
+    27→import { formatMinor, multiplyRoundHalfUp } from "@/lib/money";
+    28→import { addDaysToKey, localDateMidnightUtc, monthBoundsInTz } from "@/lib/time";
+    29→import { postJournal, type JournalLine } from "./ledger";
+    30→import { FormulaAst } from "./formula/ast";
+    31→import { evaluateFormula } from "./formula/evaluator";
+    32→import { gatherPeriodVariables, periodBounds } from "./formula/period-variables";
+    33→import { resolveFormulaVersionForPeriod } from "./formula/versions";
+    34→
+    35→const UNSETTLED_BILL_STATUSES = ["GENERATED", "PARTIALLY_PAID", "OVERDUE"];
+    36→const GUEST_CONFIRMED = ["CONFIRMED", "CONSUMED"];
+    37→
+    38→export function monthLabel(year: number, month: number): string {
+    39→  return new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric", timeZone: "UTC" }).format(
+    40→    new Date(Date.UTC(year, month - 1, 1))
+    41→  );
+    42→}
+    43→
+    44→/** Current month period (institution tz). NEVER creates future months (§52). */
+    45→export async function getOrCreateOpenPeriod(institutionId: string, tz?: string): Promise<any> {
+    46→  const inst = tz ? null : await getInstitution(institutionId);
+    47→  const timeZone = tz ?? inst?.timezone ?? "Asia/Kolkata";
+    48→  const b = monthBoundsInTz(new Date(), timeZone);
+    49→  const existing = await db.billingPeriod.findUnique({
+    50→    where: { institutionId_year_month: { institutionId, year: b.year, month: b.month } },
+    51→  });
+    52→  if (existing) return existing;
+    53→  try {
+    54→    return await db.billingPeriod.create({
+    55→      data: { institutionId, year: b.year, month: b.month, status: "OPEN" },
+    56→    });
+    57→  } catch (error: unknown) {
+    58→    if ((error as { code?: string })?.code === "P2002") {
+    59→      // Racing creator won — read theirs.
+    60→      return await db.billingPeriod.findUniqueOrThrow({
+    61→        where: { institutionId_year_month: { institutionId, year: b.year, month: b.month } },
+    62→      });
+    63→    }
+    64→    throw error;
+    65→  }
+    66→}
+    67→
+    68→export async function listPeriods(institutionId: string): Promise<any[]> {
+    69→  const periods = await db.billingPeriod.findMany({
+    70→    where: { institutionId },
+    71→    orderBy: [{ year: "desc" }, { month: "desc" }],
+    72→  });
+    73→  const counts = await db.bill.groupBy({
+    74→    by: ["billingPeriodId"],
+    75→    where: { institutionId },
+    76→    _count: { _all: true },
+    77→  });
+    78→  const countMap = new Map<string, number>(counts.map((c: any) => [c.billingPeriodId, c._all ?? c._count?._all ?? 0]));
+    79→  return periods.map((p: any) => ({
+    80→    id: p.id,
+    81→    year: p.year,
+    82→    month: p.month,
+    83→    monthLabel: monthLabel(p.year, p.month),
+    84→    status: p.status,
+    85→    generationState: p.generationState ?? null,
+    86→    billedAt: p.billedAt ? p.billedAt.toISOString() : null,
+    87→    mealChargeMinorSnapshot: p.mealChargeMinorSnapshot ?? null,
+    88→    guestPriceMinorSnapshot: p.guestPriceMinorSnapshot ?? null,
+    89→    billCount: countMap.get(p.id) ?? 0,
+    90→    createdAt: p.createdAt.toISOString(),
+    91→  }));
+    92→}
+    93→
+    94→// ---------------------------------------------------------------------------
+    95→// READINESS (spec §53)
+    96→// ---------------------------------------------------------------------------
+    97→
+    98→export type ReadinessCheck = {
+    99→  key: string;
+   100→  label: string;
+   101→  pass: boolean;
+   102→  detail?: string;
+   103→};
+   104→
+   105→export type BillingReadiness = {
+   106→  checks: ReadinessCheck[];
+   107→  ready: boolean;
+   108→  /** Raw whitelisted formula variables resolved for this period (for the snapshot). */
+   109→  variables: Record<string, number>;
+   110→  summary: {
+   111→    residentCount: number;
+   112→    residentMealCount: number;
+   113→    guestMealCount: number;
+   114→    eligibleExpensesMinor: number;
+   115→    approvedPaymentsMinor: number;
+   116→    mealChargeMinor: number | null;
+   117→    guestPriceMinor: number;
+   118→    formulaVersion: { version: number; expressionSource: string; humanPreview: string } | null;
+   119→  };
+   120→};
+   121→
+   122→/**
+   123→ * Full readiness evaluation. `client` lets generateBilling re-run everything
+   124→ * inside its transaction (the ledger-reconcile counts mirror
+   125→ * reconcileInstitution from @/lib/domain/ledger — that function only accepts
+   126→ * the global client, so the tx path recomputes identical counts).
+   127→ */
+   128→export async function computeReadiness(periodId: string, client: any = db): Promise<BillingReadiness> {
+   129→  const period = await client.billingPeriod.findUnique({ where: { id: periodId } });
+   130→  if (!period) throw new ApiError(CODES.NOT_FOUND, "Billing period not found.", 404);
+   131→  const inst = await getInstitution(period.institutionId);
+   132→  const tz = inst?.timezone ?? "Asia/Kolkata";
+   133→  const bounds = periodBounds(period.year, period.month, tz);
+   134→  const serviceDateRange = { gte: bounds.startAt, lt: bounds.endExclusiveAt };
+   135→  const checks: ReadinessCheck[] = [];
+   136→
+   137→  // 1. Period must be OPEN.
+   138→  checks.push({
+   139→    key: "period_open",
+   140→    label: "Period is open",
+   141→    pass: period.status === "OPEN",
+   142→    detail:
+   143→      period.status === "BILLED"
+   144→        ? "This period has already been billed."
+   145→        : period.status === "CLOSING"
+   146→          ? "A billing run is currently in progress."
+   147→          : period.status === "REOPENED"
+   148→            ? "This period was reopened after billing — bills remain authoritative."
+   149→            : undefined,
+   150→  });
+   151→
+   152→  // 2. No unreviewed payments (unprocessed financial records — §53).
+   153→  const pendingPayments = await client.payment.count({
+   154→    where: { institutionId: period.institutionId, status: "PENDING" },
+   155→  });
+   156→  checks.push({
+   157→    key: "pending_payments",
+   158→    label:
+   159→      pendingPayments === 0
+   160→        ? "No payments waiting for review"
+   161→        : `${pendingPayments} payment${pendingPayments === 1 ? "" : "s"} ${
+   162→            pendingPayments === 1 ? "is" : "are"
+   163→          } still waiting for review`,
+   164→    pass: pendingPayments === 0,
+   165→  });
+   166→
+   167→  // 3. A formula version must cover this period.
+   168→  const formulaVersion = await resolveFormulaVersionForPeriod(period.institutionId, bounds.startAt, client);
+   169→  checks.push({
+   170→    key: "formula_version",
+   171→    label: "Active meal charge formula",
+   172→    pass: Boolean(formulaVersion),
+   173→    detail: formulaVersion ? undefined : "No active meal charge formula covers this period.",
+   174→  });
+   175→
+   176→  // 4. Formula must evaluate (divide-by-zero when 0 resident meals).
+   177→  const variables = await gatherPeriodVariables(period.institutionId, period.year, period.month, undefined, client);
+   178→  let mealChargeMinor: number | null = null;
+   179→  let mealChargeProblem: string | null = null;
+   180→  if (formulaVersion) {
+   181→    try {
+   182→      mealChargeMinor = evaluateFormula(JSON.parse(formulaVersion.compiledAstJson) as FormulaAst, variables);
+   183→    } catch (error) {
+   184→      if (error instanceof ApiError && error.code === CODES.FORMULA_DIVIDE_BY_ZERO) {
+   185→        mealChargeProblem = "No resident meals recorded — the per-meal charge cannot be calculated";
+   186→      } else {
+   187→        mealChargeProblem = "The formula could not be evaluated for this period";
+   188→      }
+   189→    }
+   190→  }
+   191→  checks.push({
+   192→    key: "meal_charge_computable",
+   193→    label: "Per-meal charge is computable",
+   194→    pass: mealChargeMinor != null,
+   195→    detail: mealChargeProblem ?? undefined,
+   196→  });
+   197→
+   198→  // 5. Ledger reconciled with approved records (mirrors reconcileInstitution).
+   199→  const [paymentsNoJournal, expensesNoJournal, journals] = await Promise.all([
+   200→    client.payment.count({
+   201→      where: { institutionId: period.institutionId, status: "APPROVED", approvedJournalId: null },
+   202→    }),
+   203→    client.expense.count({
+   204→      where: { institutionId: period.institutionId, status: "APPROVED", journalId: null },
+   205→    }),
+   206→    client.ledgerJournal.findMany({
+   207→      where: { institutionId: period.institutionId, status: "POSTED" },
+   208→      include: { entries: { select: { debitMinor: true, creditMinor: true } } },
+   209→    }),
+   210→  ]);
+   211→  const unbalancedJournals = journals.filter(
+   212→    (j: any) =>
+   213→      (j.entries as any[]).reduce((s, e) => s + e.debitMinor, 0) !==
+   214→      (j.entries as any[]).reduce((s, e) => s + e.creditMinor, 0)
+   215→  ).length;
+   216→  const reconcileProblems = [
+   217→    paymentsNoJournal > 0 ? `${paymentsNoJournal} approved payment(s) without a journal` : null,
+   218→    expensesNoJournal > 0 ? `${expensesNoJournal} approved expense(s) without a journal` : null,
+   219→    unbalancedJournals > 0 ? `${unbalancedJournals} unbalanced journal(s)` : null,
+   220→  ].filter(Boolean);
+   221→  checks.push({
+   222→    key: "ledger_reconciled",
+   223→    label: "Ledger reconciled with approved records",
+   224→    pass: reconcileProblems.length === 0,
+   225→    detail: reconcileProblems.length > 0 ? reconcileProblems.join("; ") : undefined,
+   226→  });
+   227→
+   228→  // 6. No duplicate resident meals (same resident on the same instance twice).
+   229→  const residentMealRows = await client.residentMeal.findMany({
+   230→    where: { institutionId: period.institutionId, mealInstance: { serviceDate: serviceDateRange } },
+   231→    select: { residentId: true, mealInstanceId: true },
+   232→  });
+   233→  const rmSeen = new Set<string>();
+   234→  let duplicateResidentMeals = 0;
+   235→  for (const row of residentMealRows) {
+   236→    const key = `${row.residentId}|${row.mealInstanceId}`;
+   237→    if (rmSeen.has(key)) duplicateResidentMeals += 1;
+   238→    else rmSeen.add(key);
+   239→  }
+   240→  checks.push({
+   241→    key: "no_duplicate_resident_meals",
+   242→    label: "No duplicate resident meal entries",
+   243→    pass: duplicateResidentMeals === 0,
+   244→    detail: duplicateResidentMeals > 0 ? `${duplicateResidentMeals} duplicate resident meal entries` : undefined,
+   245→  });
+   246→
+   247→  // 7. No duplicate meal instances (definition + serviceDate). Guarded by a DB
+   248→  //    unique constraint — verified here anyway as a safety net.
+   249→  const instanceRows = await client.mealInstance.findMany({
+   250→    where: { institutionId: period.institutionId, serviceDate: serviceDateRange },
+   251→    select: { mealDefinitionId: true, serviceDate: true },
+   252→  });
+   253→  const miSeen = new Set<string>();
+   254→  let duplicateInstances = 0;
+   255→  for (const row of instanceRows) {
+   256→    const key = `${row.mealDefinitionId}|${row.serviceDate.toISOString()}`;
+   257→    if (miSeen.has(key)) duplicateInstances += 1;
+   258→    else miSeen.add(key);
+   259→  }
+   260→  checks.push({
+   261→    key: "no_duplicate_meal_instances",
+   262→    label: "Meal instances are unique per date",
+   263→    pass: duplicateInstances === 0,
+   264→    detail: duplicateInstances > 0 ? `${duplicateInstances} duplicate meal instances` : undefined,
+   265→  });
+   266→
+   267→  // 8. Guest meal totals reconcile (quantity × unit price == stored total).
+   268→  const guestRows = await client.guestMealRequest.findMany({
+   269→    where: {
+   270→      institutionId: period.institutionId,
+   271→      status: { in: GUEST_CONFIRMED },
+   272→      mealInstance: { serviceDate: serviceDateRange },
+   273→    },
+   274→    select: { quantity: true, unitPriceMinor: true, totalPriceMinor: true },
+   275→  });
+   276→  let guestStored = 0;
+   277→  let guestRecomputed = 0;
+   278→  for (const g of guestRows) {
+   279→    guestStored += g.totalPriceMinor;
+   280→    guestRecomputed += multiplyRoundHalfUp(g.quantity, g.unitPriceMinor);
+   281→  }
+   282→  checks.push({
+   283→    key: "guest_totals_reconcile",
+   284→    label: "Guest meal totals reconcile",
+   285→    pass: guestStored === guestRecomputed,
+   286→    detail:
+   287→      guestStored !== guestRecomputed
+   288→        ? `Guest totals off by ${Math.abs(guestStored - guestRecomputed)} paise (recomputed ${guestRecomputed} vs stored ${guestStored})`
+   289→        : undefined,
+   290→  });
+   291→
+   292→  // 9. No pending expenses.
+   293→  const pendingExpenses = await client.expense.count({
+   294→    where: { institutionId: period.institutionId, status: "PENDING" },
+   295→  });
+   296→  checks.push({
+   297→    key: "pending_expenses",
+   298→    label:
+   299→      pendingExpenses === 0
+   300→        ? "No expenses waiting for review"
+   301→        : `${pendingExpenses} expense${pendingExpenses === 1 ? "" : "s"} waiting for review`,
+   302→    pass: pendingExpenses === 0,
+   303→  });
+   304→
+   305→  // 10. No submitted task submissions awaiting verification.
+   306→  const submittedTasks = await client.taskSubmission.count({ where: { status: "SUBMITTED" } });
+   307→  checks.push({
+   308→    key: "submitted_tasks",
+   309→    label:
+   310→      submittedTasks === 0
+   311→        ? "No task submissions awaiting verification"
+   312→        : `${submittedTasks} task submission${submittedTasks === 1 ? "" : "s"} need verification`,
+   313→    pass: submittedTasks === 0,
+   314→  });
+   315→
+   316→  // Summary + counts.
+   317→  const [residents, mealCountAgg, guestAgg, expenseAgg, paymentAgg] = await Promise.all([
+   318→    client.user.findMany({
+   319→      where: { institutionId: period.institutionId, role: "RESIDENT", status: "ACTIVE" },
+   320→      select: { id: true, membershipEffectiveFrom: true, membershipEffectiveUntil: true },
+   321→    }),
+   322→    client.residentMeal.count({
+   323→      where: { institutionId: period.institutionId, effectiveState: "ON", mealInstance: { serviceDate: serviceDateRange } },
+   324→    }),
+   325→    client.guestMealRequest.aggregate({
+   326→      _sum: { quantity: true },
+   327→      where: {
+   328→        institutionId: period.institutionId,
+   329→        status: { in: GUEST_CONFIRMED },
+   330→        mealInstance: { serviceDate: serviceDateRange },
+   331→      },
+   332→    }),
+   333→    client.expense.aggregate({
+   334→      _sum: { totalMinor: true },
+   335→      where: { institutionId: period.institutionId, status: "APPROVED", date: { gte: bounds.startAt, lt: bounds.endExclusiveAt } },
+   336→    }),
+   337→    client.payment.aggregate({
+   338→      _sum: { amountMinor: true },
+   339→      where: {
+   340→        institutionId: period.institutionId,
+   341→        status: "APPROVED",
+   342→        submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+   343→      },
+   344→    }),
+   345→  ]);
+   346→  const farPast = new Date(-864e13);
+   347→  const farFuture = new Date(864e13);
+   348→  const coveringResidents = residents.filter((r: any) => {
+   349→    const from = r.membershipEffectiveFrom ?? farPast;
+   350→    const until = r.membershipEffectiveUntil ?? farFuture;
+   351→    return from < bounds.endExclusiveAt && until >= bounds.startAt;
+   352→  });
+   353→
+   354→  return {
+   355→    checks,
+   356→    ready: checks.every((c) => c.pass),
+   357→    variables,
+   358→    summary: {
+   359→      residentCount: coveringResidents.length,
+   360→      residentMealCount: mealCountAgg,
+   361→      guestMealCount: guestAgg._sum.quantity ?? 0,
+   362→      eligibleExpensesMinor: expenseAgg._sum.totalMinor ?? 0,
+   363→      approvedPaymentsMinor: paymentAgg._sum.amountMinor ?? 0,
+   364→      mealChargeMinor,
+   365→      guestPriceMinor: inst?.settings.guestMealPriceMinor ?? 5500,
+   366→      formulaVersion: formulaVersion
+   367→        ? {
+   368→            version: formulaVersion.version,
+   369→            expressionSource: formulaVersion.expressionSource,
+   370→            humanPreview: formulaVersion.humanPreview,
+   371→          }
+   372→        : null,
+   373→    },
+   374→  };
+   375→}
+   376→
+   377→// ---------------------------------------------------------------------------
+   378→// GENERATION (spec §54-58)
+   379→// ---------------------------------------------------------------------------
+   380→
+   381→function pad4(n: number): string {
+   382→  return String(n).padStart(4, "0");
+   383→}
+   384→
+   385→/** Bill numbers inside the caller's transaction (tx-aware mirror of ids.ts). */
+   386→async function nextBillNumbers(client: any, year: number, month: number, count: number): Promise<string[]> {
+   387→  const stamp = `${year}${String(month).padStart(2, "0")}`;
+   388→  const out: string[] = [];
+   389→  let seq = (await client.bill.count({ where: { billNumber: { startsWith: `BILL-${stamp}` } } })) + 1;
+   390→  while (out.length < count) {
+   391→    const candidate = `BILL-${stamp}-${pad4(seq)}`;
+   392→    const existing = await client.bill.findUnique({ where: { billNumber: candidate } });
+   393→    if (!existing) out.push(candidate);
+   394→    seq += 1;
+   395→    if (seq > 99999) throw new ApiError(CODES.INTERNAL, "Bill number sequence exhausted for this period.", 500);
+   396→  }
+   397→  return out;
+   398→}
+   399→
+   400→export type GenerateResult = {
+   401→  period: { id: string; year: number; month: number; status: string };
+   402→  billCount: number;
+   403→  snapshotId: string;
+   404→  mealChargeMinor: number;
+   405→  guestPriceMinor: number;
+   406→  totalBilledMinor: number;
+   407→  totalDueMinor: number;
+   408→  totalPaymentsAppliedMinor: number;
+   409→  summaryText: string;
+   410→};
+   411→
+   412→export async function generateBilling(
+   413→  periodId: string,
+   414→  adminUserId: string,
+   415→  requestId: string,
+   416→  arithmetic: { a: number; b: number; answer: number }
+   417→): Promise<GenerateResult> {
+   418→  // Human-confirmation arithmetic gate (stateless: the readiness endpoint issued
+   419→  // the challenge; the answer must match — spec §55).
+   420→  if (
+   421→    !Number.isInteger(arithmetic.a) ||
+   422→    !Number.isInteger(arithmetic.b) ||
+   423→    !Number.isInteger(arithmetic.answer) ||
+   424→    arithmetic.answer !== arithmetic.a + arithmetic.b
+   425→  ) {
+   426→    throw new ApiError(CODES.BILLING_CONFIRMATION_FAILED, "The confirmation answer was incorrect.", 422);
+   427→  }
+   428→
+   429→  const period = await db.billingPeriod.findUnique({ where: { id: periodId } });
+   430→  if (!period) throw new ApiError(CODES.NOT_FOUND, "Billing period not found.", 404);
+   431→  const inst = await getInstitution(period.institutionId); // also pre-warms the cache for the tx below
+   432→  if (!inst) throw new ApiError(CODES.NOT_FOUND, "Institution not found.", 404);
+   433→  const tz = inst.timezone;
+   434→  const bounds = periodBounds(period.year, period.month, tz);
+   435→
+   436→  return db.$transaction(async (tx: any) => {
+   437→    // Advisory-lock emulation: only one run may CLAIM generation. Status stays
+   438→    // OPEN during the run (readiness check 1 must still pass); generationState
+   439→    // guards concurrent runs and rolls back to null on any failure.
+   440→    const guard = await tx.billingPeriod.updateMany({
+   441→      where: { id: periodId, institutionId: period.institutionId, status: "OPEN", generationState: null },
+   442→      data: { generationState: "CLOSING" },
+   443→    });
+   444→    if (guard.count !== 1) {
+   445→      const current = await tx.billingPeriod.findUnique({ where: { id: periodId } });
+   446→      if (current?.status === "BILLED") {
+   447→        throw new ApiError(CODES.BILLING_ALREADY_BILLED, "This period has already been billed.", 409);
+   448→      }
+   449→      if (current?.generationState === "CLOSING" || current?.generationState === "GENERATING") {
+   450→        throw new ApiError(CODES.BILLING_PERIOD_CLOSED, "A billing run is already in progress for this period.", 409);
+   451→      }
+   452→      throw new ApiError(CODES.BILLING_PERIOD_CLOSED, "This period is not open for billing.", 409);
+   453→    }
+   454→
+   455→    // Readiness re-run INSIDE the transaction — failures roll back to OPEN.
+   456→    const readiness = await computeReadiness(periodId, tx);
+   457→    if (!readiness.ready) {
+   458→      const failed = readiness.checks.filter((c) => !c.pass);
+   459→      const error = new ApiError(
+   460→        CODES.BILLING_NOT_READY,
+   461→        `This period isn't ready to bill: ${failed.map((f) => f.label).join("; ")}.`,
+   462→        422
+   463→      );
+   464→      (error as ApiError).fields = { checks: JSON.stringify(failed) };
+   465→      throw error;
+   466→    }
+   467→
+   468→    const summary = readiness.summary;
+   469→    const mealChargeMinor = summary.mealChargeMinor as number;
+   470→    const guestPriceMinor = summary.guestPriceMinor;
+   471→
+   472→    // ---- Gather every snapshot input (all reads inside the tx) ----
+   473→    // NOTE: User↔Profile relation is User.userProfileId (FK on User) — profiles
+   474→    // come along with the user query instead of a reverse relation filter.
+   475→    const [residentRows, mealRows, guestRows, expenseRows, paymentRows, refundRows, exemptionRows, formulaVersion] =
+   476→      await Promise.all([
+   477→        tx.user.findMany({
+   478→          where: { institutionId: period.institutionId, role: "RESIDENT", status: "ACTIVE" },
+   479→          select: {
+   480→            id: true,
+   481→            email: true,
+   482→            membershipEffectiveFrom: true,
+   483→            membershipEffectiveUntil: true,
+   484→            profile: { select: { fullName: true, roomNumber: true } },
+   485→          },
+   486→        }),
+   487→        tx.residentMeal.findMany({
+   488→          where: {
+   489→            institutionId: period.institutionId,
+   490→            effectiveState: "ON",
+   491→            mealInstance: { serviceDate: { gte: bounds.startAt, lt: bounds.endExclusiveAt } },
+   492→          },
+   493→          select: { residentId: true },
+   494→        }),
+   495→        tx.guestMealRequest.findMany({
+   496→          where: {
+   497→            institutionId: period.institutionId,
+   498→            status: { in: GUEST_CONFIRMED },
+   499→            mealInstance: { serviceDate: { gte: bounds.startAt, lt: bounds.endExclusiveAt } },
+   500→          },
+   501→          select: { hostResidentId: true, quantity: true, totalPriceMinor: true, unitPriceMinor: true },
+   502→        }),
+   503→        tx.expense.findMany({
+   504→          where: {
+   505→            institutionId: period.institutionId,
+   506→            status: "APPROVED",
+   507→            date: { gte: bounds.startAt, lt: bounds.endExclusiveAt },
+   508→          },
+   509→          select: { id: true, displayNumber: true, date: true, totalMinor: true, description: true },
+   510→          orderBy: { date: "asc" },
+   511→        }),
+   512→        tx.payment.findMany({
+   513→          where: {
+   514→            institutionId: period.institutionId,
+   515→            status: "APPROVED",
+   516→            submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+   517→          },
+   518→          select: { id: true, displayNumber: true, residentId: true, amountMinor: true, submittedAt: true },
+   519→          orderBy: { submittedAt: "asc" },
+   520→        }),
+   521→        tx.refund.findMany({
+   522→          where: { institutionId: period.institutionId, createdAt: { gte: bounds.startInstant, lt: bounds.endInstant } },
+   523→          select: { id: true, residentId: true, amountMinor: true, mode: true, status: true },
+   524→        }),
+   525→        tx.policyExemption.findMany({
+   526→          where: { institutionId: period.institutionId, policyType: "DEFICIT_RESTRICTION" },
+   527→          select: { id: true, residentId: true, reason: true, startsAt: true, expiresAt: true },
+   528→        }),
+   529→        resolveFormulaVersionForPeriod(period.institutionId, bounds.startAt, tx),
+   530→      ]);
+   531→
+   532→    const farPast = new Date(-864e13);
+   533→    const farFuture = new Date(864e13);
+   534→    const residents = (residentRows as any[])
+   535→      .filter((r: any) => {
+   536→        const from = r.membershipEffectiveFrom ?? farPast;
+   537→        const until = r.membershipEffectiveUntil ?? farFuture;
+   538→        return from < bounds.endExclusiveAt && until >= bounds.startAt;
+   539→      })
+   540→      .map((r: any) => ({
+   541→        id: r.id,
+   542→        email: r.email,
+   543→        fullName: r.profile?.fullName ?? "Resident",
+   544→        roomNumber: r.profile?.roomNumber ?? null,
+   545→      }));
+   546→
+   547→    // Meal / guest / payment groupings per resident.
+   548→    const mealsByResident = new Map<string, number>();
+   549→    for (const row of mealRows as any[]) {
+   550→      mealsByResident.set(row.residentId, (mealsByResident.get(row.residentId) ?? 0) + 1);
+   551→    }
+   552→    const guestsByResident = new Map<string, { quantity: number; amountMinor: number }>();
+   553→    for (const g of guestRows as any[]) {
+   554→      const entry = guestsByResident.get(g.hostResidentId) ?? { quantity: 0, amountMinor: 0 };
+   555→      entry.quantity += g.quantity;
+   556→      entry.amountMinor += g.totalPriceMinor;
+   557→      guestsByResident.set(g.hostResidentId, entry);
+   558→    }
+   559→    const paymentsByResident = new Map<string, any[]>();
+   560→    for (const p of paymentRows as any[]) {
+   561→      const list = paymentsByResident.get(p.residentId) ?? [];
+   562→      list.push(p);
+   563→      paymentsByResident.set(p.residentId, list);
+   564→    }
+   565→
+   566→    // ---- Immutable snapshot ----
+   567→    const ast = JSON.parse(formulaVersion.compiledAstJson) as FormulaAst;
+   568→    const payload = {
+   569→      period: { year: period.year, month: period.month, startKey: bounds.startKey, endKey: bounds.endKey },
+   570→      generatedAt: new Date().toISOString(),
+   571→      institution: {
+   572→        id: inst.id,
+   573→        name: inst.name,
+   574→        timezone: inst.timezone,
+   575→        currencyCode: inst.currencyCode,
+   576→      },
+   577→      settings: inst.settings,
+   578→      formula: {
+   579→        versionId: formulaVersion.id,
+   580→        version: formulaVersion.version,
+   581→        inputMode: formulaVersion.inputMode,
+   582→        expressionSource: formulaVersion.expressionSource,
+   583→        naturalSource: formulaVersion.naturalSource ?? null,
+   584→        humanPreview: formulaVersion.humanPreview,
+   585→        ast,
+   586→        checksum: formulaVersion.checksum,
+   587→      },
+   588→      variables: readiness.variables,
+   589→      mealChargeMinor,
+   590→      guestPriceMinor,
+   591→      residents: residents.map((r) => {
+   592→        const guest = guestsByResident.get(r.id) ?? { quantity: 0, amountMinor: 0 };
+   593→        return {
+   594→          id: r.id,
+   595→          fullName: r.fullName,
+   596→          email: r.email,
+   597→          roomNumber: r.roomNumber,
+   598→          mealsOn: mealsByResident.get(r.id) ?? 0,
+   599→          guestQuantity: guest.quantity,
+   600→          guestAmountMinor: guest.amountMinor,
+   601→          approvedPaymentsMinor: (paymentsByResident.get(r.id) ?? []).reduce((s, p) => s + p.amountMinor, 0),
+   602→        };
+   603→      }),
+   604→      eligibleExpenses: expenseRows,
+   605→      approvedPayments: paymentRows.map((p: any) => ({ ...p, submittedAt: p.submittedAt.toISOString() })),
+   606→      refunds: refundRows,
+   607→      policyExemptions: exemptionRows.map((e: any) => ({
+   608→        ...e,
+   609→        startsAt: e.startsAt.toISOString(),
+   610→        expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,
+   611→      })),
+   612→      totals: {
+   613→        residentCount: residents.length,
+   614→        residentMealCount: summary.residentMealCount,
+   615→        guestMealCount: summary.guestMealCount,
+   616→        eligibleExpensesMinor: summary.eligibleExpensesMinor,
+   617→        approvedPaymentsMinor: summary.approvedPaymentsMinor,
+   618→      },
+   619→    };
+   620→    const payloadJson = JSON.stringify(payload);
+   621→    const checksum = createHash("sha256").update(JSON.stringify(JSON.parse(payloadJson))).digest("hex");
+   622→
+   623→    const snapshot = await tx.billingSnapshot.create({
+   624→      data: {
+   625→        institutionId: period.institutionId,
+   626→        billingPeriodId: periodId,
+   627→        payloadJson,
+   628→        checksum,
+   629→        residentCount: residents.length,
+   630→        residentMealCount: summary.residentMealCount,
+   631→        guestMealCount: summary.guestMealCount,
+   632→        eligibleExpensesMinor: summary.eligibleExpensesMinor,
+   633→        approvedPaymentsMinor: summary.approvedPaymentsMinor,
+   634→        mealChargeMinor,
+   635→        createdByUserId: adminUserId,
+   636→      },
+   637→    });
+   638→
+   639→    // ---- Bills ----
+   640→    const billNumbers = await nextBillNumbers(tx, period.year, period.month, residents.length);
+   641→    const dueDate = localDateMidnightUtc(addDaysToKey(bounds.endKey, inst.settings.billingDueDays));
+   642→    const formulaDetail = {
+   643→      period: { year: period.year, month: period.month, startKey: bounds.startKey, endKey: bounds.endKey },
+   644→      formula: {
+   645→        version: formulaVersion.version,
+   646→        expressionSource: formulaVersion.expressionSource,
+   647→        humanPreview: formulaVersion.humanPreview,
+   648→      },
+   649→    };
+   650→    const label = monthLabel(period.year, period.month);
+   651→
+   652→    let totalBilledMinor = 0;
+   653→    let totalDueMinor = 0;
+   654→    let totalPaymentsAppliedMinor = 0;
+   655→
+   656→    for (let i = 0; i < residents.length; i += 1) {
+   657→      const resident = residents[i];
+   658→      const mealCount = mealsByResident.get(resident.id) ?? 0;
+   659→      const guest = guestsByResident.get(resident.id) ?? { quantity: 0, amountMinor: 0 };
+   660→      const mealAmount = multiplyRoundHalfUp(mealCount, mealChargeMinor);
+   661→      const guestAmount = multiplyRoundHalfUp(guest.quantity, guestPriceMinor);
+   662→      const subtotal = mealAmount + guestAmount;
+   663→      const myPayments = paymentsByResident.get(resident.id) ?? [];
+   664→      const myApprovedTotal = myPayments.reduce((s, p) => s + p.amountMinor, 0);
+   665→      const paymentsApplied = Math.min(subtotal, myApprovedTotal);
+   666→      const totalDue = Math.max(0, subtotal - paymentsApplied);
+   667→
+   668→      const lines: { code: string; label: string; quantity?: number; unitPriceMinor?: number; amountMinor: number; detailJson?: string; sortOrder: number }[] = [];
+   669→      if (mealCount > 0) {
+   670→        lines.push({
+   671→          code: "RESIDENT_MEALS",
+   672→          label: `Resident meals — ${mealCount} × ${formatMinor(mealChargeMinor)}`,
+   673→          quantity: mealCount,
+   674→          unitPriceMinor: mealChargeMinor,
+   675→          amountMinor: mealAmount,
+   676→          detailJson: JSON.stringify({
+   677→            ...formulaDetail,
+   678→            unitPriceMinor: mealChargeMinor,
+   679→            priceSource: "formula",
+   680→          }),
+   681→          sortOrder: 1,
+   682→        });
+   683→      }
+   684→      if (guest.quantity > 0) {
+   685→        lines.push({
+   686→          code: "GUEST_MEALS",
+   687→          label: `Guest meals — ${guest.quantity} × ${formatMinor(guestPriceMinor)}`,
+   688→          quantity: guest.quantity,
+   689→          unitPriceMinor: guestPriceMinor,
+   690→          amountMinor: guestAmount,
+   691→          detailJson: JSON.stringify({
+   692→            ...formulaDetail,
+   693→            unitPriceMinor: guestPriceMinor,
+   694→            priceSource: "institution settings (guest meal price)",
+   695→          }),
+   696→          sortOrder: 2,
+   697→        });
+   698→      }
+   699→      if (paymentsApplied > 0) {
+   700→        lines.push({
+   701→          code: "PAYMENTS_APPLIED",
+   702→          label: "Payments applied",
+   703→          amountMinor: -paymentsApplied,
+   704→          detailJson: JSON.stringify({
+   705→            policy: "Payments approved with submittedAt inside the period, capped at the subtotal.",
+   706→            paymentCount: myPayments.length,
+   707→            paymentIds: myPayments.slice(0, 50).map((p) => p.id),
+   708→            approvedPaymentsMinor: myApprovedTotal,
+   709→          }),
+   710→          sortOrder: 3,
+   711→        });
+   712→      }
+   713→
+   714→      const bill = await tx.bill.create({
+   715→        data: {
+   716→          institutionId: period.institutionId,
+   717→          residentId: resident.id,
+   718→          billingPeriodId: periodId,
+   719→          snapshotId: snapshot.id,
+   720→          billNumber: billNumbers[i],
+   721→          revision: 1,
+   722→          residentMealCount: mealCount,
+   723→          guestMealCount: guest.quantity,
+   724→          mealChargeMinor,
+   725→          guestChargeMinor: guestAmount,
+   726→          subtotalMinor: subtotal,
+   727→          adjustmentsMinor: 0,
+   728→          paymentsMinor: paymentsApplied,
+   729→          totalDueMinor: totalDue,
+   730→          dueDate,
+   731→          status: totalDue === 0 ? "PAID" : "GENERATED",
+   732→          lines: { create: lines },
+   733→        },
+   734→      });
+   735→
+   736→      // Double-entry: Dr RESIDENT_FUNDS (subtotal) / Cr income accounts (split).
+   737→      // (The link lives on the ledger side: journal refType "BILL" + refId = bill id.
+   738→      //  The Bill model intentionally carries no journal column — snapshot + ledger
+   739→      //  are the source of truth; the schema is frozen.)
+   740→      if (subtotal > 0) {
+   741→        const journalLines: JournalLine[] = [
+   742→          { accountCode: "RESIDENT_FUNDS", debitMinor: subtotal },
+   743→          { accountCode: "MEAL_CHARGE_INCOME", creditMinor: mealAmount },
+   744→          { accountCode: "GUEST_INCOME", creditMinor: guestAmount },
+   745→        ];
+   746→        await postJournal(
+   747→          {
+   748→            institutionId: period.institutionId,
+   749→            description: `Bill ${bill.billNumber} — ${resident.fullName} (${label})`,
+   750→            refType: "BILL",
+   751→            refId: bill.id,
+   752→            createdByUserId: adminUserId,
+   753→            lines: journalLines,
+   754→          },
+   755→          tx
+   756→        );
+   757→      }
+   758→
+   759→      totalBilledMinor += subtotal;
+   760→      totalDueMinor += totalDue;
+   761→      totalPaymentsAppliedMinor += paymentsApplied;
+   762→
+   763→      await appendOutbox(
+   764→        period.institutionId,
+   765→        "NOTIFICATION",
+   766→        {
+   767→          userId: resident.id,
+   768→          institutionId: period.institutionId,
+   769→          type: "BILL_GENERATED",
+   770→          title: "Bill generated",
+   771→          message: `Your ${label} bill has been generated — ${formatMinor(totalDue)}`,
+   772→          entityRef: bill.id,
+   773→        },
+   774→        tx
+   775→      );
+   776→    }
+   777→
+   778→    const now = new Date();
+   779→    const billedPeriod = await tx.billingPeriod.update({
+   780→      where: { id: periodId },
+   781→      data: {
+   782→        status: "BILLED",
+   783→        billedAt: now,
+   784→        closedAt: now,
+   785→        mealChargeMinorSnapshot: mealChargeMinor,
+   786→        guestPriceMinorSnapshot: guestPriceMinor,
+   787→        formulaVersionId: formulaVersion.id,
+   788→        generationState: "COMPLETED",
+   789→        generationError: null,
+   790→      },
+   791→    });
+   792→
+   793→    await appendAudit(
+   794→      {
+   795→        institutionId: period.institutionId,
+   796→        actorUserId: adminUserId,
+   797→        actorRole: "ADMIN",
+   798→        action: "BILLING_GENERATED",
+   799→        entityType: "BILLING_PERIOD",
+   800→        entityId: periodId,
+   801→        requestId,
+   802→        beforeSummary: "OPEN",
+   803→        afterSummary: "BILLED",
+   804→        metadata: {
+   805→          period: { year: period.year, month: period.month },
+   806→          billCount: residents.length,
+   807→          residentCount: residents.length,
+   808→          residentMealCount: summary.residentMealCount,
+   809→          guestMealCount: summary.guestMealCount,
+   810→          totalBilledMinor,
+   811→          totalDueMinor,
+   812→          totalPaymentsAppliedMinor,
+   813→          mealChargeMinor,
+   814→          guestPriceMinor,
+   815→          formulaVersion: formulaVersion.version,
+   816→          snapshotId: snapshot.id,
+   817→        },
+   818→      },
+   819→      tx
+   820→    );
+   821→
+   822→    return {
+   823→      period: {
+   824→        id: billedPeriod.id,
+   825→        year: billedPeriod.year,
+   826→        month: billedPeriod.month,
+   827→        status: billedPeriod.status,
+   828→      },
+   829→      billCount: residents.length,
+   830→      snapshotId: snapshot.id,
+   831→      mealChargeMinor,
+   832→      guestPriceMinor,
+   833→      totalBilledMinor,
+   834→      totalDueMinor,
+   835→      totalPaymentsAppliedMinor,
+   836→      summaryText: `Bills for ${label} were generated for ${residents.length} resident${
+   837→        residents.length === 1 ? "" : "s"
+   838→      }. Per-meal charge ${formatMinor(mealChargeMinor)}, total billed ${formatMinor(totalBilledMinor)}, of which ${formatMinor(
+   839→        totalPaymentsAppliedMinor
+   840→      )} was covered by approved payments.`,
+   841→    };
+   842→  });
+   843→}
+   844→
+   845→// ---------------------------------------------------------------------------
+   846→// REOPEN (spec §231, §59 — restricted, audit-only in v1)
+   847→// ---------------------------------------------------------------------------
+   848→
+   849→export async function reopenBillingPeriod(
+   850→  periodId: string,
+   851→  adminUserId: string,
+   852→  requestId: string,
+   853→  reason: string
+   854→): Promise<{ period: any; note: string }> {
+   855→  const period = await db.billingPeriod.findUnique({ where: { id: periodId } });
+   856→  if (!period) throw new ApiError(CODES.NOT_FOUND, "Billing period not found.", 404);
+   857→  if (period.status !== "BILLED") {
+   858→    throw new ApiError(
+   859→      CODES.BILLING_PERIOD_CLOSED,
+   860→      period.status === "REOPENED"
+   861→        ? "This period was already reopened."
+   862→        : "Only billed periods can be reopened.",
+   863→      409
+   864→    );
+   865→  }
+   866→  const billedAt = period.billedAt ?? period.closedAt ?? period.createdAt;
+   867→  if (Date.now() - billedAt.getTime() > 48 * 60 * 60 * 1000) {
+   868→    throw new ApiError(
+   869→      CODES.BILLING_PERIOD_CLOSED,
+   870→      "Reopen is only available within 48 hours of billing. Use bill adjustments to correct this period.",
+   871→      409
+   872→    );
+   873→  }
+   874→
+   875→  return db.$transaction(async (tx: any) => {
+   876→    const guard = await tx.billingPeriod.updateMany({
+   877→      where: { id: periodId, status: "BILLED" },
+   878→      data: { status: "REOPENED", generationState: null },
+   879→    });
+   880→    if (guard.count !== 1) {
+   881→      throw new ApiError(CODES.BILLING_PERIOD_CLOSED, "This period is no longer in a reopenable state.", 409);
+   882→    }
+   883→    const updated = await tx.billingPeriod.findUniqueOrThrow({ where: { id: periodId } });
+   884→    await appendAudit(
+   885→      {
+   886→        institutionId: period.institutionId,
+   887→        actorUserId: adminUserId,
+   888→        actorRole: "ADMIN",
+   889→        action: "BILLING_REOPENED",
+   890→        entityType: "BILLING_PERIOD",
+   891→        entityId: periodId,
+   892→        requestId,
+   893→        reason,
+   894→        beforeSummary: "BILLED",
+   895→        afterSummary: "REOPENED",
+   896→        metadata: { billedAt: billedAt.toISOString(), billsRemain: true },
+   897→      },
+   898→      tx
+   899→    );
+   900→    return {
+   901→      period: {
+   902→        id: updated.id,
+   903→        year: updated.year,
+   904→        month: updated.month,
+   905→        status: updated.status,
+   906→        billedAt: billedAt.toISOString(),
+   907→      },
+   908→      note:
+   909→        "This period is marked as reopened for audit. The generated bills remain authoritative — correct them with bill adjustments only (spec §59).",
+   910→    };
+   911→  });
+   912→}
+   913→
+   914→/** Convenience for resident views: latest unsettled/overdue derivation. */
+   915→export function derivePaymentStatus(bills: { status: string; dueDate: Date }[]): string {
+   916→  const unsettled = bills.filter((b) => UNSETTLED_BILL_STATUSES.includes(b.status));
+   917→  if (unsettled.some((b) => b.status === "OVERDUE" || b.dueDate < new Date())) return "Overdue";
+   918→  if (unsettled.length > 0) return "Due";
+   919→  return "Settled";
+   920→}
+   921→

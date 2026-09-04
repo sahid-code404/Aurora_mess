@@ -1,0 +1,1157 @@
+     1→"use client";
+     2→
+     3→import * as React from "react";
+     4→import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+     5→import { motion, AnimatePresence } from "framer-motion";
+     6→import { toast } from "sonner";
+     7→import {
+     8→  Calendar as CalendarIcon,
+     9→  ChevronLeft,
+    10→  ChevronRight,
+    11→  Lock,
+    12→  List,
+    13→  Grid3x3,
+    14→  Columns3,
+    15→  Clock,
+    16→  CalendarDays,
+    17→  AlertCircle,
+    18→  Sparkles,
+    19→  CircleDot,
+    20→  Info,
+    21→} from "lucide-react";
+    22→import { GlassCard } from "@/components/glass/glass-card";
+    23→import { GlassButton } from "@/components/glass/glass-button";
+    24→import { GlassNav } from "@/components/glass/glass-nav";
+    25→import {
+    26→  StaggerGroup,
+    27→  StaggerItem,
+    28→} from "@/components/glass/page-transition";
+    29→import { ShimmerSkeleton } from "@/components/glass/shimmer-skeleton";
+    30→import { Switch } from "@/components/ui/switch";
+    31→import {
+    32→  Popover,
+    33→  PopoverContent,
+    34→  PopoverTrigger,
+    35→} from "@/components/ui/popover";
+    36→import { api, ApiError } from "@/lib/api-client";
+    37→import { cn } from "@/lib/utils";
+    38→import { useIsMobile } from "@/hooks/use-mobile";
+    39→
+    40→// ─────────────────────────────────────────────────────────────
+    41→// Types
+    42→// ─────────────────────────────────────────────────────────────
+    43→
+    44→type MealEntry = {
+    45→  id: string;
+    46→  mealId: string;
+    47→  mealName: string;
+    48→  mealDisplayName: string;
+    49→  mealIcon: string;
+    50→  mealColor: string;
+    51→  serviceDate: string;
+    52→  status: string; // ON | OFF | LOCKED — Current State
+    53→  originalState: string; // ON | OFF — Original State
+    54→  overridden: boolean; // calculated dynamically: effectiveStatus !== originalState
+    55→  editableUntil: string;
+    56→  locked: boolean;
+    57→  startTime: string;
+    58→  endTime: string;
+    59→  mealType: string;
+    60→};
+    61→
+    62→type MealConfigLite = {
+    63→  id: string;
+    64→  name: string;
+    65→  displayName: string;
+    66→  icon: string;
+    67→  color: string;
+    68→  mealType: string;
+    69→  status: string;
+    70→};
+    71→
+    72→type CalendarResponse = {
+    73→  meals: MealConfigLite[];
+    74→  byDate: Record<string, MealEntry[]>;
+    75→};
+    76→
+    77→type ViewMode = "agenda" | "week" | "month";
+    78→
+    79→const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    80→const MONTHS = [
+    81→  "January",
+    82→  "February",
+    83→  "March",
+    84→  "April",
+    85→  "May",
+    86→  "June",
+    87→  "July",
+    88→  "August",
+    89→  "September",
+    90→  "October",
+    91→  "November",
+    92→  "December",
+    93→];
+    94→
+    95→// ─────────────────────────────────────────────────────────────
+    96→// Helpers
+    97→// ─────────────────────────────────────────────────────────────
+    98→
+    99→function isoDate(d: Date): string {
+   100→  const y = d.getFullYear();
+   101→  const m = String(d.getMonth() + 1).padStart(2, "0");
+   102→  const day = String(d.getDate()).padStart(2, "0");
+   103→  return `${y}-${m}-${day}`;
+   104→}
+   105→
+   106→function isSameDay(a: Date, b: Date): boolean {
+   107→  return (
+   108→    a.getFullYear() === b.getFullYear() &&
+   109→    a.getMonth() === b.getMonth() &&
+   110→    a.getDate() === b.getDate()
+   111→  );
+   112→}
+   113→
+   114→function isPastDate(d: Date, today = new Date()): boolean {
+   115→  const a = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+   116→  const b = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+   117→  return a.getTime() < b.getTime();
+   118→}
+   119→
+   120→function relativeEditableUntil(iso: string): string {
+   121→  const target = new Date(iso);
+   122→  const now = new Date();
+   123→  const diff = target.getTime() - now.getTime();
+   124→  if (diff <= 0) return "Locked";
+   125→  const mins = Math.floor(diff / 60000);
+   126→  if (mins < 60) return `in ${mins}m`;
+   127→  const hours = Math.floor(mins / 60);
+   128→  const remMins = mins % 60;
+   129→  if (hours < 24) return `in ${hours}h ${remMins}m`;
+   130→  const days = Math.floor(hours / 24);
+   131→  return `in ${days}d`;
+   132→}
+   133→
+   134→function formatTimeRange(start: string, end: string): string {
+   135→  const to12 = (t: string) => {
+   136→    const [h, m] = t.split(":").map(Number);
+   137→    const period = h >= 12 ? "PM" : "AM";
+   138→    const hr = h % 12 === 0 ? 12 : h % 12;
+   139→    return `${hr}:${String(m || 0).padStart(2, "0")} ${period}`;
+   140→  };
+   141→  return `${to12(start)} – ${to12(end)}`;
+   142→}
+   143→
+   144→function formatEditableUntil(iso: string): string {
+   145→  return new Date(iso).toLocaleString("en-US", {
+   146→    weekday: "short",
+   147→    day: "2-digit",
+   148→    month: "short",
+   149→    hour: "2-digit",
+   150→    minute: "2-digit",
+   151→    hour12: true,
+   152→  });
+   153→}
+   154→
+   155→// ─────────────────────────────────────────────────────────────
+   156→// Status helpers
+   157→// ─────────────────────────────────────────────────────────────
+   158→
+   159→function entryIsOn(e: MealEntry): boolean {
+   160→  return e.status === "ON" || e.status === "LOCKED";
+   161→}
+   162→
+   163→function entryIsLocked(e: MealEntry): boolean {
+   164→  return e.locked || e.status === "LOCKED";
+   165→}
+   166→
+   167→// ─────────────────────────────────────────────────────────────
+   168→// Status chip
+   169→// ─────────────────────────────────────────────────────────────
+   170→
+   171→function StatusChip({ entry }: { entry: MealEntry }) {
+   172→  if (entryIsLocked(entry)) {
+   173→    return (
+   174→      <span className="inline-flex items-center gap-1 rounded-full bg-muted/80 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+   175→        <Lock className="h-2.5 w-2.5" /> LOCKED
+   176→      </span>
+   177→    );
+   178→  }
+   179→  if (entry.overridden) {
+   180→    return (
+   181→      <span className="inline-flex items-center gap-1 rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-semibold text-warning">
+   182→        <Sparkles className="h-2.5 w-2.5" /> OVERRIDE
+   183→      </span>
+   184→    );
+   185→  }
+   186→  if (entryIsOn(entry)) {
+   187→    return (
+   188→      <span className="inline-flex items-center gap-1 rounded-full bg-success/20 px-2 py-0.5 text-[10px] font-semibold text-success">
+   189→        <CircleDot className="h-2.5 w-2.5" /> ON
+   190→      </span>
+   191→    );
+   192→  }
+   193→  return (
+   194→    <span className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+   195→      OFF
+   196→    </span>
+   197→  );
+   198→}
+   199→
+   200→// ─────────────────────────────────────────────────────────────
+   201→// Toggle switch (optimistic, disabled when locked)
+   202→// ─────────────────────────────────────────────────────────────
+   203→
+   204→function MealToggle({
+   205→  entry,
+   206→  onToggle,
+   207→}: {
+   208→  entry: MealEntry;
+   209→  onToggle: (entry: MealEntry, next: "ON" | "OFF") => void;
+   210→}) {
+   211→  const locked = entryIsLocked(entry);
+   212→  const isOn = entryIsOn(entry);
+   213→  return (
+   214→    <Switch
+   215→      checked={isOn}
+   216→      disabled={locked}
+   217→      onCheckedChange={(checked) =>
+   218→        onToggle(entry, checked ? "ON" : "OFF")
+   219→      }
+   220→      aria-label={`Toggle ${entry.mealDisplayName}`}
+   221→    />
+   222→  );
+   223→}
+   224→
+   225→// ─────────────────────────────────────────────────────────────
+   226→// Meal Card (Agenda)
+   227→// ─────────────────────────────────────────────────────────────
+   228→
+   229→function MealAgendaCard({
+   230→  entry,
+   231→  onToggle,
+   232→}: {
+   233→  entry: MealEntry;
+   234→  onToggle: (entry: MealEntry, next: "ON" | "OFF") => void;
+   235→}) {
+   236→  const on = entryIsOn(entry);
+   237→  const locked = entryIsLocked(entry);
+   238→  return (
+   239→    <motion.div
+   240→      whileHover={{ y: -2 }}
+   241→      whileTap={{ scale: 0.99 }}
+   242→      className={cn(
+   243→        "glass-soft rounded-2xl p-3.5 flex items-center gap-3 relative overflow-hidden",
+   244→        locked && "opacity-90"
+   245→      )}
+   246→      style={{
+   247→        background: on
+   248→          ? `linear-gradient(135deg, ${entry.mealColor}22, transparent 70%)`
+   249→          : undefined,
+   250→        borderColor: on ? `${entry.mealColor}55` : undefined,
+   251→      }}
+   252→    >
+   253→      {/* Color accent bar */}
+   254→      <div
+   255→        className="absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl"
+   256→        style={{ background: entry.mealColor }}
+   257→      />
+   258→      {/* Icon */}
+   259→      <div
+   260→        className="grid place-items-center h-11 w-11 shrink-0 rounded-2xl text-xl"
+   261→        style={{ background: `${entry.mealColor}22` }}
+   262→      >
+   263→        <span aria-hidden>{entry.mealIcon}</span>
+   264→      </div>
+   265→
+   266→      <div className="flex-1 min-w-0">
+   267→        <div className="flex items-center gap-2 flex-wrap">
+   268→          <p className="font-semibold text-sm truncate">
+   269→            {entry.mealDisplayName}
+   270→          </p>
+   271→          <StatusChip entry={entry} />
+   272→        </div>
+   273→        <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground">
+   274→          <span className="inline-flex items-center gap-1">
+   275→            <Clock className="h-3 w-3" />
+   276→            {formatTimeRange(entry.startTime, entry.endTime)}
+   277→          </span>
+   278→          {!locked && (
+   279→            <span className="inline-flex items-center gap-1">
+   280→              <CalendarDays className="h-3 w-3" />
+   281→              Editable {relativeEditableUntil(entry.editableUntil)}
+   282→            </span>
+   283→          )}
+   284→          {locked && (
+   285→            <span className="inline-flex items-center gap-1 text-warning">
+   286→              <Lock className="h-3 w-3" /> Cutoff passed
+   287→            </span>
+   288→          )}
+   289→        </div>
+   290→      </div>
+   291→
+   292→      <MealToggle entry={entry} onToggle={onToggle} />
+   293→    </motion.div>
+   294→  );
+   295→}
+   296→
+   297→// ─────────────────────────────────────────────────────────────
+   298→// Calendar Header (title + nav)
+   299→// ─────────────────────────────────────────────────────────────
+   300→
+   301→function CalendarHeader({
+   302→  view,
+   303→  cursor,
+   304→  onPrev,
+   305→  onNext,
+   306→  onToday,
+   307→  onPickMonth,
+   308→}: {
+   309→  view: ViewMode;
+   310→  cursor: Date;
+   311→  onPrev: () => void;
+   312→  onNext: () => void;
+   313→  onToday: () => void;
+   314→  onPickMonth: (year: number, month: number) => void;
+   315→}) {
+   316→  const title =
+   317→    view === "week"
+   318→      ? weekRangeLabel(cursor)
+   319→      : `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
+   320→
+   321→  const [open, setOpen] = React.useState(false);
+   322→
+   323→  return (
+   324→    <div className="flex flex-wrap items-center justify-between gap-3">
+   325→      <div className="flex items-center gap-2">
+   326→        <Popover open={open} onOpenChange={setOpen}>
+   327→          <PopoverTrigger asChild>
+   328→            <button
+   329→              type="button"
+   330→              className="inline-flex items-center gap-2 rounded-2xl px-3 py-2 glass-soft hover:bg-secondary/60 transition-colors text-left"
+   331→              aria-label="Pick month"
+   332→            >
+   333→              <CalendarIcon className="h-4 w-4 text-primary" />
+   334→              <span className="font-semibold text-sm">{title}</span>
+   335→            </button>
+   336→          </PopoverTrigger>
+   337→          <PopoverContent
+   338→            className="w-64 p-3 glass-strong border-border/60 rounded-2xl"
+   339→            align="start"
+   340→          >
+   341→            <div className="grid grid-cols-3 gap-1.5">
+   342→              {MONTHS.map((m, i) => (
+   343→                <button
+   344→                  key={m}
+   345→                  type="button"
+   346→                  onClick={() => {
+   347→                    onPickMonth(cursor.getFullYear(), i);
+   348→                    setOpen(false);
+   349→                  }}
+   350→                  className={cn(
+   351→                    "rounded-xl px-2 py-2 text-xs font-medium transition-colors",
+   352→                    cursor.getMonth() === i
+   353→                      ? "bg-primary text-primary-foreground"
+   354→                      : "hover:bg-secondary/70 text-muted-foreground hover:text-foreground"
+   355→                  )}
+   356→                >
+   357→                  {m.slice(0, 3)}
+   358→                </button>
+   359→              ))}
+   360→            </div>
+   361→            <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/60">
+   362→              <button
+   363→                type="button"
+   364→                onClick={() =>
+   365→                  onPickMonth(cursor.getFullYear() - 1, cursor.getMonth())
+   366→                }
+   367→                className="rounded-lg px-2 py-1 text-xs hover:bg-secondary/60"
+   368→              >
+   369→                ← {cursor.getFullYear() - 1}
+   370→              </button>
+   371→              <span className="text-xs font-semibold">
+   372→                {cursor.getFullYear()}
+   373→              </span>
+   374→              <button
+   375→                type="button"
+   376→                onClick={() =>
+   377→                  onPickMonth(cursor.getFullYear() + 1, cursor.getMonth())
+   378→                }
+   379→                className="rounded-lg px-2 py-1 text-xs hover:bg-secondary/60"
+   380→              >
+   381→                {cursor.getFullYear() + 1} →
+   382→              </button>
+   383→            </div>
+   384→          </PopoverContent>
+   385→        </Popover>
+   386→      </div>
+   387→
+   388→      <div className="flex items-center gap-1.5">
+   389→        <GlassButton variant="ghost" size="sm" onClick={onToday}>
+   390→          <CalendarDays className="h-4 w-4" /> Today
+   391→        </GlassButton>
+   392→        <GlassButton
+   393→          variant="secondary"
+   394→          size="icon"
+   395→          onClick={onPrev}
+   396→          aria-label={
+   397→            view === "week" ? "Previous week" : "Previous month"
+   398→          }
+   399→        >
+   400→          <ChevronLeft className="h-4 w-4" />
+   401→        </GlassButton>
+   402→        <GlassButton
+   403→          variant="secondary"
+   404→          size="icon"
+   405→          onClick={onNext}
+   406→          aria-label={view === "week" ? "Next week" : "Next month"}
+   407→        >
+   408→          <ChevronRight className="h-4 w-4" />
+   409→        </GlassButton>
+   410→      </div>
+   411→    </div>
+   412→  );
+   413→}
+   414→
+   415→function weekRangeLabel(d: Date): string {
+   416→  const start = startOfWeek(d);
+   417→  const end = endOfWeek(d);
+   418→  const sameMonth = start.getMonth() === end.getMonth();
+   419→  if (sameMonth) {
+   420→    return `${MONTHS[start.getMonth()].slice(0, 3)} ${start.getDate()} – ${end.getDate()}, ${start.getFullYear()}`;
+   421→  }
+   422→  return `${MONTHS[start.getMonth()].slice(0, 3)} ${start.getDate()} – ${MONTHS[end.getMonth()].slice(0, 3)} ${end.getDate()}, ${end.getFullYear()}`;
+   423→}
+   424→
+   425→function startOfWeek(d: Date): Date {
+   426→  const r = new Date(d);
+   427→  r.setDate(d.getDate() - d.getDay());
+   428→  r.setHours(0, 0, 0, 0);
+   429→  return r;
+   430→}
+   431→
+   432→function endOfWeek(d: Date): Date {
+   433→  const r = startOfWeek(d);
+   434→  r.setDate(r.getDate() + 6);
+   435→  return r;
+   436→}
+   437→
+   438→// ─────────────────────────────────────────────────────────────
+   439→// Month View
+   440→// ─────────────────────────────────────────────────────────────
+   441→
+   442→function MonthView({
+   443→  cursor,
+   444→  byDate,
+   445→  onToggle,
+   446→}: {
+   447→  cursor: Date;
+   448→  byDate: Record<string, MealEntry[]>;
+   449→  onToggle: (entry: MealEntry, next: "ON" | "OFF") => void;
+   450→}) {
+   451→  const today = new Date();
+   452→  const year = cursor.getFullYear();
+   453→  const month = cursor.getMonth();
+   454→  const firstDay = new Date(year, month, 1);
+   455→  const startOffset = firstDay.getDay();
+   456→  const daysInMonth = new Date(year, month + 1, 0).getDate();
+   457→  const totalCells = Math.ceil((startOffset + daysInMonth) / 7) * 7;
+   458→
+   459→  const cells: Array<{ date: Date | null; iso: string | null }> = [];
+   460→  for (let i = 0; i < totalCells; i++) {
+   461→    const dayNum = i - startOffset + 1;
+   462→    if (dayNum < 1 || dayNum > daysInMonth) {
+   463→      cells.push({ date: null, iso: null });
+   464→    } else {
+   465→      const d = new Date(year, month, dayNum);
+   466→      cells.push({ date: d, iso: isoDate(d) });
+   467→    }
+   468→  }
+   469→
+   470→  return (
+   471→    <GlassCard className="p-3 md:p-5" hover={false}>
+   472→      {/* Weekday header */}
+   473→      <div className="grid grid-cols-7 gap-1 mb-2">
+   474→        {WEEKDAYS.map((d) => (
+   475→          <div
+   476→            key={d}
+   477→            className="text-center text-[10px] md:text-xs font-semibold uppercase tracking-wider text-muted-foreground py-1"
+   478→          >
+   479→            {d.slice(0, 2)}
+   480→          </div>
+   481→        ))}
+   482→      </div>
+   483→
+   484→      {/* Calendar grid */}
+   485→      <div className="grid grid-cols-7 gap-1">
+   486→        {cells.map((cell, i) => {
+   487→          if (!cell.date || !cell.iso) {
+   488→            return (
+   489→              <div
+   490→                key={`empty-${i}`}
+   491→                className="rounded-xl min-h-16 md:min-h-24 bg-muted/10"
+   492→              />
+   493→            );
+   494→          }
+   495→          const entries = byDate[cell.iso] || [];
+   496→          const isToday = isSameDay(cell.date, today);
+   497→          const past = isPastDate(cell.date, today);
+   498→          return (
+   499→            <motion.div
+   500→              key={cell.iso}
+   501→              initial={{ opacity: 0, scale: 0.95 }}
+   502→              animate={{ opacity: 1, scale: 1 }}
+   503→              transition={{ delay: Math.min(i * 0.01, 0.2) }}
+   504→              className={cn(
+   505→                "rounded-xl p-1.5 min-h-16 md:min-h-24 flex flex-col gap-1 relative overflow-hidden",
+   506→                isToday ? "ring-2 ring-primary/70 bg-primary/5" : "bg-muted/20",
+   507→                past && "opacity-60"
+   508→              )}
+   509→            >
+   510→              <div className="flex items-center justify-between">
+   511→                <span
+   512→                  className={cn(
+   513→                    "text-[10px] md:text-xs font-semibold",
+   514→                    isToday ? "text-primary" : "text-muted-foreground"
+   515→                  )}
+   516→                >
+   517→                  {cell.date.getDate()}
+   518→                </span>
+   519→                {past && entries.length > 0 && (
+   520→                  <Lock className="h-2.5 w-2.5 text-muted-foreground/70" />
+   521→                )}
+   522→              </div>
+   523→              <div className="flex flex-col gap-0.5 flex-1 overflow-hidden">
+   524→                {entries.slice(0, 3).map((e) => {
+   525→                  const on = entryIsOn(e);
+   526→                  return (
+   527→                    <div
+   528→                      key={e.id}
+   529→                      title={`${e.mealDisplayName} • ${e.status}`}
+   530→                      className={cn(
+   531→                        "flex items-center gap-1 rounded-md px-1 py-0.5 text-[9px] md:text-[10px] font-medium truncate",
+   532→                        on ? "text-white" : "text-muted-foreground"
+   533→                      )}
+   534→                      style={
+   535→                        on
+   536→                          ? { background: e.mealColor }
+   537→                          : {
+   538→                              background: `${e.mealColor}1A`,
+   539→                              color: e.mealColor,
+   540→                            }
+   541→                      }
+   542→                    >
+   543→                      <span className="text-[10px]">{e.mealIcon}</span>
+   544→                      <span className="truncate hidden sm:inline">
+   545→                        {e.mealDisplayName}
+   546→                      </span>
+   547→                      {entryIsLocked(e) && (
+   548→                        <Lock className="h-2 w-2 ml-auto shrink-0" />
+   549→                      )}
+   550→                    </div>
+   551→                  );
+   552→                })}
+   553→                {entries.length > 3 && (
+   554→                  <span className="text-[9px] md:text-[10px] text-muted-foreground px-1">
+   555→                    +{entries.length - 3} more
+   556→                  </span>
+   557→                )}
+   558→                {entries.length === 0 && (
+   559→                  <span className="text-[9px] text-muted-foreground/40 px-1 hidden md:inline">
+   560→                    —
+   561→                  </span>
+   562→                )}
+   563→              </div>
+   564→            </motion.div>
+   565→          );
+   566→        })}
+   567→      </div>
+   568→    </GlassCard>
+   569→  );
+   570→}
+   571→
+   572→// ─────────────────────────────────────────────────────────────
+   573→// Week View (horizontal scroll on mobile, grid on desktop)
+   574→// ─────────────────────────────────────────────────────────────
+   575→
+   576→function WeekView({
+   577→  cursor,
+   578→  byDate,
+   579→  onToggle,
+   580→}: {
+   581→  cursor: Date;
+   582→  byDate: Record<string, MealEntry[]>;
+   583→  onToggle: (entry: MealEntry, next: "ON" | "OFF") => void;
+   584→}) {
+   585→  const today = new Date();
+   586→  const start = startOfWeek(cursor);
+   587→  const days = Array.from({ length: 7 }, (_, i) => {
+   588→    const d = new Date(start);
+   589→    d.setDate(start.getDate() + i);
+   590→    return d;
+   591→  });
+   592→
+   593→  return (
+   594→    <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2 md:grid md:grid-cols-7 md:overflow-visible">
+   595→      {days.map((d) => {
+   596→        const iso = isoDate(d);
+   597→        const entries = byDate[iso] || [];
+   598→        const isToday = isSameDay(d, today);
+   599→        const past = isPastDate(d, today);
+   600→        return (
+   601→          <motion.div
+   602→            key={iso}
+   603→            initial={{ opacity: 0, y: 8 }}
+   604→            animate={{ opacity: 1, y: 0 }}
+   605→            className="min-w-[260px] md:min-w-0 flex-shrink-0"
+   606→          >
+   607→            <GlassCard
+   608→              className={cn(
+   609→                "p-3 md:p-3 h-full",
+   610→                isToday && "ring-2 ring-primary/70"
+   611→              )}
+   612→              hover={false}
+   613→            >
+   614→              <div className="flex items-center justify-between mb-2">
+   615→                <div>
+   616→                  <p className="text-[10px] uppercase font-semibold text-muted-foreground">
+   617→                    {WEEKDAYS[d.getDay()]}
+   618→                  </p>
+   619→                  <p
+   620→                    className={cn(
+   621→                      "text-lg font-bold",
+   622→                      isToday ? "text-primary" : "text-foreground"
+   623→                    )}
+   624→                  >
+   625→                    {d.getDate()}
+   626→                  </p>
+   627→                </div>
+   628→                {past && (
+   629→                  <span className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
+   630→                    <Lock className="h-2.5 w-2.5" /> Past
+   631→                  </span>
+   632→                )}
+   633→                {isToday && (
+   634→                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
+   635→                    Today
+   636→                  </span>
+   637→                )}
+   638→              </div>
+   639→              <div className="space-y-2">
+   640→                {entries.length === 0 && (
+   641→                  <div className="text-[11px] text-muted-foreground/60 text-center py-3">
+   642→                    No meals
+   643→                  </div>
+   644→                )}
+   645→                {entries.map((e) => {
+   646→                  const on = entryIsOn(e);
+   647→                  const locked = entryIsLocked(e);
+   648→                  return (
+   649→                    <div
+   650→                      key={e.id}
+   651→                      className={cn(
+   652→                        "rounded-xl p-2.5 flex items-center gap-2",
+   653→                        on ? "" : "bg-muted/30"
+   654→                      )}
+   655→                      style={
+   656→                        on
+   657→                          ? {
+   658→                              background: `${e.mealColor}26`,
+   659→                              borderColor: `${e.mealColor}55`,
+   660→                            }
+   661→                          : undefined
+   662→                      }
+   663→                    >
+   664→                      <span className="text-base">{e.mealIcon}</span>
+   665→                      <div className="flex-1 min-w-0">
+   666→                        <p className="text-xs font-semibold truncate">
+   667→                          {e.mealDisplayName}
+   668→                        </p>
+   669→                        <p className="text-[10px] text-muted-foreground">
+   670→                          {formatTimeRange(e.startTime, e.endTime)}
+   671→                        </p>
+   672→                      </div>
+   673→                      {locked ? (
+   674→                        <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+   675→                      ) : (
+   676→                        <MealToggle entry={e} onToggle={onToggle} />
+   677→                      )}
+   678→                    </div>
+   679→                  );
+   680→                })}
+   681→              </div>
+   682→            </GlassCard>
+   683→          </motion.div>
+   684→        );
+   685→      })}
+   686→    </div>
+   687→  );
+   688→}
+   689→
+   690→// ─────────────────────────────────────────────────────────────
+   691→// Agenda View (vertical list of dates)
+   692→// ─────────────────────────────────────────────────────────────
+   693→
+   694→function AgendaView({
+   695→  cursor,
+   696→  byDate,
+   697→  onToggle,
+   698→}: {
+   699→  cursor: Date;
+   700→  byDate: Record<string, MealEntry[]>;
+   701→  onToggle: (entry: MealEntry, next: "ON" | "OFF") => void;
+   702→}) {
+   703→  const today = new Date();
+   704→  const year = cursor.getFullYear();
+   705→  const month = cursor.getMonth();
+   706→  const daysInMonth = new Date(year, month + 1, 0).getDate();
+   707→
+   708→  const items = Array.from({ length: daysInMonth }, (_, i) => {
+   709→    const d = new Date(year, month, i + 1);
+   710→    return { date: d, iso: isoDate(d), entries: byDate[isoDate(d)] || [] };
+   711→  });
+   712→
+   713→  if (items.every((i) => i.entries.length === 0)) {
+   714→    return (
+   715→      <GlassCard className="p-10 md:p-14 text-center" hover={false}>
+   716→        <div className="grid place-items-center gap-3">
+   717→          <div className="grid place-items-center h-14 w-14 rounded-3xl bg-muted/40">
+   718→            <CalendarDays className="h-7 w-7 text-muted-foreground" />
+   719→          </div>
+   720→          <p className="font-semibold text-lg">No meals scheduled</p>
+   721→          <p className="text-sm text-muted-foreground max-w-sm">
+   722→            No meals are configured for {MONTHS[month]} {year}. Contact your
+   723→            administrator to set up meal configurations.
+   724→          </p>
+   725→        </div>
+   726→      </GlassCard>
+   727→    );
+   728→  }
+   729→
+   730→  return (
+   731→    <StaggerGroup className="space-y-3">
+   732→      {items.map(({ date, iso, entries }) => {
+   733→        const isToday = isSameDay(date, today);
+   734→        const past = isPastDate(date, today);
+   735→        return (
+   736→          <StaggerItem key={iso}>
+   737→            <div className="flex items-start gap-3">
+   738→              {/* Date pill */}
+   739→              <div
+   740→                className={cn(
+   741→                  "shrink-0 w-14 md:w-16 rounded-2xl py-2 px-1 text-center",
+   742→                  isToday
+   743→                    ? "bg-primary text-primary-foreground shadow-lg shadow-primary/30"
+   744→                    : "glass-soft"
+   745→                )}
+   746→              >
+   747→                <p className="text-[10px] font-semibold uppercase opacity-70">
+   748→                  {WEEKDAYS[date.getDay()].slice(0, 3)}
+   749→                </p>
+   750→                <p className="text-xl md:text-2xl font-bold leading-tight">
+   751→                  {date.getDate()}
+   752→                </p>
+   753→              </div>
+   754→
+   755→              {/* Entries */}
+   756→              <div className="flex-1 min-w-0 space-y-2">
+   757→                {entries.length === 0 ? (
+   758→                  <div className="glass-soft rounded-2xl p-3 text-xs text-muted-foreground">
+   759→                    No meals scheduled
+   760→                  </div>
+   761→                ) : (
+   762→                  entries.map((e) => (
+   763→                    <MealAgendaCard
+   764→                      key={e.id}
+   765→                      entry={e}
+   766→                      onToggle={onToggle}
+   767→                    />
+   768→                  ))
+   769→                )}
+   770→              </div>
+   771→            </div>
+   772→          </StaggerItem>
+   773→        );
+   774→      })}
+   775→    </StaggerGroup>
+   776→  );
+   777→}
+   778→
+   779→// ─────────────────────────────────────────────────────────────
+   780→// Legend
+   781→// ─────────────────────────────────────────────────────────────
+   782→
+   783→function Legend() {
+   784→  const items = [
+   785→    { label: "ON", dot: "bg-success" },
+   786→    { label: "OFF", dot: "bg-muted-foreground/40" },
+   787→    { label: "Locked", icon: Lock, color: "text-muted-foreground" },
+   788→    { label: "Override", icon: Sparkles, color: "text-warning" },
+   789→  ];
+   790→  return (
+   791→    <div className="flex flex-wrap items-center gap-3 md:gap-4 text-[11px] text-muted-foreground">
+   792→      {items.map((it) => (
+   793→        <span key={it.label} className="inline-flex items-center gap-1.5">
+   794→          {"dot" in it && it.dot ? (
+   795→            <span className={cn("h-2 w-2 rounded-full", it.dot)} />
+   796→          ) : null}
+   797→          {"icon" in it && it.icon ? (
+   798→            <it.icon className={cn("h-3 w-3", it.color)} />
+   799→          ) : null}
+   800→          {it.label}
+   801→        </span>
+   802→      ))}
+   803→    </div>
+   804→  );
+   805→}
+   806→
+   807→// ─────────────────────────────────────────────────────────────
+   808→// Loading skeletons
+   809→// ─────────────────────────────────────────────────────────────
+   810→
+   811→function CalendarSkeleton({ mode }: { mode: ViewMode }) {
+   812→  if (mode === "month") {
+   813→    return (
+   814→      <GlassCard className="p-5" hover={false}>
+   815→        <div className="grid grid-cols-7 gap-1 mb-3">
+   816→          {Array.from({ length: 7 }).map((_, i) => (
+   817→            <ShimmerSkeleton
+   818→              key={i}
+   819→              className="h-4 mx-auto"
+   820→              rounded="rounded-md"
+   821→            />
+   822→          ))}
+   823→        </div>
+   824→        <div className="grid grid-cols-7 gap-1">
+   825→          {Array.from({ length: 35 }).map((_, i) => (
+   826→            <ShimmerSkeleton key={i} className="h-20 md:h-24" />
+   827→          ))}
+   828→        </div>
+   829→      </GlassCard>
+   830→    );
+   831→  }
+   832→  if (mode === "week") {
+   833→    return (
+   834→      <div className="grid grid-cols-7 gap-3">
+   835→        {Array.from({ length: 7 }).map((_, i) => (
+   836→          <ShimmerSkeleton key={i} className="h-48" />
+   837→        ))}
+   838→      </div>
+   839→    );
+   840→  }
+   841→  return (
+   842→    <div className="space-y-3">
+   843→      {Array.from({ length: 6 }).map((_, i) => (
+   844→        <div key={i} className="flex gap-3">
+   845→          <ShimmerSkeleton className="w-14 md:w-16 h-16" />
+   846→          <div className="flex-1 space-y-2">
+   847→            <ShimmerSkeleton className="h-16" />
+   848→          </div>
+   849→        </div>
+   850→      ))}
+   851→    </div>
+   852→  );
+   853→}
+   854→
+   855→// ─────────────────────────────────────────────────────────────
+   856→// Main CalendarView
+   857→// ─────────────────────────────────────────────────────────────
+   858→
+   859→export function CalendarView() {
+   860→  const isMobile = useIsMobile();
+   861→  const qc = useQueryClient();
+   862→  const [mode, setMode] = React.useState<ViewMode>("agenda");
+   863→  const [cursor, setCursor] = React.useState<Date>(new Date());
+   864→
+   865→  // Mobile defaults to agenda, desktop defaults to month
+   866→  React.useEffect(() => {
+   867→    // Keep the interaction mode aligned with responsive layout changes.
+   868→    // eslint-disable-next-line react-hooks/set-state-in-effect
+   869→    setMode(isMobile ? "agenda" : "month");
+   870→  }, [isMobile]);
+   871→
+   872→  const year = cursor.getFullYear();
+   873→  const month = cursor.getMonth();
+   874→
+   875→  const queryKey = React.useMemo(
+   876→    () => ["meals", "entries", year, month] as const,
+   877→    [year, month]
+   878→  );
+   879→
+   880→  const { data, isLoading, isError, error } = useQuery({
+   881→    queryKey,
+   882→    queryFn: async () => {
+   883→      const r = await api.get<{ success: boolean; data: CalendarResponse }>(
+   884→        "/meals/entries",
+   885→        {
+   886→          params: { year, month },
+   887→        }
+   888→      );
+   889→      return r.data;
+   890→    },
+   891→    staleTime: 60_000,
+   892→  });
+   893→
+   894→  // Toggle mutation with optimistic update
+   895→  const toggleMutation = useMutation({
+   896→    mutationFn: async ({
+   897→      entryId,
+   898→      status,
+   899→    }: {
+   900→      entryId: string;
+   901→      status: "ON" | "OFF";
+   902→    }) => {
+   903→      return api.patch<MealEntry>("/meals/toggle", { entryId, status });
+   904→    },
+   905→    onMutate: async ({ entryId, status }) => {
+   906→      // Cancel outgoing refetches
+   907→      await qc.cancelQueries({ queryKey });
+   908→
+   909→      // Snapshot previous value
+   910→      const previous = qc.getQueryData<CalendarResponse>(queryKey);
+   911→
+   912→      // Optimistically update
+   913→      qc.setQueryData<CalendarResponse>(queryKey, (old) => {
+   914→        if (!old) return old;
+   915→        const newByDate: Record<string, MealEntry[]> = {};
+   916→        for (const [key, entries] of Object.entries(old.byDate)) {
+   917→          newByDate[key] = entries.map((e) =>
+   918→            e.id === entryId
+   919→              ? {
+   920→                  ...e,
+   921→                  status: e.locked ? "LOCKED" : status,
+   922→                }
+   923→              : e
+   924→          );
+   925→        }
+   926→        return { ...old, byDate: newByDate };
+   927→      });
+   928→
+   929→      return { previous };
+   930→    },
+   931→    onError: (err, _vars, ctx) => {
+   932→      // Revert on error
+   933→      if (ctx?.previous) {
+   934→        qc.setQueryData(queryKey, ctx.previous);
+   935→      }
+   936→      const message =
+   937→        err instanceof ApiError
+   938→          ? err.message
+   939→          : "Failed to update meal. Please try again.";
+   940→      toast.error(message);
+   941→    },
+   942→    onSettled: () => {
+   943→      qc.invalidateQueries({ queryKey: ["meals", "entries"] });
+   944→    },
+   945→  });
+   946→
+   947→  const handleToggle = React.useCallback(
+   948→    (entry: MealEntry, next: "ON" | "OFF") => {
+   949→      if (entryIsLocked(entry)) {
+   950→        toast.error("This meal is locked and cannot be changed.");
+   951→        return;
+   952→      }
+   953→      if (entry.status === next) return;
+   954→      toggleMutation.mutate({ entryId: entry.id, status: next });
+   955→    },
+   956→    [toggleMutation]
+   957→  );
+   958→
+   959→  const goPrev = React.useCallback(() => {
+   960→    if (mode === "week") {
+   961→      const d = new Date(cursor);
+   962→      d.setDate(d.getDate() - 7);
+   963→      setCursor(d);
+   964→    } else {
+   965→      setCursor(new Date(year, month - 1, 1));
+   966→    }
+   967→  }, [mode, cursor, year, month]);
+   968→
+   969→  const goNext = React.useCallback(() => {
+   970→    if (mode === "week") {
+   971→      const d = new Date(cursor);
+   972→      d.setDate(d.getDate() + 7);
+   973→      setCursor(d);
+   974→    } else {
+   975→      setCursor(new Date(year, month + 1, 1));
+   976→    }
+   977→  }, [mode, cursor, year, month]);
+   978→
+   979→  const goToday = React.useCallback(() => setCursor(new Date()), []);
+   980→
+   981→  const pickMonth = React.useCallback(
+   982→    (y: number, m: number) => setCursor(new Date(y, m, 1)),
+   983→    []
+   984→  );
+   985→
+   986→  const byDate = data?.byDate || {};
+   987→  const mealsCount = Object.values(byDate).reduce(
+   988→    (s, arr) => s + arr.length,
+   989→    0
+   990→  );
+   991→
+   992→  return (
+   993→    <StaggerGroup className="space-y-4 md:space-y-5 pb-6">
+   994→      {/* View toggle */}
+   995→      <StaggerItem>
+   996→        <div className="flex items-center justify-end">
+   997→          <GlassNav<ViewMode>
+   998→            value={mode}
+   999→            onChange={setMode}
+  1000→            items={[
+  1001→              {
+  1002→                value: "agenda",
+  1003→                label: "Agenda",
+  1004→                icon: <List className="h-3.5 w-3.5" />,
+  1005→              },
+  1006→              {
+  1007→                value: "week",
+  1008→                label: "Week",
+  1009→                icon: <Columns3 className="h-3.5 w-3.5" />,
+  1010→              },
+  1011→              {
+  1012→                value: "month",
+  1013→                label: "Month",
+  1014→                icon: <Grid3x3 className="h-3.5 w-3.5" />,
+  1015→              },
+  1016→            ]}
+  1017→          />
+  1018→        </div>
+  1019→      </StaggerItem>
+  1020→
+  1021→      {/* Quick nav */}
+  1022→      <StaggerItem>
+  1023→        <GlassCard className="p-3 md:p-4" hover={false}>
+  1024→          <CalendarHeader
+  1025→            view={mode}
+  1026→            cursor={cursor}
+  1027→            onPrev={goPrev}
+  1028→            onNext={goNext}
+  1029→            onToday={goToday}
+  1030→            onPickMonth={pickMonth}
+  1031→          />
+  1032→        </GlassCard>
+  1033→      </StaggerItem>
+  1034→
+  1035→      {/* Content */}
+  1036→      <StaggerItem>
+  1037→        <AnimatePresence mode="wait">
+  1038→          {isLoading ? (
+  1039→            <motion.div
+  1040→              key="loading"
+  1041→              initial={{ opacity: 0 }}
+  1042→              animate={{ opacity: 1 }}
+  1043→              exit={{ opacity: 0 }}
+  1044→            >
+  1045→              <CalendarSkeleton mode={mode} />
+  1046→            </motion.div>
+  1047→          ) : isError ? (
+  1048→            <motion.div
+  1049→              key="error"
+  1050→              initial={{ opacity: 0 }}
+  1051→              animate={{ opacity: 1 }}
+  1052→              exit={{ opacity: 0 }}
+  1053→            >
+  1054→              <GlassCard className="p-8 md:p-12 text-center" hover={false}>
+  1055→                <div className="grid place-items-center gap-3">
+  1056→                  <div className="grid place-items-center h-14 w-14 rounded-3xl bg-destructive/15">
+  1057→                    <AlertCircle className="h-7 w-7 text-destructive" />
+  1058→                  </div>
+  1059→                  <p className="font-semibold text-lg">
+  1060→                    Couldn&apos;t load your calendar
+  1061→                  </p>
+  1062→                  <p className="text-sm text-muted-foreground max-w-sm">
+  1063→                    {error instanceof ApiError
+  1064→                      ? error.message
+  1065→                      : "Something went wrong. Please try again."}
+  1066→                  </p>
+  1067→                  <GlassButton
+  1068→                    variant="secondary"
+  1069→                    size="sm"
+  1070→                    onClick={() =>
+  1071→                      qc.invalidateQueries({ queryKey: ["meals", "entries"] })
+  1072→                    }
+  1073→                  >
+  1074→                    Retry
+  1075→                  </GlassButton>
+  1076→                </div>
+  1077→              </GlassCard>
+  1078→            </motion.div>
+  1079→          ) : mealsCount === 0 ? (
+  1080→            <motion.div
+  1081→              key="empty"
+  1082→              initial={{ opacity: 0 }}
+  1083→              animate={{ opacity: 1 }}
+  1084→              exit={{ opacity: 0 }}
+  1085→            >
+  1086→              <GlassCard className="p-10 md:p-14 text-center" hover={false}>
+  1087→                <div className="grid place-items-center gap-3">
+  1088→                  <div className="grid place-items-center h-14 w-14 rounded-3xl bg-muted/40">
+  1089→                    <CalendarDays className="h-7 w-7 text-muted-foreground" />
+  1090→                  </div>
+  1091→                  <p className="font-semibold text-lg">No meals configured</p>
+  1092→                  <p className="text-sm text-muted-foreground max-w-md">
+  1093→                    Your administrator hasn&apos;t set up any meals for{" "}
+  1094→                    {MONTHS[month]} {year}. Once meals are configured,
+  1095→                    they&apos;ll appear here automatically.
+  1096→                  </p>
+  1097→                </div>
+  1098→              </GlassCard>
+  1099→            </motion.div>
+  1100→          ) : (
+  1101→            <motion.div
+  1102→              key={mode}
+  1103→              initial={{ opacity: 0, y: 8 }}
+  1104→              animate={{ opacity: 1, y: 0 }}
+  1105→              exit={{ opacity: 0, y: -8 }}
+  1106→              transition={{ duration: 0.25 }}
+  1107→            >
+  1108→              {mode === "month" && (
+  1109→                <MonthView
+  1110→                  cursor={cursor}
+  1111→                  byDate={byDate}
+  1112→                  onToggle={handleToggle}
+  1113→                />
+  1114→              )}
+  1115→              {mode === "week" && (
+  1116→                <WeekView
+  1117→                  cursor={cursor}
+  1118→                  byDate={byDate}
+  1119→                  onToggle={handleToggle}
+  1120→                />
+  1121→              )}
+  1122→              {mode === "agenda" && (
+  1123→                <AgendaView
+  1124→                  cursor={cursor}
+  1125→                  byDate={byDate}
+  1126→                  onToggle={handleToggle}
+  1127→                />
+  1128→              )}
+  1129→            </motion.div>
+  1130→          )}
+  1131→        </AnimatePresence>
+  1132→      </StaggerItem>
+  1133→
+  1134→      {/* Footer: Legend + cutoff info */}
+  1135→      {mealsCount > 0 && (
+  1136→        <StaggerItem>
+  1137→          <GlassCard className="p-3 md:p-4" hover={false}>
+  1138→            <div className="flex flex-wrap items-center justify-between gap-3">
+  1139→              <Legend />
+  1140→              <p className="text-[11px] text-muted-foreground inline-flex items-center gap-1.5">
+  1141→                <Info className="h-3 w-3" />
+  1142→                Cutoff shown as{" "}
+  1143→                <span className="font-medium text-foreground">
+  1144→                  Editable [time]
+  1145→                </span>{" "}
+  1146→                — meals lock automatically past that time.
+  1147→              </p>
+  1148→            </div>
+  1149→          </GlassCard>
+  1150→        </StaggerItem>
+  1151→      )}
+  1152→    </StaggerGroup>
+  1153→  );
+  1154→}
+  1155→
+  1156→export default CalendarView;
+  1157→

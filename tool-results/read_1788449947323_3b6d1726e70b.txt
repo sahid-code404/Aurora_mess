@@ -1,0 +1,633 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Admin Tasks — assign work and verify submitted purchases.
+     5→ * BoardOps composition: action bar (Assign Task) → status KPIs → filter
+     6→ * chips → review queue → status-tinted task rows (scroll-capped).
+     7→ * GET /api/v1/admin/tasks?status= · POST /admin/tasks ·
+     8→ * POST /admin/task-submissions/:id/approve|reject
+     9→ * (Review queue derived from tasks with status SUBMITTED — each embeds
+    10→ * its submission with items + proof.)
+    11→ */
+    12→
+    13→import { useState } from "react";
+    14→import { AnimatePresence, motion } from "framer-motion";
+    15→import {
+    16→  CalendarDays,
+    17→  CheckCircle2,
+    18→  ClipboardList,
+    19→  ListChecks,
+    20→  Package,
+    21→  Plus,
+    22→  ShoppingCart,
+    23→  Timer,
+    24→  Trash2,
+    25→  TriangleAlert,
+    26→  XCircle,
+    27→} from "lucide-react";
+    28→import { toast } from "sonner";
+    29→import GlassCard from "@/components/glass/GlassCard";
+    30→import StatusBadge from "@/components/glass/StatusBadge";
+    31→import Money from "@/components/glass/Money";
+    32→import EmptyState from "@/components/glass/EmptyState";
+    33→import ErrorState from "@/components/glass/ErrorState";
+    34→import { ListSkeleton } from "@/components/glass/LoadingSkeleton";
+    35→import ConfirmDialog from "@/components/glass/ConfirmDialog";
+    36→import SectionHeading from "@/components/glass/SectionHeading";
+    37→import { GlassButton } from "@/components/glass/GlassButton";
+    38→import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
+    39→import { useApiQuery, postJson } from "@/hooks/use-api-query";
+    40→import { useSession } from "@/hooks/use-session";
+    41→import { ApiClientError } from "@/lib/api";
+    42→import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+    43→import { cn } from "@/lib/utils";
+    44→import { useApiMetaQuery, errMessage, useInvalidate } from "./_shared/api";
+    45→import { MoneyField, SelectField, TextAreaField, TextField, moneyProblem } from "./_shared/fields";
+    46→import { FilterChips, KpiGrid, ProofImage, type KpiSpec } from "./_shared/chrome";
+    47→import { fmtDate, fmtDateTime, todayKey } from "./_shared/format";
+    48→import type { ResidentRow, TaskRow } from "./_shared/types";
+    49→
+    50→const TASKS_PATH = "/api/v1/admin/tasks";
+    51→const SUBMISSIONS_PATH = "/api/v1/admin/task-submissions";
+    52→
+    53→const STATUS_CHIPS = [
+    54→  { value: "ALL", label: "All" },
+    55→  { value: "ASSIGNED", label: "Assigned" },
+    56→  { value: "ACCEPTED", label: "Accepted" },
+    57→  { value: "IN_PROGRESS", label: "In Progress" },
+    58→  { value: "SUBMITTED", label: "Submitted", review: true },
+    59→  { value: "APPROVED", label: "Completed" },
+    60→  { value: "REJECTED", label: "Rejected" },
+    61→];
+    62→
+    63→const TASK_TYPE_LABELS: Record<string, string> = {
+    64→  MARKET_PURCHASE: "Market purchase",
+    65→  GENERAL: "General",
+    66→};
+    67→
+    68→/** Statuses that still need action (not finished/rejected). */
+    69→const ACTIVE_STATUSES = new Set(["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "SUBMITTED"]);
+    70→
+    71→/** Status-tinted icon tile (BoardOps task-row pattern). */
+    72→const STATUS_TILE: Record<string, string> = {
+    73→  ASSIGNED: "border-primary/28 bg-primary/12 text-primary",
+    74→  ACCEPTED: "border-success/30 bg-success/12 text-success",
+    75→  IN_PROGRESS: "border-warning/30 bg-warning/14 text-warning",
+    76→  SUBMITTED: "border-warning/30 bg-warning/14 text-warning",
+    77→  APPROVED: "border-success/30 bg-success/12 text-success",
+    78→  REJECTED: "border-danger/30 bg-danger/12 text-danger",
+    79→  REJECTED_BY_ADMIN: "border-danger/30 bg-danger/12 text-danger",
+    80→};
+    81→
+    82→function statusTile(status: string): string {
+    83→  return STATUS_TILE[status] ?? "border-border bg-muted/60 text-muted-foreground";
+    84→}
+    85→
+    86→function taskTileIcon(taskType: string) {
+    87→  return taskType === "MARKET_PURCHASE" ? <ShoppingCart aria-hidden /> : <ClipboardList aria-hidden />;
+    88→}
+    89→
+    90→export default function AdminTasks() {
+    91→  const [status, setStatus] = useState("ALL");
+    92→  const [assignOpen, setAssignOpen] = useState(false);
+    93→  const invalidate = useInvalidate();
+    94→  const { institution } = useSession();
+    95→  const tz = institution?.timezone ?? "Asia/Kolkata";
+    96→
+    97→  const { data: envelope, isLoading, error, refetch } = useApiMetaQuery<TaskRow[]>(TASKS_PATH, {
+    98→    status: status === "ALL" ? undefined : status,
+    99→  });
+   100→  const tasks = envelope?.data ?? [];
+   101→  const meta = envelope?.meta ?? {};
+   102→  const countsByStatus = (meta.countsByStatus as Record<string, number> | undefined) ?? {};
+   103→
+   104→  // review queue = SUBMITTED tasks (the task-submissions endpoint is a thin
+   105→  // wrapper over the same rows; embedding avoids the second round-trip).
+   106→  const reviewQueue = tasks.filter((t) => t.status === "SUBMITTED" && t.submission && t.submission.status === "SUBMITTED");
+   107→
+   108→  const chips = STATUS_CHIPS.map((c) => ({
+   109→    value: c.value,
+   110→    label: c.label,
+   111→    count: c.value === "ALL" ? undefined : countsByStatus[c.value],
+   112→  }));
+   113→
+   114→  if (error) {
+   115→    return (
+   116→      <div className="space-y-4">
+   117→        <ErrorState
+   118→          code={(error as ApiClientError | undefined)?.code}
+   119→          message={(error as ApiClientError | undefined)?.message}
+   120→          onRetry={() => void refetch()}
+   121→        />
+   122→      </div>
+   123→    );
+   124→  }
+   125→
+   126→  const openCount = (countsByStatus.ASSIGNED ?? 0) + (countsByStatus.ACCEPTED ?? 0);
+   127→  const activeCount = (countsByStatus.IN_PROGRESS ?? 0) + (countsByStatus.SUBMITTED ?? 0);
+   128→  const doneCount = countsByStatus.APPROVED ?? 0;
+   129→  const overdueCount = tasks.filter(
+   130→    (t) => ACTIVE_STATUSES.has(t.status) && t.dueDate && t.dueDate < todayKey()
+   131→  ).length;
+   132→
+   133→  const kpis: KpiSpec[] = [
+   134→    { label: "Open", value: String(openCount), sub: "assigned + accepted", icon: <ListChecks />, tone: "primary", glow: "primary" },
+   135→    { label: "In Progress", value: String(activeCount), sub: "incl. submitted", icon: <Timer />, tone: "warning", glow: "warning" },
+   136→    { label: "Completed", value: String(doneCount), sub: "approved", icon: <CheckCircle2 />, tone: "success", glow: "success" },
+   137→    { label: "Overdue", value: String(overdueCount), sub: "past due date", icon: <TriangleAlert />, tone: "danger", glow: "danger" },
+   138→  ];
+   139→
+   140→  return (
+   141→    <StaggerGroup className="space-y-4">
+   142→      {/* Action bar — primary action right-aligned (BoardOps pattern) */}
+   143→      <StaggerItem>
+   144→      <div className="flex flex-wrap items-center justify-end gap-2">
+   145→        <GlassButton variant="primary" icon={<Plus />} onClick={() => setAssignOpen(true)}>
+   146→          Assign Task
+   147→        </GlassButton>
+   148→      </div>
+   149→      </StaggerItem>
+   150→
+   151→      {/* KPIs — status overview */}
+   152→      <StaggerItem>
+   153→      <KpiGrid kpis={kpis} loading={isLoading && !envelope} />
+   154→      </StaggerItem>
+   155→
+   156→      {/* Filters */}
+   157→      <StaggerItem>
+   158→      <FilterChips chips={chips} value={status} onChange={setStatus} />
+   159→      </StaggerItem>
+   160→
+   161→      {/* review queue */}
+   162→      <StaggerItem>
+   163→      {status === "ALL" && reviewQueue.length > 0 && (
+   164→        <section className="space-y-3">
+   165→          <SectionHeading>Needs your review · {reviewQueue.length}</SectionHeading>
+   166→          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+   167→            {reviewQueue.map((task) => (
+   168→              <SubmissionReviewCard key={task.id} task={task} tz={tz} onDone={() => invalidate([TASKS_PATH, "/api/v1/admin/expenses", "/api/v1/admin/dashboard"])} />
+   169→            ))}
+   170→          </div>
+   171→        </section>
+   172→      )}
+   173→      </StaggerItem>
+   174→
+   175→      {/* task list */}
+   176→      <StaggerItem>
+   177→      <section className="space-y-3">
+   178→        <SectionHeading>{status === "ALL" ? "All tasks" : STATUS_CHIPS.find((c) => c.value === status)?.label ?? "Tasks"}</SectionHeading>
+   179→        {isLoading && !envelope ? (
+   180→          <ListSkeleton rows={4} />
+   181→        ) : tasks.length === 0 ? (
+   182→          <EmptyState
+   183→            icon={ClipboardList}
+   184→            title={status === "ALL" ? "No tasks yet" : `No ${STATUS_CHIPS.find((c) => c.value === status)?.label.toLowerCase() ?? ""} tasks`}
+   185→            description={
+   186→              status === "ALL"
+   187→                ? "Assign market purchases or general work to residents."
+   188→                : "Nothing here right now — try another filter."
+   189→            }
+   190→            action={
+   191→              status === "ALL" ? (
+   192→                <GlassButton variant="secondary" icon={<Plus />} onClick={() => setAssignOpen(true)}>
+   193→                  Assign Task
+   194→                </GlassButton>
+   195→              ) : undefined
+   196→            }
+   197→          />
+   198→        ) : (
+   199→          <div className="no-scrollbar max-h-[28rem] space-y-2.5 overflow-y-auto pr-1">
+   200→            <AnimatePresence initial={false}>
+   201→              {tasks.map((task, i) => (
+   202→                <motion.div
+   203→                  key={task.id}
+   204→                  initial={{ opacity: 0, y: 6 }}
+   205→                  animate={{ opacity: 1, y: 0 }}
+   206→                  exit={{ opacity: 0, y: -4 }}
+   207→                  transition={{ duration: 0.2, ease: "easeOut", delay: Math.min(i * 0.04, 0.2) }}
+   208→                >
+   209→                  <GlassCard className="p-4">
+   210→                    <div className="flex items-start gap-3.5">
+   211→                      <span
+   212→                        aria-hidden
+   213→                        className={cn(
+   214→                          "flex size-10 shrink-0 items-center justify-center rounded-md border [&_svg]:size-[18px]",
+   215→                          statusTile(task.status)
+   216→                        )}
+   217→                      >
+   218→                        {taskTileIcon(task.taskType)}
+   219→                      </span>
+   220→                      <div className="min-w-0 flex-1">
+   221→                        <div className="flex flex-wrap items-center gap-2">
+   222→                          <p className="truncate text-sm font-semibold">{task.description}</p>
+   223→                          <StatusBadge status={task.status} />
+   224→                        </div>
+   225→                        <p className="mt-0.5 truncate text-[12px] text-muted-foreground">
+   226→                          {task.residentName}
+   227→                          {task.roomNumber ? ` · Room ${task.roomNumber}` : ""} · {TASK_TYPE_LABELS[task.taskType] ?? task.taskType}
+   228→                        </p>
+   229→                        <p className="kpi-num mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground/80">
+   230→                          {task.dueDate && (
+   231→                            <span className="inline-flex items-center gap-1">
+   232→                              <CalendarDays className="size-3" aria-hidden /> due {fmtDate(task.dueDate)}
+   233→                            </span>
+   234→                          )}
+   235→                          <span>assigned {fmtDateTime(task.createdAt, tz)}</span>
+   236→                          {task.items.length > 0 && <span>{task.items.length} item{task.items.length === 1 ? "" : "s"}</span>}
+   237→                        </p>
+   238→                        {task.notes && <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground">{task.notes}</p>}
+   239→
+   240→                        {task.submission && task.submission.status !== "SUBMITTED" && (
+   241→                          <div className="glass-inset mt-2.5 rounded-md p-3">
+   242→                            <p className="text-[12px] font-medium">
+   243→                              Submitted <Money minor={task.submission.claimedTotalMinor} className="font-semibold" />
+   244→                              {task.submission.expenseId && " · expense created"}
+   245→                            </p>
+   246→                            {task.submission.comment && (
+   247→                              <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{task.submission.comment}</p>
+   248→                            )}
+   249→                            {task.adminReviewReason && (
+   250→                              <p className="mt-0.5 text-[11px] text-muted-foreground">Review: {task.adminReviewReason}</p>
+   251→                            )}
+   252→                          </div>
+   253→                        )}
+   254→                      </div>
+   255→                    </div>
+   256→                  </GlassCard>
+   257→                </motion.div>
+   258→              ))}
+   259→            </AnimatePresence>
+   260→          </div>
+   261→        )}
+   262→      </section>
+   263→      </StaggerItem>
+   264→
+   265→      {assignOpen && (
+   266→        <AssignTaskDialog
+   267→          open
+   268→          onOpenChange={setAssignOpen}
+   269→          onSaved={() => invalidate([TASKS_PATH, "/api/v1/admin/dashboard"])}
+   270→        />
+   271→      )}
+   272→    </StaggerGroup>
+   273→  );
+   274→}
+   275→
+   276→/* ------------------------------------------------------------ review card */
+   277→
+   278→function SubmissionReviewCard({ task, tz, onDone }: { task: TaskRow; tz: string; onDone: () => void }) {
+   279→  const sub = task.submission!;
+   280→  const [confirm, setConfirm] = useState<"approve" | "reject" | null>(null);
+   281→  const [acting, setActing] = useState(false);
+   282→
+   283→  async function run(kind: "approve" | "reject", reason?: string) {
+   284→    setActing(true);
+   285→    try {
+   286→      await postJson(`${SUBMISSIONS_PATH}/${sub.id}/${kind}`, kind === "reject" ? { reason } : reason ? { reason } : {});
+   287→      onDone();
+   288→      toast.success(kind === "approve" ? "Expense created and posted" : "Submission rejected", {
+   289→        description: `${task.residentName} · ${task.description}`,
+   290→      });
+   291→      setConfirm(null);
+   292→    } catch (err) {
+   293→      toast.error(errMessage(err));
+   294→    } finally {
+   295→      setActing(false);
+   296→    }
+   297→  }
+   298→
+   299→  return (
+   300→    <GlassCard className="space-y-3.5 p-4">
+   301→      <div className="flex items-start gap-3.5">
+   302→        <span
+   303→          aria-hidden
+   304→          className={cn(
+   305→            "flex size-10 shrink-0 items-center justify-center rounded-md border [&_svg]:size-[18px]",
+   306→            statusTile("SUBMITTED")
+   307→          )}
+   308→        >
+   309→          {taskTileIcon(task.taskType)}
+   310→        </span>
+   311→        <div className="min-w-0 flex-1">
+   312→          <div className="flex flex-wrap items-center gap-2">
+   313→            <p className="min-w-0 flex-1 truncate text-sm font-semibold">{task.description}</p>
+   314→            <StatusBadge status="SUBMITTED" className="shrink-0" />
+   315→          </div>
+   316→          <p className="mt-0.5 truncate text-[12px] text-muted-foreground">
+   317→            {task.residentName}
+   318→            {task.roomNumber ? ` · Room ${task.roomNumber}` : ""}
+   319→          </p>
+   320→        </div>
+   321→      </div>
+   322→
+   323→      {sub.comment && <p className="text-[12px] leading-relaxed text-muted-foreground">"{sub.comment}"</p>}
+   324→
+   325→      {/* items */}
+   326→      <div className="glass-inset rounded-md p-3">
+   327→        <div className="space-y-1">
+   328→          {sub.items.map((item) => (
+   329→            <div key={item.id} className="flex items-center justify-between gap-3 text-[13px]">
+   330→              <span className="min-w-0 truncate">
+   331→                <span className="font-medium">{item.itemName}</span>
+   332→                <span className="kpi-num text-muted-foreground">
+   333→                  {" "}
+   334→                  · {item.quantity} {item.unit ?? "unit"} × <Money minor={item.unitPriceMinor} plain />
+   335→                </span>
+   336→              </span>
+   337→              <Money minor={item.lineTotalMinor} className="shrink-0 font-semibold" />
+   338→            </div>
+   339→          ))}
+   340→        </div>
+   341→        <div className="mt-2 flex items-center justify-between border-t border-border/50 pt-2 text-sm font-semibold">
+   342→          <span>Claimed total</span>
+   343→          <Money minor={sub.claimedTotalMinor} />
+   344→        </div>
+   345→      </div>
+   346→
+   347→      <ProofImage fileId={sub.proofFileId} alt={`Proof for ${task.description}`} className="h-24" />
+   348→
+   349→      <p className="kpi-num text-[11px] text-muted-foreground/75">Submitted {fmtDateTime(sub.submittedAt, tz)}</p>
+   350→
+   351→      <div className="flex items-center justify-end gap-2">
+   352→        <GlassButton variant="destructive" size="sm" icon={<XCircle />} onClick={() => setConfirm("reject")}>
+   353→          Reject
+   354→        </GlassButton>
+   355→        <GlassButton variant="primary" size="sm" icon={<CheckCircle2 />} onClick={() => setConfirm("approve")}>
+   356→          Approve & post expense
+   357→        </GlassButton>
+   358→      </div>
+   359→
+   360→      {confirm && (
+   361→        <ConfirmDialog
+   362→          open
+   363→          onOpenChange={(open) => !open && setConfirm(null)}
+   364→          title={confirm === "approve" ? "Approve submission" : "Reject submission"}
+   365→          description={
+   366→            confirm === "approve" ? (
+   367→              <>
+   368→                An official expense is created from these items (totals recomputed server-side), the money is posted to
+   369→                the ledger, and {task.residentName} is notified. Duplicate posting is impossible — the submission links
+   370→                to exactly one expense.
+   371→                <span className="mt-2 block font-medium">
+   372→                  {task.description} · claimed <Money minor={sub.claimedTotalMinor} />
+   373→                </span>
+   374→              </>
+   375→            ) : (
+   376→              <>
+   377→                {task.residentName} is notified with your reason and can resubmit corrected items.
+   378→                <span className="mt-2 block font-medium">{task.description}</span>
+   379→              </>
+   380→            )
+   381→          }
+   382→          confirmLabel={confirm === "approve" ? "Approve" : "Reject"}
+   383→          tone={confirm === "approve" ? "primary" : "destructive"}
+   384→          requireReason={confirm === "reject"}
+   385→          loading={acting}
+   386→          onConfirm={(reason) => void run(confirm, reason)}
+   387→        />
+   388→      )}
+   389→    </GlassCard>
+   390→  );
+   391→}
+   392→
+   393→/* ----------------------------------------------------------- assign dialog */
+   394→
+   395→interface DraftTaskItem {
+   396→  key: string;
+   397→  itemName: string;
+   398→  expectedQuantity: string;
+   399→  unit: string;
+   400→  estimatedUnitPrice: string;
+   401→}
+   402→
+   403→function draftTaskItem(): DraftTaskItem {
+   404→  return { key: crypto.randomUUID(), itemName: "", expectedQuantity: "1", unit: "kg", estimatedUnitPrice: "" };
+   405→}
+   406→
+   407→function AssignTaskDialog({
+   408→  open,
+   409→  onOpenChange,
+   410→  onSaved,
+   411→}: {
+   412→  open: boolean;
+   413→  onOpenChange: (open: boolean) => void;
+   414→  onSaved: () => void;
+   415→}) {
+   416→  const [taskType, setTaskType] = useState<"MARKET_PURCHASE" | "GENERAL">("MARKET_PURCHASE");
+   417→  const [residentId, setResidentId] = useState("");
+   418→  const [description, setDescription] = useState("");
+   419→  const [dueDate, setDueDate] = useState("");
+   420→  const [notes, setNotes] = useState("");
+   421→  const [items, setItems] = useState<DraftTaskItem[]>([draftTaskItem()]);
+   422→  const [saving, setSaving] = useState(false);
+   423→  const [fields, setFields] = useState<Record<string, string>>({});
+   424→
+   425→  const residentsQuery = useApiQuery<ResidentRow[]>("/api/v1/admin/residents");
+   426→  const activeResidents = (residentsQuery.data ?? []).filter((r) => r.status === "ACTIVE");
+   427→
+   428→  const itemsValid = items.every(
+   429→    (i) =>
+   430→      i.itemName.trim().length > 0 &&
+   431→      Number(i.expectedQuantity) > 0 &&
+   432→      (i.estimatedUnitPrice.trim() === "" || moneyProblem(i.estimatedUnitPrice) === null)
+   433→  );
+   434→  const valid = residentId !== "" && description.trim().length >= 3 && itemsValid;
+   435→
+   436→  async function submit() {
+   437→    setSaving(true);
+   438→    setFields({});
+   439→    try {
+   440→      await postJson(TASKS_PATH, {
+   441→        taskType,
+   442→        description: description.trim(),
+   443→        assignedResidentId: residentId,
+   444→        dueDate: dueDate || undefined,
+   445→        notes: notes.trim() || undefined,
+   446→        items: items
+   447→          .filter((i) => i.itemName.trim() !== "" || i.estimatedUnitPrice.trim() !== "")
+   448→          .map((i) => ({
+   449→            itemName: i.itemName.trim(),
+   450→            expectedQuantity: Number(i.expectedQuantity),
+   451→            unit: i.unit.trim() || undefined,
+   452→            estimatedUnitPriceMinor: i.estimatedUnitPrice.trim() || undefined,
+   453→          })),
+   454→      });
+   455→      toast.success("Task assigned", { description: "The resident is notified and can accept it." });
+   456→      onSaved();
+   457→      onOpenChange(false);
+   458→      setDescription("");
+   459→      setNotes("");
+   460→      setItems([draftTaskItem()]);
+   461→      setResidentId("");
+   462→      setDueDate("");
+   463→    } catch (err) {
+   464→      if (err instanceof ApiClientError && err.fields) setFields(err.fields);
+   465→      toast.error(errMessage(err));
+   466→    } finally {
+   467→      setSaving(false);
+   468→    }
+   469→  }
+   470→
+   471→  return (
+   472→    <DialogShell4
+   473→      open={open}
+   474→      onOpenChange={onOpenChange}
+   475→      title="Assign task"
+   476→      description="Market purchases become expenses after the resident submits items and you approve them."
+   477→      wide
+   478→      footer={
+   479→        <>
+   480→          <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+   481→            Cancel
+   482→          </GlassButton>
+   483→          <GlassButton variant="primary" icon={<Plus />} loading={saving} disabled={!valid} onClick={() => void submit()}>
+   484→            Assign task
+   485→          </GlassButton>
+   486→        </>
+   487→      }
+   488→    >
+   489→      <div className="space-y-4">
+   490→        <div>
+   491→          <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Task type</p>
+   492→          <FilterChips
+   493→            chips={[
+   494→              { value: "MARKET_PURCHASE", label: "Market purchase" },
+   495→              { value: "GENERAL", label: "General work" },
+   496→            ]}
+   497→            value={taskType}
+   498→            onChange={(v) => setTaskType(v as "MARKET_PURCHASE" | "GENERAL")}
+   499→          />
+   500→        </div>
+   501→
+   502→        <SelectField
+   503→          label="Resident"
+   504→          value={residentId}
+   505→          onChange={setResidentId}
+   506→          placeholder="Choose a resident…"
+   507→          options={activeResidents.map((r) => ({
+   508→            value: r.id,
+   509→            label: `${r.profile.fullName}${r.profile.roomNumber ? ` · ${r.profile.roomNumber}` : ""}`,
+   510→          }))}
+   511→          error={fields.assignedResidentId}
+   512→        />
+   513→
+   514→        <TextAreaField
+   515→          label="Description"
+   516→          value={description}
+   517→          onChange={setDescription}
+   518→          rows={2}
+   519→          maxLength={500}
+   520→          placeholder="e.g. Weekly vegetable market run"
+   521→          error={fields.description}
+   522→        />
+   523→
+   524→        <div className="grid grid-cols-2 gap-2.5">
+   525→          <TextField label="Due date (optional)" type="date" value={dueDate} onChange={setDueDate} />
+   526→        </div>
+   527→
+   528→        {taskType === "MARKET_PURCHASE" && (
+   529→          <div>
+   530→            <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Items to buy (estimates)</p>
+   531→            <div className="space-y-2.5">
+   532→              <AnimatePresence initial={false}>
+   533→                {items.map((item, idx) => (
+   534→                  <motion.div
+   535→                    key={item.key}
+   536→                    layout
+   537→                    initial={{ opacity: 0, y: 6 }}
+   538→                    animate={{ opacity: 1, y: 0 }}
+   539→                    exit={{ opacity: 0, height: 0 }}
+   540→                    transition={{ duration: 0.18 }}
+   541→                    className="glass-inset space-y-2.5 rounded-md p-3"
+   542→                  >
+   543→                    <div className="flex items-center justify-between">
+   544→                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Item {idx + 1}</p>
+   545→                      {items.length > 1 && (
+   546→                        <button
+   547→                          type="button"
+   548→                          aria-label={`Remove item ${idx + 1}`}
+   549→                          onClick={() => setItems((prev) => prev.filter((i) => i.key !== item.key))}
+   550→                          className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-danger focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+   551→                        >
+   552→                          <Trash2 className="size-4" aria-hidden />
+   553→                        </button>
+   554→                      )}
+   555→                    </div>
+   556→                    <TextField label="Name" value={item.itemName} onChange={(v) => setItems((prev) => prev.map((i) => (i.key === item.key ? { ...i, itemName: v } : i)))} placeholder="e.g. Mixed vegetables" maxLength={120} />
+   557→                    <div className="grid grid-cols-2 gap-2.5">
+   558→                      <TextField label="Quantity" value={item.expectedQuantity} inputMode="decimal" onChange={(v) => setItems((prev) => prev.map((i) => (i.key === item.key ? { ...i, expectedQuantity: v } : i)))} placeholder="20" />
+   559→                      <TextField label="Unit" value={item.unit} onChange={(v) => setItems((prev) => prev.map((i) => (i.key === item.key ? { ...i, unit: v } : i)))} placeholder="kg" maxLength={20} />
+   560→                    </div>
+   561→                    <MoneyField
+   562→                      label="Est. unit price (optional)"
+   563→                      value={item.estimatedUnitPrice}
+   564→                      onChange={(v) => setItems((prev) => prev.map((i) => (i.key === item.key ? { ...i, estimatedUnitPrice: v } : i)))}
+   565→                      placeholder="85.00"
+   566→                    />
+   567→                  </motion.div>
+   568→                ))}
+   569→              </AnimatePresence>
+   570→            </div>
+   571→            <GlassButton variant="secondary" size="sm" className="mt-2.5" icon={<Plus />} onClick={() => setItems((prev) => [...prev, draftTaskItem()])} disabled={items.length >= 50}>
+   572→              Add item
+   573→            </GlassButton>
+   574→          </div>
+   575→        )}
+   576→
+   577→        <TextAreaField label="Notes for the resident (optional)" value={notes} onChange={setNotes} rows={2} maxLength={1000} placeholder="Where to buy, brands, timing…" />
+   578→
+   579→        <div className="flex items-center gap-2.5 rounded-md bg-primary/8 p-3.5">
+   580→          <Package className="size-4 shrink-0 text-primary" aria-hidden />
+   581→          <p className="text-[12px] leading-relaxed text-muted-foreground">
+   582→            Estimates are guidance only — the resident submits actual prices and quantities, and the approved expense is
+   583→            recomputed server-side.
+   584→          </p>
+   585→        </div>
+   586→      </div>
+   587→    </DialogShell4>
+   588→  );
+   589→}
+   590→
+   591→/* ------------------------------------------------------------ dialog shell */
+   592→
+   593→function DialogShell4({
+   594→  open,
+   595→  onOpenChange,
+   596→  title,
+   597→  description,
+   598→  children,
+   599→  footer,
+   600→  wide,
+   601→}: {
+   602→  open: boolean;
+   603→  onOpenChange: (open: boolean) => void;
+   604→  title: string;
+   605→  description?: React.ReactNode;
+   606→  children: React.ReactNode;
+   607→  footer?: React.ReactNode;
+   608→  wide?: boolean;
+   609→}) {
+   610→  return (
+   611→    <Dialog open={open} onOpenChange={onOpenChange}>
+   612→      <DialogContent className={cn("glass-strong rounded-2xl border-0 p-0", wide ? "sm:max-w-2xl" : "sm:max-w-md")}>
+   613→        <div className="flex max-h-[85vh] flex-col">
+   614→          <div className="px-5 pt-5 sm:px-6 sm:pt-6">
+   615→            <DialogTitle className="text-left text-lg font-semibold tracking-tight">{title}</DialogTitle>
+   616→            {description && (
+   617→              <DialogDescription className="mt-1.5 text-left text-[13px] leading-relaxed text-muted-foreground">
+   618→                {description}
+   619→              </DialogDescription>
+   620→            )}
+   621→          </div>
+   622→          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">{children}</div>
+   623→          {footer && (
+   624→            <div className="safe-b flex flex-wrap items-center justify-end gap-2 border-t border-border/50 px-5 py-4 sm:px-6">
+   625→              {footer}
+   626→            </div>
+   627→          )}
+   628→        </div>
+   629→      </DialogContent>
+   630→    </Dialog>
+   631→  );
+   632→}
+   633→
