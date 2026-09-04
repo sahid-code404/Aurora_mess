@@ -47,7 +47,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
   }
 
-  const [statusHistory, funds, payments, bills, tasks, leave, audit] = await Promise.all([
+  const [statusHistory, funds, payments, bills, tasks, leave, audit, refunds] = await Promise.all([
     db.userStatusHistory.findMany({
       where: { userId: id },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],

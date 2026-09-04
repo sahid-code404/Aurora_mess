@@ -29,10 +29,10 @@ export interface KpiDelta {
   inverted?: boolean;
 }
 
-export type KpiGlow = "primary" | "success" | "warning" | "danger" | "none";
+export type KpiGlow = "primary" | "success" | "warning" | "danger" | "neutral" | "none";
 
 /** Icon-orb tint (BoardOps pattern: colored orb per metric). */
-export type KpiTone = "primary" | "success" | "warning" | "danger";
+export type KpiTone = "primary" | "success" | "warning" | "danger" | "neutral";
 
 const TONE_ORB: Record<KpiTone, string> = {
   primary:
@@ -43,6 +43,8 @@ const TONE_ORB: Record<KpiTone, string> = {
     "border-warning/30 bg-gradient-to-br from-warning/22 to-warning/6 text-warning shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_6px_18px_-8px_color-mix(in_oklab,var(--warning)_55%,transparent)]",
   danger:
     "border-danger/30 bg-gradient-to-br from-danger/22 to-danger/6 text-danger shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_6px_18px_-8px_color-mix(in_oklab,var(--danger)_55%,transparent)]",
+  neutral:
+    "border-border/80 bg-muted/55 text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]",
 };
 
 export interface KpiCardProps {
@@ -144,6 +146,7 @@ const GLOW_CLASS: Record<KpiGlow, string> = {
   success: "glow-success",
   warning: "glow-warning",
   danger: "glow-danger",
+  neutral: "",
   none: "",
 };
 
