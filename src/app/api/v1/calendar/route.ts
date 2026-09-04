@@ -10,6 +10,7 @@ import { ApiError, CODES } from "@/lib/errors";
 import { dateKeySchema } from "@/lib/validation";
 import { addDaysToKey, dateKeyInTz, localDateMidnightUtc } from "@/lib/time";
 import { dayCountBetween, keyOfUtcDate, requireInstitutionContext } from "@/lib/domain/meal-engine";
+import { serializeSelectedMeals } from "@/lib/domain/meal-scope";
 
 const querySchema = z.object({
   from: dateKeySchema.optional(),
@@ -43,6 +44,11 @@ export const GET = route({ auth: "ANY" }, async (ctx) => {
       endDate: { gte: localDateMidnightUtc(from) },
     },
     orderBy: [{ startDate: "asc" }, { id: "asc" }],
+    include: {
+      selectedMeals: {
+        include: { mealDefinition: { select: { id: true, name: true } } },
+      },
+    },
   });
 
   return {
@@ -54,6 +60,7 @@ export const GET = route({ auth: "ANY" }, async (ctx) => {
       endDate: keyOfUtcDate(e.endDate),
       type: e.type,
       disableMeals: e.disableMeals,
+      ...serializeSelectedMeals(e.mealScope, e.selectedMeals),
       createdAt: e.createdAt.toISOString(),
     })),
     meta: { from, to, timezone: tz, today: todayKey },
