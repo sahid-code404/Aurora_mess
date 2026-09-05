@@ -994,3 +994,13 @@ model PasswordResetToken {
   usedAt    DateTime?
   createdAt DateTime  @default(now())
 }
+
+// ---------------------------------------------------------------------
+// Internal atomic counters for PAY / EXP / BILL display-number allocation.
+// ---------------------------------------------------------------------
+
+model DisplayNumberSequence {
+  key       String   @id
+  nextValue Int
+  updatedAt DateTime @default(now()) @updatedAt
+}
