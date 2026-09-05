@@ -121,6 +121,11 @@ jobs:
           BOARDOPS_SEEDED_SMOKE_DIAGNOSTIC_DIR: seeded-smoke-diagnostics
         run: bash tests/seeded-auth-smoke.sh
 
+      - name: Seeded Admin + Resident production business-flow smoke
+        env:
+          BOARDOPS_BUSINESS_SMOKE_DIAGNOSTIC_DIR: business-smoke-diagnostics
+        run: bash tests/seeded-business-flow-smoke.sh
+
       - name: Upload runtime smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -129,5 +134,6 @@ jobs:
           path: |
             smoke-diagnostics/
             seeded-smoke-diagnostics/
+            business-smoke-diagnostics/
           if-no-files-found: ignore
           retention-days: 3

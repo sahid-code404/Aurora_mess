@@ -118,6 +118,33 @@ Password: Resident#12345
 9. Check previous billed month history remains unchanged while current month is open.
 10. Test logout and verify the old session cannot access authenticated APIs.
 
+## Production business-flow smoke
+
+After seeding and building the production standalone server, the repository can execute the cross-role flow directly:
+
+```bash
+BOARDOPS_BUSINESS_SMOKE_DIAGNOSTIC_DIR=business-smoke-diagnostics \
+  bash tests/seeded-business-flow-smoke.sh
+```
+
+This test discovers the seeded resident, future unlocked meals, definition IDs and historical bill through authenticated HTTP APIs rather than reading Prisma directly. It then proves:
+
+- guest booking is idempotent and does not change resident meal totals;
+- selected-meal leave changes only the selected meal after Admin approval;
+- selected-meal calendar disabling changes only the selected definition;
+- GENERAL and MARKET_PURCHASE tasks remain separate workflows;
+- market submission approval creates the expected approved expense and journal link;
+- resident payment submission stays pending until Admin approval and idempotent retry does not double-credit;
+- Formula Engine preview resolves live variables without mutating active formula definitions;
+- immutable historical bill provenance remains unchanged while current operational flows execute.
+
+The smoke mutates the disposable seeded database and therefore must not be pointed at a production database.
+
 ## CI acceptance guarantee
 
-The CI pipeline runs the same development seed against PostgreSQL, builds the production standalone server, then performs successful Admin and Resident logins, verifies their session roles, checks Admin/Resident API isolation, and confirms logout revokes the Resident session. This gate runs in addition to migrations, zero-warning lint, unit/integration tests, the PostgreSQL + uploads disaster-recovery drill, storage-integrity checks, production build and the existing runtime smoke.
+The CI pipeline runs the same development seed against PostgreSQL and builds the production standalone server. It then runs two seeded production gates:
+
+1. **Authentication/authorization smoke** — successful Admin and Resident login, session-role verification, Admin/Resident API isolation, and logout/session revocation.
+2. **Cross-role business-flow smoke** — guest separation/idempotency, selected-meal leave, selected-meal calendar disable, GENERAL vs MARKET task lifecycle, market-expense creation, payment submit/approve/idempotency, Formula Engine preview non-mutation, and historical-bill provenance stability.
+
+These gates run in addition to migrations, zero-warning lint, unit/integration tests, the PostgreSQL + uploads disaster-recovery drill, storage-integrity checks, production build and the standalone runtime smoke. CI uploads separate server/flow diagnostics when any production smoke fails.
