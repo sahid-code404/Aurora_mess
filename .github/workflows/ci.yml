@@ -20,7 +20,7 @@ env:
 
 jobs:
   verify:
-    name: Typecheck, lint, tests, migrate, build, smoke
+    name: Typecheck, lint, tests, recovery, build, smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -74,6 +74,9 @@ jobs:
 
       - name: Operations recovery guards
         run: bash tests/operations-runtime-guards.sh
+
+      - name: PostgreSQL + uploads disaster-recovery drill
+        run: bash tests/disaster-recovery-drill.sh
 
       - name: Unit regression tests
         run: bun test tests/unit
