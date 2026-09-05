@@ -46,16 +46,38 @@ const ADMIN_PASSWORD = "Admin#12345";
 async function wipe() {
   // FK-safe order (children first).
   const tables = [
-    "policyExemption", "passwordResetToken", "idempotencyRecord", "deletionRequest", "outboxEvent",
-    "notification", "announcement", "taskSubmissionItem", "taskSubmission", "taskItem", "task",
+    // Operational/security records without children.
+    "rateLimitBucket", "policyExemption", "passwordResetToken", "idempotencyRecord", "deletionRequest", "outboxEvent", "auditEvent",
+    "notification", "announcement",
+
+    // Tasks and generated expense links.
+    "taskSubmissionItem", "taskSubmission", "taskItem", "task",
+
+    // Frozen billing artifacts: children before parents.
     "billAdjustment", "billLine", "bill", "billingSnapshot", "billingPeriod",
-    "formulaVersion", "formulaDefinition",
+
+    // Formula/rule/variable version graphs.
+    "formulaDependency", "formulaVersion", "formulaDefinition",
+    "ruleVersion", "ruleDefinition",
+    "customVariableValue", "variableDefinition",
+
+    // Ledger + financial records.
     "ledgerEntry", "ledgerJournal", "ledgerAccount",
     "refund", "paymentStatusHistory", "payment", "expenseItem", "expense", "expenseCategory",
-    "guestMealRequest", "residentMeal", "mealInstance", "mealDefinitionVersion", "mealDefinition",
-    "leaveRequest", "calendarEvent", "storedFile",
-    "userPolicyAcceptance", "userStatusHistory", "session", "userProfile", "user",
-    "policyVersion", "policy", "institutionSecuritySettings", "institutionSettings", "institution",
+
+    // Meal-scoped join rows use RESTRICT on MealDefinition and must be removed
+    // before definitions. Leave/calendar parents can then be removed safely.
+    "leaveRequestMeal", "calendarEventMeal",
+    "guestMealRequest", "residentMeal", "mealInstance", "mealDefinitionVersion",
+    "leaveRequest", "calendarEvent", "mealDefinition",
+    "storedFile",
+
+    // User-owned records before users. User holds the FK to UserProfile, so
+    // users must be deleted before profiles for repeatable seeding.
+    "userPolicyAcceptance", "userStatusHistory", "session", "user",
+    "userProfile",
+    "policyVersion", "policy",
+    "institutionSecuritySettings", "institutionSettings", "institution",
   ];
   for (const t of tables) {
     // @ts-expect-error dynamic table deletion for the dev seed only
