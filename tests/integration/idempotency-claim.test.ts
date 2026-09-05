@@ -14,6 +14,9 @@ const expiredAt = new Date("2098-12-31T23:59:00.000Z");
 const renewedAt = new Date("2099-01-02T00:00:00.000Z");
 
 afterAll(async () => {
+  await db.payment.deleteMany({
+    where: { institutionId: { startsWith: institutionPrefix } },
+  });
   await db.idempotencyRecord.deleteMany({
     where: { institutionId: { startsWith: institutionPrefix } },
   });
@@ -237,6 +240,37 @@ describe("atomic idempotency claims", () => {
     const rows = await db.idempotencyRecord.findMany({ where: { institutionId, scope, key } });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.expiresAt.toISOString()).toBe(renewedAt.toISOString());
+  });
+
+  test("payment history can retain the same client key across separate expiry windows", async () => {
+    const institutionId = `${institutionPrefix}payment-reuse-${crypto.randomUUID()}`;
+    const key = `payment-${crypto.randomUUID()}`;
+
+    await db.payment.createMany({
+      data: [
+        {
+          institutionId,
+          displayNumber: `PAY-209901-A-${crypto.randomUUID()}`,
+          residentId: `resident-${crypto.randomUUID()}`,
+          amountMinor: 100,
+          method: "CASH",
+          status: "PENDING",
+          idempotencyKey: key,
+        },
+        {
+          institutionId,
+          displayNumber: `PAY-209901-B-${crypto.randomUUID()}`,
+          residentId: `resident-${crypto.randomUUID()}`,
+          amountMinor: 200,
+          method: "UPI",
+          status: "PENDING",
+          idempotencyKey: key,
+        },
+      ],
+    });
+
+    const rows = await db.payment.findMany({ where: { institutionId, idempotencyKey: key } });
+    expect(rows).toHaveLength(2);
   });
 
   test("rejects an already-expired replacement window", async () => {
