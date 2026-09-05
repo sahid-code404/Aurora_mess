@@ -5,15 +5,16 @@
  * email bucket — successful sign-ins never lock anyone out, and one tester's
  * traffic can never block a different user (audit 9-c finding #6).
  * Failure message is generic (no enumeration). Non-ACTIVE accounts get
- * role-appropriate 403 codes. Success → session cookie (rotated) + bearer
- * fallback token.
+ * role-appropriate 403 codes. Success always sets the rotated HttpOnly session
+ * cookie. A raw bearer token is returned only when the server explicitly sets
+ * ENABLE_PREVIEW_BEARER_AUTH=1 for cookie-blocked preview testing.
  */
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { parseBody, route } from "@/lib/auth/guard";
 import { ApiError, CODES, ok } from "@/lib/errors";
 import { clientIp, clientKey, rateLimit, rateLimitCheck, rateLimitCount } from "@/lib/rate-limit";
-import { createSession, applySessionCookies } from "@/lib/auth/session";
+import { createSession, applySessionCookies, previewBearerAuthEnabled } from "@/lib/auth/session";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { emailSchema } from "@/lib/validation";
 
@@ -45,8 +46,7 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
   const body = await parseBody(ctx.req, loginSchema);
 
   // Failure-based limiter per IP+email: brute-force protection without
-  // counting successes (5 legit sign-ins used to self-lockout) and without
-  // one network's testing blocking a different real user (global email key).
+  // counting successes and without one network's testing blocking another user.
   const failKey = `login:fail:${clientIp(ctx.req)}:${body.email}`;
   const failLimit = rateLimitCheck(failKey, 10);
   if (!failLimit.allowed) {
@@ -79,7 +79,6 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
     throw new ApiError(CODES.ACCOUNT_REJECTED, "Your registration was declined.", 403);
   }
   if (user.status !== "ACTIVE") {
-    // INACTIVE / PENDING_DELETION / anything unexpected.
     throw new ApiError(
       CODES.ACCOUNT_INACTIVE,
       "Your account is inactive. Please contact the administration.",
@@ -87,19 +86,13 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
     );
   }
 
-  // Session first (rotates old sessions), then the envelope carries the raw
-  // token back to the client — it persists the token as a Bearer fallback for
-  // contexts where the browser refuses the session cookie (preview iframe).
   const sessionToken = await createSession(user.id, user.institutionId, ctx.req);
-  const res = ok(
-    {
-      user: { id: user.id, email: user.email, role: user.role },
-      profile: { fullName: user.profile?.fullName ?? "" },
-      sessionToken,
-    },
-    undefined,
-    ctx.requestId
-  );
+  const data = {
+    user: { id: user.id, email: user.email, role: user.role },
+    profile: { fullName: user.profile?.fullName ?? "" },
+    ...(previewBearerAuthEnabled() ? { sessionToken } : {}),
+  };
+  const res = ok(data, undefined, ctx.requestId);
   applySessionCookies(res, sessionToken);
   return res;
 });
