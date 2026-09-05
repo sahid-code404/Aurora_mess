@@ -109,7 +109,7 @@ Password: Resident#12345
 
 1. Sign in as Admin and review dashboard/residents.
 2. Sign in as Resident and verify the meal calendar and current meal states.
-3. Create a selected-meal leave request and approve it as Admin; confirm only selected meals change.
+3. Create a future leave request as Resident. While it is `PENDING`, cancel it from **My leave requests** and confirm it becomes `CANCELLED` without changing any meals. Create another selected-meal leave and approve it as Admin; confirm only selected meals change. Approved/rejected leave is historical and cannot be cancelled.
 4. Create a selected-meal calendar disable as Admin; confirm unaffected meals stay available.
 5. Verify guest meals remain separate from resident meal totals.
 6. Exercise Normal Task and Market Task flows separately.
@@ -164,12 +164,34 @@ It verifies the complete post-billing excess lifecycle through authenticated HTT
 
 Like every seeded smoke, this must run only against disposable test data.
 
+## Production leave-cancellation smoke
+
+Pending leave has its own production-server lifecycle acceptance:
+
+```bash
+BOARDOPS_LEAVE_SMOKE_DIAGNOSTIC_DIR=leave-smoke-diagnostics \
+  bash tests/seeded-leave-cancel-smoke.sh
+```
+
+The test discovers a future unlocked meal through the Resident APIs and proves:
+
+- a new Resident leave request starts as `PENDING` and appears in the Admin pending queue;
+- a different Resident cannot cancel it;
+- the owner can transition it from `PENDING` to `CANCELLED`;
+- both Resident history and the Admin `CANCELLED` filter show the terminal state;
+- a second cancellation is rejected;
+- Admin approval after cancellation is rejected, so a reviewed/cancelled decision cannot be overwritten;
+- creating and cancelling a pending leave does not alter any ResidentMeal state.
+
+Only `PENDING` leave can be self-cancelled. `APPROVED` and `REJECTED` requests are retained as immutable review history; cancellation never acts as an un-approve operation.
+
 ## CI acceptance guarantee
 
-The CI pipeline runs the same development seed against PostgreSQL and builds the production standalone server. It then runs three seeded production gates:
+The CI pipeline runs the same development seed against PostgreSQL and builds the production standalone server. It then runs four seeded production gates:
 
 1. **Authentication/authorization smoke** — successful Admin and Resident login, session-role verification, Admin/Resident API isolation, and logout/session revocation.
 2. **Cross-role business-flow smoke** — guest separation/idempotency, selected-meal leave, selected-meal calendar disable, GENERAL vs MARKET task lifecycle, market-expense creation, payment submit/approve/idempotency, Formula Engine preview non-mutation, and historical-bill provenance stability.
 3. **Refund Center lifecycle smoke** — post-billing overpayment discovery, partial cash payout, remaining-excess recalculation, whole-remainder carry-forward, current-cycle closure, and Admin/Resident history visibility.
+4. **Leave cancellation lifecycle smoke** — ownership, pending-only cancellation, Admin queue/history visibility, terminal-state enforcement, and proof that cancelled pending leave never changes meal state.
 
 These gates run in addition to migrations, zero-warning lint, unit/integration tests, the PostgreSQL + uploads disaster-recovery drill, storage-integrity checks, production build and the standalone runtime smoke. CI uploads separate server/flow diagnostics when any production smoke fails.

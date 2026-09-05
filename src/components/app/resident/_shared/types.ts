@@ -199,7 +199,7 @@ export interface LeaveRequestDto {
   reason: string;
   mealScope: "ALL_MEALS" | "SELECTED_MEALS";
   selectedMeals: { id: string; name: string }[];
-  status: "PENDING" | "APPROVED" | "REJECTED" | string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED" | string;
   reviewReason?: string | null;
   reviewedAt?: string | null;
   createdAt: string;
