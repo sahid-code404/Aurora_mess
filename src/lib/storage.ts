@@ -1,7 +1,10 @@
 /**
- * STORAGE — private object storage for payment proofs / receipts (spec §70).
+ * STORAGE — private filesystem storage for payment proofs / receipts (spec §70).
  * Validates extension AND magic bytes, 2 MB limit, random keys, sha256 checksum.
- * Files live in uploads-storage/ (never public). Served via authenticated route only.
+ * Files are never public and are served via authenticated routes only.
+ *
+ * Production MUST point UPLOAD_STORAGE_DIR at a persistent private volume. The
+ * default `uploads-storage/` path is intended for single-host/local deployments.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
@@ -9,7 +12,9 @@ import path from "node:path";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 
-const STORAGE_DIR = path.join(process.cwd(), "uploads-storage");
+export const STORAGE_DIR = process.env.UPLOAD_STORAGE_DIR
+  ? path.resolve(process.env.UPLOAD_STORAGE_DIR)
+  : path.join(process.cwd(), "uploads-storage");
 const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
 
 const MAGIC: { mime: string; ext: string; test: (b: Buffer) => boolean }[] = [
@@ -62,7 +67,7 @@ export async function storeUpload(
       sizeBytes: buffer.length,
       sha256: sha,
       uploadedByUserId,
-      scanStatus: "CLEAN", // signature-validated; production adds malware scanning
+      scanStatus: "CLEAN", // content signature/type validated; malware scanning is a separate future control
     },
   });
   return {
