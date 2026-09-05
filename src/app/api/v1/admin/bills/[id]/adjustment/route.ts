@@ -1,9 +1,8 @@
 /**
- * POST /api/v1/admin/bills/[id]/adjustment — correct a closed-period bill
+ * POST /api/v1/admin/bills/[id]/adjustment — correct a generated historical bill
  * (auth ADMIN, spec §59): {amount (decimal string, may be negative), reason}.
- * Creates an immutable BillAdjustment, updates the bill's totals and status,
- * notifies the resident. totalDue clamps at zero (credits beyond zero live in
- * the adjustment rows; the funds read model is unchanged — documented).
+ * Creates an immutable BillAdjustment, posts the matching correction journal,
+ * and recomputes FIFO bill settlement so funds, bill status and ledger stay in sync.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -14,6 +13,8 @@ import { appendOutbox, sweepOutbox } from "@/lib/outbox";
 import { formatMinor, parseDecimalToMinor } from "@/lib/money";
 import { reasonSchema } from "@/lib/validation";
 import { serializeBill } from "@/lib/domain/serialize";
+import { postJournal } from "@/lib/domain/ledger";
+import { recomputeBillSettlement } from "@/lib/domain/funds";
 
 export const dynamic = "force-dynamic";
 
@@ -42,22 +43,29 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const payload = await db.$transaction(async (tx) => {
     const bill = await tx.bill.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
-      include: { period: { select: { id: true, year: true, month: true, status: true } }, lines: { orderBy: { sortOrder: "asc" } } },
+      include: {
+        period: { select: { id: true, year: true, month: true, status: true } },
+        lines: { orderBy: { sortOrder: "asc" } },
+      },
     });
     if (!bill) throw new ApiError(CODES.NOT_FOUND, "Bill not found.", 404);
     if (bill.status === "VOIDED") {
       throw new ApiError("BILL_INVALID_STATE", "Voided bills cannot be adjusted.", 409);
     }
+    if (!['BILLED', 'REOPENED'].includes(bill.period.status)) {
+      throw new ApiError("BILL_INVALID_STATE", "Only generated historical bills can be adjusted.", 409);
+    }
 
     const newAdjustmentsMinor = bill.adjustmentsMinor + amountMinor;
-    const newTotalDue = Math.max(0, bill.totalDueMinor + amountMinor);
-    let newStatus: string;
-    if (newTotalDue <= 0) {
-      newStatus = "PAID";
-    } else if (bill.paymentsMinor > 0) {
-      newStatus = "PARTIALLY_PAID";
-    } else {
-      newStatus = bill.status === "OVERDUE" || bill.dueDate < new Date() ? "OVERDUE" : "GENERATED";
+    const newEffectiveCharge = bill.subtotalMinor + newAdjustmentsMinor;
+    if (newEffectiveCharge < 0) {
+      const maximumCreditMinor = Math.max(0, bill.subtotalMinor + bill.adjustmentsMinor);
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        "A bill credit cannot reduce the billed charge below zero.",
+        422,
+        { amount: `The largest credit available on this bill is ${formatMinor(maximumCreditMinor)}.` }
+      );
     }
 
     const adjustment = await tx.billAdjustment.create({
@@ -69,12 +77,39 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       },
     });
 
-    const updated = await tx.bill.update({
+    await tx.bill.update({
       where: { id: bill.id },
-      data: {
-        adjustmentsMinor: newAdjustmentsMinor,
-        totalDueMinor: newTotalDue,
-        status: newStatus,
+      data: { adjustmentsMinor: newAdjustmentsMinor },
+    });
+
+    const journal = await postJournal(
+      {
+        institutionId: ctx.institutionId,
+        description: `Bill adjustment ${bill.billNumber} — ${body.reason}`,
+        refType: "BILL_ADJUSTMENT",
+        refId: adjustment.id,
+        createdByUserId: ctx.user.id,
+        lines:
+          amountMinor > 0
+            ? [
+                { accountCode: "RESIDENT_FUNDS", debitMinor: amountMinor },
+                { accountCode: "MEAL_CHARGE_INCOME", creditMinor: amountMinor },
+              ]
+            : [
+                { accountCode: "MEAL_CHARGE_INCOME", debitMinor: Math.abs(amountMinor) },
+                { accountCode: "RESIDENT_FUNDS", creditMinor: Math.abs(amountMinor) },
+              ],
+      },
+      tx
+    );
+
+    await recomputeBillSettlement(tx, bill.residentId);
+
+    const updated = await tx.bill.findUniqueOrThrow({
+      where: { id: bill.id },
+      include: {
+        period: { select: { id: true, year: true, month: true, status: true } },
+        lines: { orderBy: { sortOrder: "asc" } },
       },
     });
 
@@ -88,13 +123,16 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         entityId: bill.id,
         requestId: ctx.requestId,
         reason: body.reason,
-        beforeSummary: `totalDue ${formatMinor(bill.totalDueMinor)}`,
-        afterSummary: `totalDue ${formatMinor(newTotalDue)}`,
+        beforeSummary: `charge ${formatMinor(Math.max(0, bill.subtotalMinor + bill.adjustmentsMinor))} · due ${formatMinor(bill.totalDueMinor)}`,
+        afterSummary: `charge ${formatMinor(newEffectiveCharge)} · due ${formatMinor(updated.totalDueMinor)}`,
         metadata: {
           amountMinor,
           billNumber: bill.billNumber,
           residentId: bill.residentId,
-          newTotalDueMinor: newTotalDue,
+          adjustmentsMinor: newAdjustmentsMinor,
+          newTotalDueMinor: updated.totalDueMinor,
+          journalId: journal.journalId,
+          settlementStatus: updated.status,
         },
       },
       tx
@@ -115,7 +153,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     );
 
     return {
-      bill: serializeBill({ ...updated, period: bill.period, lines: bill.lines }),
+      bill: serializeBill(updated),
       adjustment: {
         id: adjustment.id,
         billId: bill.id,
@@ -123,6 +161,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         amountFormatted: formatMinor(adjustment.amountMinor),
         reason: adjustment.reason,
         createdAt: adjustment.createdAt.toISOString(),
+        journalId: journal.journalId,
       },
     };
   });
