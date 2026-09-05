@@ -10,7 +10,7 @@
 
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Banknote, Calendar, ChevronRight, DoorOpen, Landmark, RotateCcw, ShieldOff, TrendingDown, Wallet } from "lucide-react";
+import { Banknote, Calendar, ChevronRight, DoorOpen, Landmark, ShieldOff, TrendingDown, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { PickerCapsule } from "@/components/glass/PickerCapsule";
 import GlassCard from "@/components/glass/GlassCard";
@@ -32,7 +32,6 @@ import { cn } from "@/lib/utils";
 import { errMessage, useInvalidate } from "./_shared/api";
 import { SearchField } from "./_shared/fields";
 import { Chip, FilterChips, KpiGrid } from "./_shared/chrome";
-import { RefundDialog } from "./_shared/refund-dialog";
 import { fmtDate, monthLabel, todayKey } from "./_shared/format";
 import type { FundsSummary, PolicyExemptionRow } from "./_shared/types";
 
@@ -100,7 +99,6 @@ export default function AdminFunds() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FundFilter>("DEFICIT");
   const [cancelTarget, setCancelTarget] = useState<PolicyExemptionRow | null>(null);
-  const [refundTarget, setRefundTarget] = useState<FundsData["residents"][0] | null>(null);
   const [acting, setActing] = useState(false);
   const invalidate = useInvalidate();
 
@@ -310,22 +308,6 @@ export default function AdminFunds() {
 
                     {/* Action buttons */}
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {r.availableMinor > 0 && (
-                        <motion.button
-                          type="button"
-                          whileTap={{ scale: 0.94 }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRefundTarget(r);
-                          }}
-                          aria-label={`Issue refund for ${r.fullName}`}
-                          className="glass-inset hover:glass-soft flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-semibold text-primary transition-all hover:ring-1 hover:ring-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                        >
-                          <RotateCcw className="size-3" aria-hidden />
-                          <span>Refund</span>
-                        </motion.button>
-                      )}
-
                       {/* Details pill */}
                       <motion.button
                         type="button"
@@ -416,16 +398,6 @@ export default function AdminFunds() {
         />
       )}
 
-      {refundTarget && (
-        <RefundDialog
-          open={Boolean(refundTarget)}
-          onOpenChange={(open) => !open && setRefundTarget(null)}
-          residentId={refundTarget.residentId}
-          residentName={refundTarget.fullName}
-          availableMinor={refundTarget.availableMinor}
-          onSaved={() => invalidate([FUNDS_PATH, "/api/v1/admin/payments", "/api/v1/admin/dashboard"])}
-        />
-      )}
     </StaggerGroup>
   );
 }

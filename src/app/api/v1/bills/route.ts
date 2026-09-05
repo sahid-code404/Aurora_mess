@@ -5,9 +5,11 @@
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
+import { getInstitution } from "@/lib/institution";
 import { finishPage, keysetWhere } from "@/lib/domain/http";
 import { derivePaymentStatus } from "@/lib/domain/billing";
 import { serializeBill } from "@/lib/domain/serialize";
+import { currentLocalDateMarker, effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +17,10 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const url = new URL(ctx.req.url);
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 25) || 25));
+  const institution = await getInstitution(ctx.institutionId);
+  const timeZone = institution?.timezone ?? "UTC";
+  const now = new Date();
+  const todayMarker = currentLocalDateMarker(timeZone, now);
 
   const { where, take } = keysetWhere(
     { residentId: ctx.user.id, status: { not: "VOIDED" } },
@@ -38,15 +44,11 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
     where: { residentId: ctx.user.id, status: { in: ["GENERATED", "PARTIALLY_PAID", "OVERDUE"] } },
     select: { status: true, dueDate: true },
   });
-  const overdueCount = unsettled.filter(
-    (b) => b.status === "OVERDUE" || b.dueDate < new Date()
-  ).length;
-  const paymentStatus = derivePaymentStatus(unsettled);
+  const overdueCount = unsettled.filter((b) => b.dueDate < todayMarker).length;
+  const paymentStatus = derivePaymentStatus(unsettled, timeZone, now);
 
-  const now = new Date();
   const sortedItems = [...page.items].sort((a, b) => {
-    const isOverdue = (bill: typeof a) =>
-      bill.status === "OVERDUE" || (bill.totalDueMinor > 0 && bill.dueDate < now);
+    const isOverdue = (bill: typeof a) => bill.totalDueMinor > 0 && bill.dueDate < todayMarker;
     const isActionNeeded = (bill: typeof a) => bill.totalDueMinor > 0;
 
     const getRank = (bill: typeof a) => {
@@ -67,7 +69,10 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   });
 
   return {
-    data: sortedItems.map((b) => serializeBill(b)),
+    data: sortedItems.map((b) => ({
+      ...serializeBill(b),
+      status: effectiveBillStatus(b, timeZone, now),
+    })),
     meta: {
       nextCursor: page.nextCursor,
       overdueCount,

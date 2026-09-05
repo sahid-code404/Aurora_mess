@@ -3,7 +3,8 @@
  *
  * Authoritative definitions:
  *   creditsMinor        = Σ approved payments (Dr CASH / Cr RESIDENT_FUNDS)
- *   chargesMinor        = Σ subtotal of non-voided bills (Dr RESIDENT_FUNDS / Cr income)
+ *   chargesMinor        = Σ effective charge of non-voided bills,
+ *                         max(0, subtotal + immutable adjustments) per bill
  *   refundsIssuedMinor  = Σ COMPLETED ISSUE_REFUND refunds (cash returned to resident)
  *   carryForwardMinor   = Σ COMPLETED CARRY_FORWARD refunds — INFORMATIONAL ONLY:
  *                         the credit stays on the ledger for future bills, so it is
@@ -32,6 +33,7 @@ import {
   type DeficitPolicyState,
 } from "@/lib/domain/policy/deficit-policy";
 import { resolveActiveDeficitRuleSet } from "@/lib/domain/rules/deficit-rules";
+import { effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export type { DeficitPolicyState } from "@/lib/domain/policy/deficit-policy";
 
@@ -62,8 +64,7 @@ export async function residentFundsSummary(residentId: string, client: any = db)
   const [
     approvedAgg,
     pendingAgg,
-    billAgg,
-    unsettledBills,
+    billRows,
     refundsIssuedAgg,
     carryForwardAgg,
     activeExemption,
@@ -73,14 +74,15 @@ export async function residentFundsSummary(residentId: string, client: any = db)
       _sum: { amountMinor: true },
     }),
     client.payment.aggregate({ where: { residentId, status: "PENDING" }, _sum: { amountMinor: true } }),
-    client.bill.aggregate({
-      where: { residentId, status: { not: "VOIDED" } },
-      _sum: { subtotalMinor: true },
-    }),
     client.bill.findMany({
-      where: { residentId, status: { in: UNSETTLED } },
-      orderBy: { dueDate: "asc" },
-      select: { totalDueMinor: true, dueDate: true },
+      where: { residentId, status: { not: "VOIDED" } },
+      select: {
+        subtotalMinor: true,
+        adjustmentsMinor: true,
+        totalDueMinor: true,
+        dueDate: true,
+        status: true,
+      },
     }),
     client.refund.aggregate({
       where: { residentId, status: "COMPLETED", mode: "ISSUE_REFUND" },
@@ -102,12 +104,20 @@ export async function residentFundsSummary(residentId: string, client: any = db)
 
   const creditsMinor = approvedAgg._sum.amountMinor ?? 0;
   const pendingPaymentsMinor = pendingAgg._sum.amountMinor ?? 0;
-  const chargesMinor = billAgg._sum.subtotalMinor ?? 0;
+  const chargesMinor = billRows.reduce(
+    (sum: number, bill: { subtotalMinor: number; adjustmentsMinor: number }) =>
+      sum + Math.max(0, bill.subtotalMinor + bill.adjustmentsMinor),
+    0
+  );
   const refundsIssuedMinor = refundsIssuedAgg._sum.amountMinor ?? 0;
   const carryForwardMinor = carryForwardAgg._sum.amountMinor ?? 0;
 
+  const unsettledBills = billRows
+    .filter((bill: { status: string; totalDueMinor: number }) => UNSETTLED.includes(bill.status) && bill.totalDueMinor > 0)
+    .sort((a: { dueDate: Date }, b: { dueDate: Date }) => a.dueDate.getTime() - b.dueDate.getTime());
+
   const availableMinor = creditsMinor - chargesMinor - refundsIssuedMinor;
-  const amountToPayMinor = unsettledBills.reduce((s, b) => s + b.totalDueMinor, 0);
+  const amountToPayMinor = unsettledBills.reduce((s: number, b: { totalDueMinor: number }) => s + b.totalDueMinor, 0);
   const deficitMinor = Math.max(0, -availableMinor);
 
   // Legacy policy remains AUTHORITATIVE during shadow mode.
@@ -220,11 +230,20 @@ export type BillApplication = {
 function deriveBillStatus(
   bill: { dueDate: Date },
   totalDueMinor: number,
-  appliedMinor: number
+  appliedMinor: number,
+  timeZone: string,
+  now: Date
 ): string {
-  if (totalDueMinor === 0) return "PAID";
-  if (bill.dueDate < new Date()) return "OVERDUE";
-  return appliedMinor > 0 ? "PARTIALLY_PAID" : "GENERATED";
+  return effectiveBillStatus(
+    {
+      status: "GENERATED",
+      dueDate: bill.dueDate,
+      totalDueMinor,
+      paymentsMinor: appliedMinor,
+    },
+    timeZone,
+    now
+  );
 }
 
 /**
@@ -244,6 +263,15 @@ export async function recomputeBillSettlement(
   client: any,
   residentId: string
 ): Promise<{ poolMinor: number; changedBills: BillApplication[]; unappliedMinor: number }> {
+  const resident = await client.user.findUnique({
+    where: { id: residentId },
+    select: { institutionId: true },
+  });
+  if (!resident) throw new Error("RESIDENT_NOT_FOUND");
+  const institution = await getInstitution(resident.institutionId);
+  const timeZone = institution?.timezone ?? "UTC";
+  const statusNow = new Date();
+
   const poolAgg = await client.payment.aggregate({
     where: { residentId, status: "APPROVED" },
     _sum: { amountMinor: true },
@@ -261,7 +289,7 @@ export async function recomputeBillSettlement(
     const capacity = Math.max(0, bill.subtotalMinor + bill.adjustmentsMinor);
     const appliedMinor = Math.min(remaining, capacity);
     const totalDueMinor = Math.max(0, capacity - appliedMinor);
-    const status = deriveBillStatus(bill, totalDueMinor, appliedMinor);
+    const status = deriveBillStatus(bill, totalDueMinor, appliedMinor, timeZone, statusNow);
     if (appliedMinor !== bill.paymentsMinor || totalDueMinor !== bill.totalDueMinor || status !== bill.status) {
       await client.bill.update({
         where: { id: bill.id },

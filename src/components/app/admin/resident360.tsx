@@ -43,13 +43,12 @@ import { GlassButton } from "@/components/glass/GlassButton";
 import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
 import { useApiQuery, postJson, patchJson } from "@/hooks/use-api-query";
 import { useSession } from "@/hooks/use-session";
-import { goBack } from "@/hooks/use-hash-route";
+import { goBack, navigateTo } from "@/hooks/use-hash-route";
 import { ApiClientError } from "@/lib/api";
 import { gradientForName, initialsOf } from "@/lib/gradients";
 import { cn } from "@/lib/utils";
 import { errMessage, useInvalidate } from "./_shared/api";
 import { Chip, DetailDialog, KpiGrid } from "./_shared/chrome";
-import { RefundDialog } from "./_shared/refund-dialog";
 import { TextField } from "./_shared/fields";
 import { fmtDate, fmtDateTime, fmtMinor, timeAgo } from "./_shared/format";
 import type { Resident360 } from "./_shared/types";
@@ -109,7 +108,6 @@ export default function AdminResident360({ id }: { id?: string }) {
   const [acting, setActing] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [exemptionOpen, setExemptionOpen] = useState(false);
-  const [refundOpen, setRefundOpen] = useState(false);
   const invalidate = useInvalidate();
   const { institution } = useSession();
   const tz = institution?.timezone ?? "Asia/Kolkata";
@@ -237,14 +235,14 @@ export default function AdminResident360({ id }: { id?: string }) {
                   Reactivate
                 </GlassButton>
               )}
-              {funds && funds.availableMinor > 0 && (
+              {funds && bills.length > 0 && funds.availableMinor > 0 && (
                 <GlassButton
                   variant="primary"
                   size="sm"
                   icon={<RotateCcw className="size-3.5" />}
-                  onClick={() => setRefundOpen(true)}
+                  onClick={() => navigateTo("/admin/payments/refunds")}
                 >
-                  Issue refund
+                  Refund Center
                 </GlassButton>
               )}
               <GlassButton variant="secondary" size="sm" icon={<Pencil className="size-3.5" />} onClick={() => setEditOpen(true)}>
@@ -564,15 +562,15 @@ export default function AdminResident360({ id }: { id?: string }) {
                   {funds.graceUntilIso && <Chip tone="warning">Grace {fmtDate(funds.graceUntilIso)}</Chip>}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {funds.availableMinor > 0 && (
+                  {bills.length > 0 && funds.availableMinor > 0 && (
                     <GlassButton
                       variant="primary"
                       size="sm"
                       className="shrink-0 whitespace-nowrap"
-                      onClick={() => setRefundOpen(true)}
+                      onClick={() => navigateTo("/admin/payments/refunds")}
                       icon={<RotateCcw className="size-3" />}
                     >
-                      Issue refund
+                      Refund Center
                     </GlassButton>
                   )}
                   <GlassButton
@@ -593,14 +591,14 @@ export default function AdminResident360({ id }: { id?: string }) {
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Refund History
                 </h4>
-                {funds.availableMinor > 0 && (
+                {bills.length > 0 && funds.availableMinor > 0 && (
                   <button
                     type="button"
-                    onClick={() => setRefundOpen(true)}
+                    onClick={() => navigateTo("/admin/payments/refunds")}
                     className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
                   >
                     <RotateCcw className="size-3" />
-                    <span>New refund</span>
+                    <span>Refund Center</span>
                   </button>
                 )}
               </div>
@@ -911,21 +909,6 @@ export default function AdminResident360({ id }: { id?: string }) {
         onSaved={() => invalidate([`/api/v1/admin/residents/${id}`, "/api/v1/admin/funds", "/api/v1/admin/residents"])}
       />
 
-      <RefundDialog
-        open={refundOpen}
-        onOpenChange={setRefundOpen}
-        residentId={id}
-        residentName={profile.fullName}
-        availableMinor={funds?.availableMinor ?? 0}
-        onSaved={() =>
-          invalidate([
-            `/api/v1/admin/residents/${id}`,
-            "/api/v1/admin/funds",
-            "/api/v1/admin/payments",
-            "/api/v1/admin/dashboard",
-          ])
-        }
-      />
     </StaggerGroup>
   );
 }

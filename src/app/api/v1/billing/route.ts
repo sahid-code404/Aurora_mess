@@ -17,6 +17,7 @@ import { FormulaAst } from "@/lib/domain/formula/ast";
 import { evaluateFormula } from "@/lib/domain/formula/evaluator";
 import { residentFundsSummary } from "@/lib/domain/funds";
 import { serializeBill } from "@/lib/domain/serialize";
+import { currentLocalDateMarker, effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,8 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const inst = await getInstitution(ctx.institutionId);
   if (!inst) throw new ApiError(CODES.NOT_FOUND, "Institution not found.", 404);
   const tz = inst.timezone;
+  const now = new Date();
+  const todayMarker = currentLocalDateMarker(tz, now);
 
   const period = await getOrCreateOpenPeriod(ctx.institutionId, tz);
   const bounds = currentPeriodBounds(tz);
@@ -117,9 +120,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
       policyState: summary.policyState,
       myBills: [...myBills]
         .sort((a, b) => {
-          const now = new Date();
-          const isOverdue = (bill: typeof a) =>
-            bill.status === "OVERDUE" || (bill.totalDueMinor > 0 && bill.dueDate < now);
+          const isOverdue = (bill: typeof a) => bill.totalDueMinor > 0 && bill.dueDate < todayMarker;
           const isActionNeeded = (bill: typeof a) => bill.totalDueMinor > 0;
 
           const getRank = (bill: typeof a) => {
@@ -138,7 +139,10 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
 
           return b.generatedAt.getTime() - a.generatedAt.getTime();
         })
-        .map((b) => serializeBill(b)),
+        .map((b) => ({
+          ...serializeBill(b),
+          status: effectiveBillStatus(b, tz, now),
+        })),
     },
   };
 });

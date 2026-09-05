@@ -7,8 +7,10 @@ import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { formatMinor } from "@/lib/money";
+import { getInstitution } from "@/lib/institution";
 import { monthLabel } from "@/lib/domain/billing";
 import { verifyBillingPeriodIntegrity } from "@/lib/domain/billing-integrity";
+import { effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +21,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   if (!period || period.institutionId !== ctx.institutionId) {
     throw new ApiError(CODES.NOT_FOUND, "Billing period not found.", 404);
   }
+  const institution = await getInstitution(ctx.institutionId);
+  const timeZone = institution?.timezone ?? "UTC";
+  const statusNow = new Date();
 
   const [snapshot, bills, integrity] = await Promise.all([
     db.billingSnapshot.findUnique({ where: { billingPeriodId: period.id } }),
@@ -98,7 +103,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         billNumber: bill.billNumber,
         residentId: bill.residentId,
         residentName: nameMap.get(bill.residentId) ?? "Resident",
-        status: bill.status,
+        status: effectiveBillStatus(bill, timeZone, statusNow),
         residentMealCount: bill.residentMealCount,
         guestMealCount: bill.guestMealCount,
         subtotalMinor: bill.subtotalMinor,

@@ -49,7 +49,7 @@ const TONE_ORB: Record<KpiTone, string> = {
 
 export interface KpiCardProps {
   label: string;
-  value: string;
+  value: string | number | null | undefined;
   sub?: React.ReactNode;
   icon?: React.ReactNode;
   delta?: KpiDelta;
@@ -86,6 +86,13 @@ function parseDisplay(value: string): ParsedDisplay | null {
     decimals: numStr.includes(".") ? (numStr.split(".")[1]?.length ?? 0) : 0,
     target,
   };
+}
+
+function safeKpiValue(value: KpiCardProps["value"]): string {
+  if (value == null) return "—";
+  const text = String(value).trim();
+  if (!text || ["undefined", "null", "NaN", "Infinity", "-Infinity"].includes(text)) return "—";
+  return text;
 }
 
 function AnimatedNumber({ value, className }: { value: string; className?: string }) {
@@ -173,7 +180,8 @@ export function KpiCard({
   index = 0,
   className,
 }: KpiCardProps) {
-  const fontSizeClass = useMemo(() => getKpiFontSize(value), [value]);
+  const displayValue = useMemo(() => safeKpiValue(value), [value]);
+  const fontSizeClass = useMemo(() => getKpiFontSize(displayValue), [displayValue]);
 
   if (loading) {
     return <KpiSkeleton className={className} />;
@@ -203,7 +211,7 @@ export function KpiCard({
         {label}
       </p>
       <AnimatedNumber
-        value={value}
+        value={displayValue}
         className={cn(
           "kpi-num font-display mt-1 block truncate font-bold tracking-tight leading-tight transition-all duration-200",
           fontSizeClass
