@@ -20,9 +20,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.4
-      - name: Apply billing lifecycle consistency patch
-        run: python3 .github/phase18_billing_lifecycle.py
-      - name: Validate changed TypeScript
+      - name: Update existing refund regression
+        run: python3 .github/phase18_test_patch.py
+      - name: Validate TypeScript
         run: |
           bun install --frozen-lockfile
           bun run db:generate
@@ -31,10 +31,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src
+          git add tests
           if git diff --cached --quiet; then
             echo "No patch changes"
             exit 0
           fi
-          git commit -m "Phase 18: apply carry-forward credit during billing"
+          git commit -m "Phase 18: update refund concurrency regression"
           git push origin HEAD:feat/phase18-flow-logic-polish
