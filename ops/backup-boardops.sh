@@ -55,8 +55,9 @@ mkdir -p "$BACKUP_ROOT" "$PAYLOAD_DIR"
 # A backup is not recoverable when PostgreSQL references proof/receipt bytes
 # that are missing or corrupt. Validate every authoritative StoredFile row
 # before publishing a database + uploads pair. Harmless unreferenced filesystem
-# orphans are intentionally ignored by the verifier.
-UPLOAD_STORAGE_DIR="$UPLOAD_DIR" bun scripts/maintenance/verify-storage-integrity.ts
+# orphans are intentionally ignored by the verifier. Send diagnostics to stderr
+# so stdout remains exactly the final archive path for automation.
+UPLOAD_STORAGE_DIR="$UPLOAD_DIR" bun scripts/maintenance/verify-storage-integrity.ts >&2
 
 # PostgreSQL custom format preserves schema/data and is verifiable with pg_restore --list.
 pg_dump \
