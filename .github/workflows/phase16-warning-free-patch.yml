@@ -1,0 +1,32 @@
+name: Phase 16 warning-free patch
+
+on:
+  push:
+    branches: [fix/phase16-warning-free-ci]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/phase16-warning-free-ci
+          fetch-depth: 0
+
+      - name: Apply patch
+        run: python3 scripts/phase16-warning-free-patch.py
+
+      - name: Commit patch if needed
+        run: |
+          if git diff --quiet; then
+            echo "No patch changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/app/admin/tasks.tsx package.json
+          git commit -m "Phase 16: make lint warning-free"
+          git push origin HEAD:fix/phase16-warning-free-ci
