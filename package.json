@@ -12,6 +12,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:reset:dev": "prisma migrate reset",
+    "db:seed:dev": "bun scripts/seed.ts",
     "maintenance:rate-limits": "bun scripts/maintenance/prune-rate-limits.ts"
   },
   "dependencies": {
