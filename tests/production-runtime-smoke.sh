@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CHECK_MODE="${1:-all}"
+case "$CHECK_MODE" in
+  all|process|readiness|auth) ;;
+  *) echo "unknown production smoke mode: $CHECK_MODE" >&2; exit 2 ;;
+esac
+
 PORT="${BOARDOPS_SMOKE_PORT:-3100}"
 HOST="127.0.0.1"
 BASE_URL="http://${HOST}:${PORT}"
@@ -19,7 +25,7 @@ cleanup() {
 trap cleanup EXIT
 
 fail() {
-  echo "production runtime smoke failed: $*" >&2
+  echo "production runtime smoke failed ($CHECK_MODE): $*" >&2
   echo "--- standalone server log ---" >&2
   cat "$SERVER_LOG" >&2 || true
   exit 1
@@ -94,7 +100,7 @@ export ENABLE_PREVIEW_BEARER_AUTH=0
 bun .next/standalone/server.js >"$SERVER_LOG" 2>&1 &
 SERVER_PID="$!"
 
-# Wait for the actual standalone server, not an imported route or dev server.
+# Every stage first proves the actual standalone process boots and serves HTTP.
 live_status=""
 for _ in $(seq 1 60); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -112,30 +118,31 @@ if [ "$live_status" != "200" ]; then
 fi
 assert_json live
 
-# UI shell is served by the production standalone artifact.
-request_status 200 "application root" "$BASE_URL/"
+if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "process" ]; then
+  request_status 200 "application root" "$BASE_URL/"
+fi
 
-# Readiness must prove the built application can reach PostgreSQL.
-request_status 200 "database readiness" "$BASE_URL/api/v1/health/ready"
-assert_json ready
+if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "readiness" ]; then
+  request_status 200 "database readiness" "$BASE_URL/api/v1/health/ready"
+  assert_json ready
+fi
 
-# An ambient request without a valid session must remain unauthenticated.
-request_status 401 "unauthenticated session" "$BASE_URL/api/v1/auth/me"
-assert_json unauthenticated
+if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "auth" ]; then
+  request_status 401 "unauthenticated session" "$BASE_URL/api/v1/auth/me"
+  assert_json unauthenticated
 
-# Normal production login must not expose the preview bearer token.
-request_status 401 "invalid same-origin login" \
-  -X POST "$BASE_URL/api/v1/auth/login" \
-  -H "Origin: $BASE_URL" \
-  -H "Content-Type: application/json" \
-  --data "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"SmokePassword123\"}"
-assert_json invalid_credentials_no_token
+  request_status 401 "invalid same-origin login" \
+    -X POST "$BASE_URL/api/v1/auth/login" \
+    -H "Origin: $BASE_URL" \
+    -H "Content-Type: application/json" \
+    --data "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"SmokePassword123\"}"
+  assert_json invalid_credentials_no_token
 
-# The centralized guard must reject an actual cross-site mutation over HTTP.
-request_status 403 "cross-site mutation" \
-  -X POST "$BASE_URL/api/v1/auth/logout" \
-  -H "Origin: https://attacker.invalid" \
-  -H "Sec-Fetch-Site: cross-site"
-assert_json forbidden
+  request_status 403 "cross-site mutation" \
+    -X POST "$BASE_URL/api/v1/auth/logout" \
+    -H "Origin: https://attacker.invalid" \
+    -H "Sec-Fetch-Site: cross-site"
+  assert_json forbidden
+fi
 
-echo "production standalone runtime smoke passed"
+echo "production standalone runtime smoke passed ($CHECK_MODE)"
