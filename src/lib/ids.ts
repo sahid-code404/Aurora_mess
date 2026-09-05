@@ -17,7 +17,7 @@ import { db } from "@/lib/db";
 
 type SequenceClient = Pick<Prisma.TransactionClient, "$queryRaw">;
 type SequencePrefix = "PAY" | "EXP" | "BILL";
-type SequenceRow = { allocated: number };
+type SequenceRangeRow = { startAllocated: number };
 type MaxSequenceRow = { maxSequence: number | null };
 
 function pad(n: number, width: number): string {
@@ -60,33 +60,67 @@ async function highestVisibleSequence(
   return maxSequence;
 }
 
+/**
+ * Atomically reserve one contiguous range from a prefix/month sequence.
+ *
+ * The existing row's `nextValue` is the first unallocated value. On conflict we
+ * advance it by the entire requested range in one row-locked UPSERT, while
+ * GREATEST also catches a stale sequence row up to identifiers already visible
+ * inside the caller's transaction. This is what lets two different billing
+ * transactions reserve non-overlapping BILL ranges for the same month.
+ */
+async function reserveSequences(
+  prefix: SequencePrefix,
+  stamp: string,
+  count: number,
+  client: SequenceClient
+): Promise<number[]> {
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("DISPLAY_NUMBER_RESERVATION_INVALID");
+  }
+  if (count === 0) return [];
+
+  const key = `${prefix}:${stamp}`;
+  const highestVisible = await highestVisibleSequence(prefix, stamp, client);
+  const firstUnallocatedAfterVisible = highestVisible + 1;
+  const storedNextValueAfterReservation = firstUnallocatedAfterVisible + count;
+  if (!Number.isSafeInteger(storedNextValueAfterReservation)) {
+    throw new Error("DISPLAY_NUMBER_SEQUENCE_INVALID");
+  }
+
+  const rows = await client.$queryRaw<SequenceRangeRow[]>(Prisma.sql`
+    INSERT INTO "DisplayNumberSequence" ("key", "nextValue", "updatedAt")
+    VALUES (${key}, ${storedNextValueAfterReservation}, CURRENT_TIMESTAMP)
+    ON CONFLICT ("key") DO UPDATE
+    SET
+      "nextValue" = GREATEST(
+        "DisplayNumberSequence"."nextValue" + ${count},
+        EXCLUDED."nextValue"
+      ),
+      "updatedAt" = CURRENT_TIMESTAMP
+    RETURNING ("nextValue" - ${count})::INTEGER AS "startAllocated"
+  `);
+
+  const startAllocated = rows[0]?.startAllocated;
+  const lastAllocated = (startAllocated ?? 0) + count - 1;
+  if (
+    !Number.isSafeInteger(startAllocated) ||
+    (startAllocated ?? 0) <= 0 ||
+    !Number.isSafeInteger(lastAllocated)
+  ) {
+    throw new Error("DISPLAY_NUMBER_SEQUENCE_INVALID");
+  }
+
+  return Array.from({ length: count }, (_, index) => (startAllocated as number) + index);
+}
+
 async function nextSequence(
   prefix: SequencePrefix,
   stamp: string,
   client: SequenceClient
 ): Promise<number> {
-  const key = `${prefix}:${stamp}`;
-  const highestVisible = await highestVisibleSequence(prefix, stamp, client);
-  const firstUnallocatedAfterVisible = highestVisible + 1;
-  const storedNextValueAfterAllocation = firstUnallocatedAfterVisible + 1;
-
-  const rows = await client.$queryRaw<SequenceRow[]>(Prisma.sql`
-    INSERT INTO "DisplayNumberSequence" ("key", "nextValue", "updatedAt")
-    VALUES (${key}, ${storedNextValueAfterAllocation}, CURRENT_TIMESTAMP)
-    ON CONFLICT ("key") DO UPDATE
-    SET
-      "nextValue" = GREATEST(
-        "DisplayNumberSequence"."nextValue" + 1,
-        EXCLUDED."nextValue"
-      ),
-      "updatedAt" = CURRENT_TIMESTAMP
-    RETURNING "nextValue" - 1 AS "allocated"
-  `);
-
-  const allocated = rows[0]?.allocated;
-  if (!Number.isSafeInteger(allocated) || allocated <= 0) {
-    throw new Error("DISPLAY_NUMBER_SEQUENCE_INVALID");
-  }
+  const [allocated] = await reserveSequences(prefix, stamp, 1, client);
+  if (!allocated) throw new Error("DISPLAY_NUMBER_SEQUENCE_INVALID");
   return allocated;
 }
 
@@ -113,4 +147,16 @@ export async function nextBillNumber(
 ): Promise<string> {
   const stamp = `${year}${pad(month, 2)}`;
   return `BILL-${stamp}-${pad(await nextSequence("BILL", stamp, client), 4)}`;
+}
+
+/** Reserve a contiguous set of bill numbers in one atomic sequence operation. */
+export async function nextBillNumbers(
+  year: number,
+  month: number,
+  count: number,
+  client: SequenceClient = db
+): Promise<string[]> {
+  const stamp = `${year}${pad(month, 2)}`;
+  const allocated = await reserveSequences("BILL", stamp, count, client);
+  return allocated.map((sequence) => `BILL-${stamp}-${pad(sequence, 4)}`);
 }
