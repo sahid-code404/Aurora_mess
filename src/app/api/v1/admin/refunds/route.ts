@@ -104,14 +104,26 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   const inst = await getInstitution(ctx.institutionId);
   const bounds = currentPeriodBounds(inst?.timezone ?? "UTC");
-  const thisMonthAgg = await db.refund.aggregate({
-    _sum: { amountMinor: true },
-    where: {
-      institutionId: ctx.institutionId,
-      status: "COMPLETED",
-      createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
-    },
-  });
+  const [cashThisMonthAgg, carryThisMonthAgg] = await Promise.all([
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+  ]);
 
   const sortedItems = [...page.items].sort((a, b) => {
     const getRank = (status: string) => (status === "PENDING" || status === "PROCESSING" ? 0 : 1);
@@ -128,8 +140,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     })),
     meta: {
       nextCursor: page.nextCursor,
-      refundsThisMonth: thisMonthAgg._sum.amountMinor ?? 0,
-      refundsThisMonthFormatted: formatMinor(thisMonthAgg._sum.amountMinor ?? 0),
+      refundsThisMonth: cashThisMonthAgg._sum.amountMinor ?? 0,
+      refundsThisMonthFormatted: formatMinor(cashThisMonthAgg._sum.amountMinor ?? 0),
+      carriedForwardThisMonth: carryThisMonthAgg._sum.amountMinor ?? 0,
+      carriedForwardThisMonthFormatted: formatMinor(carryThisMonthAgg._sum.amountMinor ?? 0),
     },
   };
 });

@@ -81,7 +81,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     : [];
   const nameMap = new Map(profiles.map((p) => [p.userId, p.fullName]));
 
-  const [receivedAgg, pendingCount, refundsAgg, generatedBillCount] = await Promise.all([
+  const [receivedAgg, pendingCount, refundsAgg, carryForwardAgg, generatedBillCount] = await Promise.all([
     db.payment.aggregate({
       _sum: { amountMinor: true },
       where: {
@@ -96,6 +96,16 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       where: {
         institutionId: ctx.institutionId,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
         createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
@@ -123,8 +133,11 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       receivedThisMonth: receivedAgg._sum.amountMinor ?? 0,
       receivedThisMonthFormatted: formatMinor(receivedAgg._sum.amountMinor ?? 0),
       pendingApproval: pendingCount,
+      // Refund KPIs are cash outflow only. Carry-forward is retained resident credit.
       refundsThisMonth: refundsAgg._sum.amountMinor ?? 0,
       refundsThisMonthFormatted: formatMinor(refundsAgg._sum.amountMinor ?? 0),
+      carriedForwardThisMonth: carryForwardAgg._sum.amountMinor ?? 0,
+      carriedForwardThisMonthFormatted: formatMinor(carryForwardAgg._sum.amountMinor ?? 0),
       hasGeneratedBills: generatedBillCount > 0,
     },
   };

@@ -401,7 +401,7 @@ export default function ResidentPayments() {
                   ? `${meta.refundPendingCount} Pending`
                   : meta?.refundsThisMonthFormatted ?? "₹0.00"
               }
-              sub={meta?.refundPendingCount ? "In review" : (meta?.refundsThisMonth ?? 0) > 0 ? "Processed" : "No refunds"}
+              sub={meta?.refundPendingCount ? "In review" : (meta?.refundsThisMonth ?? 0) > 0 ? "Cash returned" : "No cash refunds"}
               icon={<RotateCcw />}
               tone="primary"
               glow="primary"
