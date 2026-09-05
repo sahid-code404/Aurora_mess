@@ -6,6 +6,7 @@ import { formatMinor } from "@/lib/money";
 import { getInstitution } from "@/lib/institution";
 import { postJournal } from "@/lib/domain/ledger";
 import { residentFundsSummary } from "@/lib/domain/funds";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 
 export type RefundMode = "CARRY_FORWARD" | "ISSUE_REFUND";
 
@@ -172,12 +173,12 @@ export async function refundEligibilityForResident(
 /**
  * Create a refund atomically.
  *
- * The eligibility/available-credit read and refund write run at SERIALIZABLE
- * isolation so two admins cannot spend the same resident credit concurrently.
- * ISSUE_REFUND creates the domain row first as PROCESSING, posts a journal that
- * references the refund ID itself, then marks the row COMPLETED. Any failure
- * rolls the entire transaction back, so PROCESSING is never left behind by a
- * synchronous request failure.
+ * The resident financial mutex is acquired before eligibility is read, joining
+ * refunds to the same ordering as payment approve/void, bill adjustments and
+ * billing generation. SERIALIZABLE isolation remains as defense in depth for
+ * concurrent refund decisions. ISSUE_REFUND creates the domain row first as
+ * PROCESSING, posts a journal that references the refund ID itself, then marks
+ * the row COMPLETED. Any failure rolls the entire transaction back.
  */
 export async function createRefund(input: CreateRefundInput) {
   // residentFundsSummary reads institution settings through the cached
@@ -190,6 +191,11 @@ export async function createRefund(input: CreateRefundInput) {
       include: { profile: { select: { fullName: true } } },
     });
     if (!resident) throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
+
+    // This must precede every eligibility/payment/bill read. A billing run or
+    // another settlement mutation that already owns the resident mutex commits
+    // first; this SERIALIZABLE retry then evaluates the new committed state.
+    await lockResidentFinancialMutation(tx, input.institutionId, resident.id);
 
     if (input.paymentId) {
       const payment = await tx.payment.findFirst({
@@ -319,8 +325,8 @@ export async function createRefund(input: CreateRefundInput) {
       tx
     );
 
-    // Defense in depth. SERIALIZABLE isolation is the concurrency guarantee;
-    // this assertion also catches future calculation changes that could make a
+    // Defense in depth. SERIALIZABLE isolation is still retained; this
+    // assertion also catches future calculation changes that could make a
     // successful cash refund overdraw resident credit within the same transaction.
     const summaryAfter = await residentFundsSummary(resident.id, tx);
     if (summaryAfter.availableMinor < 0) {
