@@ -3,7 +3,8 @@
  *
  * A resident appears only after at least one authoritative bill is generated,
  * all current charges/refunds are accounted for, and positive excess credit
- * remains unresolved for the latest bill cycle.
+ * remains unresolved for the latest bill cycle. Historical/departed residents
+ * remain eligible: deactivation must never strand money owed back to them.
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
@@ -20,7 +21,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     where: {
       institutionId: ctx.institutionId,
       role: "RESIDENT",
-      status: "ACTIVE",
+      // ACTIVE is the normal case. INACTIVE/PENDING_DELETION remain here
+      // because historical bills and excess credit survive account lifecycle
+      // changes. Pre-approval/rejected accounts cannot have legitimate bills.
+      status: { in: ["ACTIVE", "INACTIVE", "PENDING_DELETION"] },
       ...(q
         ? {
             OR: [
