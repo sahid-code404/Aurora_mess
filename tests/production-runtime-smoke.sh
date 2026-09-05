@@ -3,7 +3,7 @@ set -euo pipefail
 
 CHECK_MODE="${1:-all}"
 case "$CHECK_MODE" in
-  all|process|readiness|auth) ;;
+  all|process|readiness|session|login|csrf) ;;
   *) echo "unknown production smoke mode: $CHECK_MODE" >&2; exit 2 ;;
 esac
 
@@ -127,17 +127,21 @@ if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "readiness" ]; then
   assert_json ready
 fi
 
-if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "auth" ]; then
+if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "session" ]; then
   request_status 401 "unauthenticated session" "$BASE_URL/api/v1/auth/me"
   assert_json unauthenticated
+fi
 
+if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "login" ]; then
   request_status 401 "invalid same-origin login" \
     -X POST "$BASE_URL/api/v1/auth/login" \
     -H "Origin: $BASE_URL" \
     -H "Content-Type: application/json" \
     --data "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"SmokePassword123\"}"
   assert_json invalid_credentials_no_token
+fi
 
+if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "csrf" ]; then
   request_status 403 "cross-site mutation" \
     -X POST "$BASE_URL/api/v1/auth/logout" \
     -H "Origin: https://attacker.invalid" \
