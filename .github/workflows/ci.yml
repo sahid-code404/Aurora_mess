@@ -89,5 +89,11 @@ jobs:
       - name: Smoke standalone PostgreSQL readiness
         run: bash tests/production-runtime-smoke.sh readiness
 
-      - name: Smoke standalone auth and CSRF boundaries
-        run: bash tests/production-runtime-smoke.sh auth
+      - name: Smoke standalone unauthenticated session
+        run: bash tests/production-runtime-smoke.sh session
+
+      - name: Smoke standalone production login transport
+        run: bash tests/production-runtime-smoke.sh login
+
+      - name: Smoke standalone CSRF boundary
+        run: bash tests/production-runtime-smoke.sh csrf
