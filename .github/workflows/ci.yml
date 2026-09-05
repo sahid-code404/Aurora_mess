@@ -69,6 +69,14 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      - name: Setup PostgreSQL 17 recovery client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          /usr/lib/postgresql/17/bin/pg_restore --version
+
       - name: Deployment runtime guards
         run: bash tests/database-runtime-build.sh
 
