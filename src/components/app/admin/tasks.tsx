@@ -537,9 +537,14 @@ function TaskDetailDialog({
     try {
       await postJson(`${SUBMISSIONS_PATH}/${sub.id}/${kind}`, kind === "reject" ? { reason } : reason ? { reason } : {});
       onReviewDone();
-      toast.success(kind === "approve" ? "Expense created and posted" : "Submission rejected", {
-        description: `${currentTask.residentName} · ${currentTask.description}`,
-      });
+      toast.success(
+        kind === "approve"
+          ? currentTask.taskType === "MARKET_PURCHASE"
+            ? "Expense created and posted"
+            : "Normal task completion approved"
+          : "Submission rejected",
+        { description: `${currentTask.residentName} · ${currentTask.description}` }
+      );
       setConfirm(null);
       onClose();
     } catch (err) {
@@ -614,14 +619,18 @@ function TaskDetailDialog({
             <div className="border-t border-border/20 pt-3 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Submission</p>
               <div className="space-y-0.5">
-                <KeyValue label="Claimed total" value={<Money minor={sub.claimedTotalMinor} className="font-bold text-foreground" />} />
+                {currentTask.taskType === "MARKET_PURCHASE" && (
+                  <KeyValue label="Claimed total" value={<Money minor={sub.claimedTotalMinor} className="font-bold text-foreground" />} />
+                )}
                 <KeyValue label="Submitted on" value={fmtDateTime(sub.submittedAt, tz)} />
                 {sub.comment && <KeyValue label="Comment" value={sub.comment} />}
                 {currentTask.adminReviewReason && <KeyValue label="Review note" value={currentTask.adminReviewReason} />}
               </div>
               {sub.proofFileId && (
                 <div className="mt-2.5">
-                  <p className="text-xs text-muted-foreground mb-1.5 font-medium">Proof of purchase</p>
+                  <p className="text-xs text-muted-foreground mb-1.5 font-medium">
+                    {currentTask.taskType === "MARKET_PURCHASE" ? "Proof of purchase" : "Completion proof"}
+                  </p>
                   <ProofImage fileId={sub.proofFileId} alt={`Proof for ${currentTask.description}`} />
                 </div>
               )}
@@ -637,10 +646,18 @@ function TaskDetailDialog({
           title={confirm === "approve" ? "Approve submission" : "Reject submission"}
           description={
             confirm === "approve"
-              ? `Approve ${currentTask.residentName}'s purchase of ${sub ? fmtMinor(sub.claimedTotalMinor) : ""}? An expense will be created and posted.`
+              ? currentTask.taskType === "MARKET_PURCHASE"
+                ? `Approve ${currentTask.residentName}'s purchase of ${sub ? fmtMinor(sub.claimedTotalMinor) : ""}? An expense will be created and posted.`
+                : `Approve ${currentTask.residentName}'s Normal Task completion? No expense or ledger entry will be created.`
               : `Reject ${currentTask.residentName}'s submission? Please provide a reason.`
           }
-          confirmLabel={confirm === "approve" ? "Approve & post expense" : "Reject submission"}
+          confirmLabel={
+            confirm === "approve"
+              ? currentTask.taskType === "MARKET_PURCHASE"
+                ? "Approve & post expense"
+                : "Approve completion"
+              : "Reject submission"
+          }
           tone={confirm === "approve" ? "primary" : "destructive"}
           requireReason={confirm === "reject"}
           loading={acting}
@@ -663,9 +680,14 @@ function SubmissionReviewCard({ task, tz, onDone }: { task: TaskRow; tz: string;
     try {
       await postJson(`${SUBMISSIONS_PATH}/${sub.id}/${kind}`, kind === "reject" ? { reason } : reason ? { reason } : {});
       onDone();
-      toast.success(kind === "approve" ? "Expense created and posted" : "Submission rejected", {
-        description: `${task.residentName} · ${task.description}`,
-      });
+      toast.success(
+        kind === "approve"
+          ? task.taskType === "MARKET_PURCHASE"
+            ? "Expense created and posted"
+            : "Normal task completion approved"
+          : "Submission rejected",
+        { description: `${task.residentName} · ${task.description}` }
+      );
       setConfirm(null);
     } catch (err) {
       toast.error(errMessage(err));
@@ -700,27 +722,33 @@ function SubmissionReviewCard({ task, tz, onDone }: { task: TaskRow; tz: string;
 
       {sub.comment && <p className="text-[12px] leading-relaxed text-muted-foreground">"{sub.comment}"</p>}
 
-      {/* items */}
-      <div className="glass-inset rounded-md p-3">
-        <div className="space-y-1">
-          {sub.items.map((item) => (
-            <div key={item.id} className="flex items-center justify-between gap-3 text-[13px]">
-              <span className="min-w-0 truncate">
-                <span className="font-medium">{item.itemName}</span>
-                <span className="kpi-num text-muted-foreground">
-                  {" "}
-                  · {item.quantity} {item.unit ?? "unit"} × <Money minor={item.unitPriceMinor} plain />
+      {task.taskType === "MARKET_PURCHASE" ? (
+        <div className="glass-inset rounded-md p-3">
+          <div className="space-y-1">
+            {sub.items.map((item) => (
+              <div key={item.id} className="flex items-center justify-between gap-3 text-[13px]">
+                <span className="min-w-0 truncate">
+                  <span className="font-medium">{item.itemName}</span>
+                  <span className="kpi-num text-muted-foreground">
+                    {" "}
+                    · {item.quantity} {item.unit ?? "unit"} × <Money minor={item.unitPriceMinor} plain />
+                  </span>
                 </span>
-              </span>
-              <Money minor={item.lineTotalMinor} className="shrink-0 font-semibold" />
-            </div>
-          ))}
+                <Money minor={item.lineTotalMinor} className="shrink-0 font-semibold" />
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between border-t border-border/50 pt-2 text-sm font-semibold">
+            <span>Claimed total</span>
+            <Money minor={sub.claimedTotalMinor} />
+          </div>
         </div>
-        <div className="mt-2 flex items-center justify-between border-t border-border/50 pt-2 text-sm font-semibold">
-          <span>Claimed total</span>
-          <Money minor={sub.claimedTotalMinor} />
+      ) : (
+        <div className="glass-inset rounded-md p-3 text-[12px] text-muted-foreground">
+          <p className="font-semibold text-foreground">Normal Task completion · non-financial</p>
+          <p className="mt-1">Approve after verifying the work. No Expense or ledger entry will be created.</p>
         </div>
-      </div>
+      )}
 
       <ProofImage fileId={sub.proofFileId} alt={`Proof for ${task.description}`} className="h-24" />
 
@@ -731,7 +759,7 @@ function SubmissionReviewCard({ task, tz, onDone }: { task: TaskRow; tz: string;
           Reject
         </GlassButton>
         <GlassButton variant="primary" size="sm" icon={<CheckCircle2 />} onClick={() => setConfirm("approve")}>
-          Approve & post expense
+          {task.taskType === "MARKET_PURCHASE" ? "Approve & post expense" : "Approve completion"}
         </GlassButton>
       </div>
 
@@ -742,17 +770,24 @@ function SubmissionReviewCard({ task, tz, onDone }: { task: TaskRow; tz: string;
           title={confirm === "approve" ? "Approve submission" : "Reject submission"}
           description={
             confirm === "approve" ? (
-              <>
-                An official expense is created from these items (totals recomputed server-side), the money is posted to
-                the ledger, and {task.residentName} is notified. Duplicate posting is impossible — the submission links
-                to exactly one expense.
-                <span className="mt-2 block font-medium">
-                  {task.description} · claimed <Money minor={sub.claimedTotalMinor} />
-                </span>
-              </>
+              task.taskType === "MARKET_PURCHASE" ? (
+                <>
+                  An official expense is created from these items (totals recomputed server-side), the money is posted to
+                  the ledger, and {task.residentName} is notified. Duplicate posting is impossible — the submission links
+                  to exactly one expense.
+                  <span className="mt-2 block font-medium">
+                    {task.description} · claimed <Money minor={sub.claimedTotalMinor} />
+                  </span>
+                </>
+              ) : (
+                <>
+                  Approve this Normal Task completion after verifying the work. No Expense or ledger entry is created.
+                  <span className="mt-2 block font-medium">{task.description}</span>
+                </>
+              )
             ) : (
               <>
-                {task.residentName} is notified with your reason and can resubmit corrected items.
+                {task.residentName} is notified with your reason. This submission closes; assign a new task if the work must be retried.
                 <span className="mt-2 block font-medium">{task.description}</span>
               </>
             )
@@ -825,14 +860,17 @@ function AssignTaskDialog({
         assignedResidentId: residentId,
         dueDate: dueDate || undefined,
         notes: notes.trim() || undefined,
-        items: items
-          .filter((i) => i.itemName.trim() !== "" || i.estimatedUnitPrice.trim() !== "")
-          .map((i) => ({
-            itemName: i.itemName.trim(),
-            expectedQuantity: Number(i.expectedQuantity),
-            unit: i.unit.trim() || undefined,
-            estimatedUnitPriceMinor: i.estimatedUnitPrice.trim() || undefined,
-          })),
+        items:
+          taskType === "GENERAL"
+            ? []
+            : items
+                .filter((i) => i.itemName.trim() !== "" || i.estimatedUnitPrice.trim() !== "")
+                .map((i) => ({
+                  itemName: i.itemName.trim(),
+                  expectedQuantity: Number(i.expectedQuantity),
+                  unit: i.unit.trim() || undefined,
+                  estimatedUnitPriceMinor: i.estimatedUnitPrice.trim() || undefined,
+                })),
       });
       toast.success("Task assigned", { description: "The resident is notified and can accept it." });
       onSaved();

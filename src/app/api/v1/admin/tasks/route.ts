@@ -214,6 +214,15 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     });
   }
 
+  if (body.taskType === "GENERAL" && (estimatedAmountMinor !== null || itemLines.length > 0)) {
+    throw new ApiError(
+      CODES.VALIDATION_FAILED,
+      "Normal Tasks cannot include purchase budgets or item-price lines.",
+      400,
+      { items: "Use a Market Task when money or purchased items are involved." }
+    );
+  }
+
   const result = await db.$transaction(async (tx) => {
     const resident = await tx.user.findFirst({
       where: { id: body.assignedResidentId, institutionId: ctx.institutionId, role: "RESIDENT" },
@@ -275,8 +284,11 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         userId: resident.id,
         institutionId: ctx.institutionId,
         type: "TASK_ASSIGNED",
-        title: "Market task assigned",
-        message: `New task assigned: "${task.description}"${body.dueDate ? ` — due ${body.dueDate}` : ""}.`,
+        title: task.taskType === "GENERAL" ? "Normal task assigned" : "Market task assigned",
+        message:
+          task.taskType === "GENERAL"
+            ? `New Normal Task assigned: "${task.description}"${body.dueDate ? ` — due ${body.dueDate}` : ""}.`
+            : `New Market Task assigned: "${task.description}"${body.dueDate ? ` — due ${body.dueDate}` : ""}.`,
         entityRef: task.id,
       },
       tx
