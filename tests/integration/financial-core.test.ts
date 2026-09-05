@@ -247,6 +247,18 @@ describe("database-backed financial core", () => {
       },
     });
 
+    // Refunds are a post-billing lifecycle action. The ₹100 bill consumes part
+    // of the approved ₹100 credit, leaving exactly ₹90 of refundable excess.
+    await createBill({
+      institutionId: institution.id,
+      residentId: resident.id,
+      year: 2026,
+      month: 12,
+      subtotalMinor: 1000,
+      dueDate: new Date(Date.now() + 10 * 86_400_000),
+    });
+    await recomputeBillSettlement(db, resident.id);
+
     // Avoid chart-of-accounts creation itself being the contested write; this
     // test isolates the resident-credit serialization boundary.
     await ensureAccounts(institution.id);
@@ -297,8 +309,9 @@ describe("database-backed financial core", () => {
 
     const after = await residentFundsSummary(resident.id);
     expect(after.creditsMinor).toBe(10000);
+    expect(after.chargesMinor).toBe(1000);
     expect(after.refundsIssuedMinor).toBe(6000);
-    expect(after.availableMinor).toBe(4000);
+    expect(after.availableMinor).toBe(3000);
   });
 
   test("reconciliation catches missing refund and bill journals", async () => {
