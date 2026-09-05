@@ -10,7 +10,7 @@
  * its submission with items + proof.)
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Calendar,
@@ -234,26 +234,26 @@ export default function AdminTasks() {
   // wrapper over the same rows; embedding avoids the second round-trip).
   const reviewQueue = tasks.filter((t) => t.status === "SUBMITTED" && t.submission && t.submission.status === "SUBMITTED");
 
-  const sortedTasks = useMemo(() => {
-    return [...tasks].sort((a, b) => {
-      const getRank = (st: string) => {
-        if (st === "SUBMITTED") return 0; // Needs admin review
-        if (st === "IN_PROGRESS" || st === "ACCEPTED" || st === "ASSIGNED") return 1; // Active
-        return 2; // Completed / Rejected
-      };
-      const rA = getRank(a.status);
-      const rB = getRank(b.status);
-      if (rA !== rB) return rA - rB;
+  // Sorting a copied query result is cheap at this list size and avoids manual
+  // memoization that React Compiler cannot safely preserve for this dependency.
+  const sortedTasks = [...tasks].sort((a, b) => {
+    const getRank = (st: string) => {
+      if (st === "SUBMITTED") return 0; // Needs admin review
+      if (st === "IN_PROGRESS" || st === "ACCEPTED" || st === "ASSIGNED") return 1; // Active
+      return 2; // Completed / Rejected
+    };
+    const rA = getRank(a.status);
+    const rB = getRank(b.status);
+    if (rA !== rB) return rA - rB;
 
-      if (rA === 1) {
-        if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
-        if (a.dueDate) return -1;
-        if (b.dueDate) return 1;
-      }
+    if (rA === 1) {
+      if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+      if (a.dueDate) return -1;
+      if (b.dueDate) return 1;
+    }
 
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
-  }, [tasks]);
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
 
   const chips = STATUS_CHIPS.map((c) => ({
     value: c.value,
