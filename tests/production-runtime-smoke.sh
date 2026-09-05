@@ -3,7 +3,7 @@ set -euo pipefail
 
 CHECK_MODE="${1:-all}"
 case "$CHECK_MODE" in
-  all|process|readiness|session|login|csrf) ;;
+  all|process|readiness|session|login|login-status|login-code|login-token|csrf) ;;
   *) echo "unknown production smoke mode: $CHECK_MODE" >&2; exit 2 ;;
 esac
 
@@ -44,12 +44,16 @@ if [ ! -f ".next/standalone/server.js" ]; then
   fail ".next/standalone/server.js is missing; run the production build first"
 fi
 
+request_capture() {
+  curl --silent --show-error --max-time 10 --output "$BODY_FILE" --write-out "%{http_code}" "$@"
+}
+
 request_status() {
   local expected="$1"
   local label="$2"
   shift 2
   local actual
-  actual="$(curl --silent --show-error --max-time 10 --output "$BODY_FILE" --write-out "%{http_code}" "$@")"
+  actual="$(request_capture "$@")"
   if [ "$actual" != "$expected" ]; then
     echo "--- response body ($label) ---" >&2
     cat "$BODY_FILE" >&2 || true
@@ -74,14 +78,16 @@ elif assertion == "ready":
     ok = payload.get("ok") is True and data.get("ok") is True and data.get("db") is True and isinstance(data.get("institutions"), int)
 elif assertion == "unauthenticated":
     ok = payload.get("ok") is False and payload.get("error", {}).get("code") == "UNAUTHENTICATED"
-elif assertion == "invalid_credentials_no_token":
+elif assertion == "invalid_credentials":
+    ok = payload.get("ok") is False and payload.get("error", {}).get("code") == "INVALID_CREDENTIALS"
+elif assertion == "no_session_token":
     def contains_session_token(value):
         if isinstance(value, dict):
             return "sessionToken" in value or any(contains_session_token(v) for v in value.values())
         if isinstance(value, list):
             return any(contains_session_token(v) for v in value)
         return False
-    ok = payload.get("ok") is False and payload.get("error", {}).get("code") == "INVALID_CREDENTIALS" and not contains_session_token(payload)
+    ok = not contains_session_token(payload)
 elif assertion == "forbidden":
     ok = payload.get("ok") is False and payload.get("error", {}).get("code") == "FORBIDDEN"
 else:
@@ -92,6 +98,14 @@ if not ok:
 PY
 }
 
+login_request() {
+  request_capture \
+    -X POST "$BASE_URL/api/v1/auth/login" \
+    -H "Origin: $BASE_URL" \
+    -H "Content-Type: application/json" \
+    --data "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"SmokePassword123\"}"
+}
+
 export NODE_ENV=production
 export PORT
 export HOSTNAME="$HOST"
@@ -100,7 +114,6 @@ export ENABLE_PREVIEW_BEARER_AUTH=0
 bun .next/standalone/server.js >"$SERVER_LOG" 2>&1 &
 SERVER_PID="$!"
 
-# Every stage first proves the actual standalone process boots and serves HTTP.
 live_status=""
 for _ in $(seq 1 60); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -133,12 +146,29 @@ if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "session" ]; then
 fi
 
 if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "login" ]; then
-  request_status 401 "invalid same-origin login" \
-    -X POST "$BASE_URL/api/v1/auth/login" \
-    -H "Origin: $BASE_URL" \
-    -H "Content-Type: application/json" \
-    --data "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"SmokePassword123\"}"
-  assert_json invalid_credentials_no_token
+  status="$(login_request)"
+  if [ "$status" != "401" ]; then
+    fail "invalid same-origin login returned HTTP $status; expected 401"
+  fi
+  assert_json invalid_credentials
+  assert_json no_session_token
+fi
+
+if [ "$CHECK_MODE" = "login-status" ]; then
+  status="$(login_request)"
+  if [ "$status" != "401" ]; then
+    fail "invalid same-origin login returned HTTP $status; expected 401"
+  fi
+fi
+
+if [ "$CHECK_MODE" = "login-code" ]; then
+  login_request >/dev/null
+  assert_json invalid_credentials
+fi
+
+if [ "$CHECK_MODE" = "login-token" ]; then
+  login_request >/dev/null
+  assert_json no_session_token
 fi
 
 if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "csrf" ]; then
