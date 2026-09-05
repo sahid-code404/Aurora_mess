@@ -25,6 +25,16 @@ if DATABASE_URL='postgresql://example.invalid/boardops' \
   fail "restore ran without BOARDOPS_RESTORE_CONFIRM"
 fi
 
+if ! grep -q 'verify-storage-integrity.ts' ops/backup-boardops.sh; then
+  fail "backup no longer runs the authoritative StoredFile integrity preflight"
+fi
+if ! grep -q "storage_integrity=verified" ops/backup-boardops.sh; then
+  fail "backup metadata no longer records successful storage verification"
+fi
+if ! grep -q 'maintenance:storage-integrity' package.json; then
+  fail "storage integrity maintenance command is missing"
+fi
+
 if ! grep -qx '/uploads-storage/' .gitignore; then
   fail "private default upload storage is not ignored by Git"
 fi
