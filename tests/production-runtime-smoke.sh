@@ -7,6 +7,7 @@ BASE_URL="http://${HOST}:${PORT}"
 SERVER_LOG="$(mktemp)"
 BODY_FILE="$(mktemp)"
 SERVER_PID=""
+SMOKE_EMAIL="phase13-nobody-${GITHUB_RUN_ID:-local}@example.com"
 
 cleanup() {
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -127,7 +128,7 @@ request_status 401 "invalid same-origin login" \
   -X POST "$BASE_URL/api/v1/auth/login" \
   -H "Origin: $BASE_URL" \
   -H "Content-Type: application/json" \
-  --data '{"email":"phase13-nobody@example.invalid","password":"SmokePassword123"}'
+  --data "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"SmokePassword123\"}"
 assert_json invalid_credentials_no_token
 
 # The centralized guard must reject an actual cross-site mutation over HTTP.
