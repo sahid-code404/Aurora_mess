@@ -83,5 +83,11 @@ jobs:
           NODE_ENV: production
         run: bun run build
 
-      - name: Production standalone runtime smoke
-        run: bash tests/production-runtime-smoke.sh
+      - name: Smoke standalone process and UI
+        run: bash tests/production-runtime-smoke.sh process
+
+      - name: Smoke standalone PostgreSQL readiness
+        run: bash tests/production-runtime-smoke.sh readiness
+
+      - name: Smoke standalone auth and CSRF boundaries
+        run: bash tests/production-runtime-smoke.sh auth
