@@ -403,7 +403,7 @@ model Payment {
   reference         String?
   notes             String?
   status            String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
-  idempotencyKey    String?   @unique
+  idempotencyKey    String?
   proofFileId       String?
   submittedAt       DateTime  @default(now())
   reviewedAt        DateTime?
@@ -418,6 +418,7 @@ model Payment {
 
   @@index([institutionId, residentId, status])
   @@index([institutionId, status, submittedAt])
+  @@index([idempotencyKey])
 }
 
 model PaymentStatusHistory {
@@ -952,6 +953,7 @@ model IdempotencyRecord {
   expiresAt     DateTime
 
   @@unique([institutionId, scope, key])
+  @@index([expiresAt])
 }
 
 model DeletionRequest {
