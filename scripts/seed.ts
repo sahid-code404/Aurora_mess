@@ -8,7 +8,7 @@
  * Run: bun scripts/seed.ts
  */
 import { PrismaClient } from "@prisma/client";
-import { hashPassword } from "../src/lib/auth/password";
+import { hashPassword, verifyPassword } from "../src/lib/auth/password";
 import {
   partsInTz,
   dateKeyInTz,
@@ -46,16 +46,38 @@ const ADMIN_PASSWORD = "Admin#12345";
 async function wipe() {
   // FK-safe order (children first).
   const tables = [
-    "policyExemption", "passwordResetToken", "idempotencyRecord", "deletionRequest", "outboxEvent",
-    "notification", "announcement", "taskSubmissionItem", "taskSubmission", "taskItem", "task",
+    // Operational/security records without children.
+    "rateLimitBucket", "policyExemption", "passwordResetToken", "idempotencyRecord", "deletionRequest", "outboxEvent", "auditEvent",
+    "notification", "announcement",
+
+    // Tasks and generated expense links.
+    "taskSubmissionItem", "taskSubmission", "taskItem", "task",
+
+    // Frozen billing artifacts: children before parents.
     "billAdjustment", "billLine", "bill", "billingSnapshot", "billingPeriod",
-    "formulaVersion", "formulaDefinition",
+
+    // Formula/rule/variable version graphs.
+    "formulaDependency", "formulaVersion", "formulaDefinition",
+    "ruleVersion", "ruleDefinition",
+    "customVariableValue", "variableDefinition",
+
+    // Ledger + financial records.
     "ledgerEntry", "ledgerJournal", "ledgerAccount",
     "refund", "paymentStatusHistory", "payment", "expenseItem", "expense", "expenseCategory",
-    "guestMealRequest", "residentMeal", "mealInstance", "mealDefinitionVersion", "mealDefinition",
-    "leaveRequest", "calendarEvent", "storedFile",
-    "userPolicyAcceptance", "userStatusHistory", "session", "userProfile", "user",
-    "policyVersion", "policy", "institutionSecuritySettings", "institutionSettings", "institution",
+
+    // Meal-scoped join rows use RESTRICT on MealDefinition and must be removed
+    // before definitions. Leave/calendar parents can then be removed safely.
+    "leaveRequestMeal", "calendarEventMeal",
+    "guestMealRequest", "residentMeal", "mealInstance", "mealDefinitionVersion",
+    "leaveRequest", "calendarEvent", "mealDefinition",
+    "storedFile",
+
+    // User-owned records before users. User holds the FK to UserProfile, so
+    // users must be deleted before profiles for repeatable seeding.
+    "userPolicyAcceptance", "userStatusHistory", "session", "user",
+    "userProfile",
+    "policyVersion", "policy",
+    "institutionSecuritySettings", "institutionSettings", "institution",
   ];
   for (const t of tables) {
     // @ts-expect-error dynamic table deletion for the dev seed only
@@ -109,16 +131,31 @@ async function main() {
 
   // ---------------------------------------------------------------- users
   const mkUser = async (email: string, role: string, status: string, fullName: string, room: string, from?: Date) => {
+    const password = role === "ADMIN" ? ADMIN_PASSWORD : RESIDENT_PASSWORD;
+    // Keep a unique salt/hash per user even in development fixtures. Verify the
+    // generated value before persistence, then verify Prisma's returned value so
+    // seed failures identify the exact boundary that changed credential bytes.
+    const passwordHash = await hashPassword(password);
+    if (!(await verifyPassword(password, passwordHash))) {
+      throw new Error(`Generated development credential verification failed for ${email}.`);
+    }
+
     const u = await db.user.create({
       data: {
         institutionId: inst.id,
         role,
         status,
         email,
-        passwordHash: await hashPassword(role === "ADMIN" ? ADMIN_PASSWORD : RESIDENT_PASSWORD),
+        passwordHash,
         membershipEffectiveFrom: from ?? new Date(Date.UTC(prev.year, prev.month - 1, 1)),
       },
     });
+    if (u.passwordHash !== passwordHash) {
+      throw new Error(`Credential hash changed during insert for ${email}.`);
+    }
+    if (!(await verifyPassword(password, u.passwordHash))) {
+      throw new Error(`Inserted development credential verification failed for ${email}.`);
+    }
     // Relation direction per current schema: FK lives on User.userProfileId.
     const profile = await db.userProfile.create({
       data: {
@@ -147,6 +184,24 @@ async function main() {
     await mkUser("farhan@messtest.in", "RESIDENT", "ACTIVE", "Farhan Khan", "B-205"),
   ];
   const pendingResident = await mkUser("newres@messtest.in", "RESIDENT", "PENDING_APPROVAL", "Nikhil Verma", "B-210");
+
+  // Re-read the two documented test accounts from PostgreSQL. Exact string
+  // equality distinguishes a storage/lookup defect from a KDF/runtime defect.
+  const persistedAdmin = await db.user.findUnique({ where: { email: ADMIN_EMAIL }, select: { passwordHash: true } });
+  const persistedResident = await db.user.findUnique({ where: { email: "sahid@messtest.in" }, select: { passwordHash: true } });
+  if (!persistedAdmin || persistedAdmin.passwordHash !== admin.passwordHash) {
+    throw new Error("Persisted development Admin credential hash round-trip mismatch.");
+  }
+  if (!persistedResident || persistedResident.passwordHash !== residents[0].passwordHash) {
+    throw new Error("Persisted development Resident credential hash round-trip mismatch.");
+  }
+  if (!(await verifyPassword(ADMIN_PASSWORD, persistedAdmin.passwordHash))) {
+    throw new Error("Persisted development Admin credential verification failed.");
+  }
+  if (!(await verifyPassword(RESIDENT_PASSWORD, persistedResident.passwordHash))) {
+    throw new Error("Persisted development Resident credential verification failed.");
+  }
+
   for (const r of residents) {
     for (const p of policyRows) {
       const v = await db.policyVersion.findFirst({ where: { policyId: p.id }, orderBy: { version: "desc" } });
