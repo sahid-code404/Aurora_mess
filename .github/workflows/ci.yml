@@ -92,8 +92,21 @@ jobs:
       - name: Smoke standalone unauthenticated session
         run: bash tests/production-runtime-smoke.sh session
 
-      - name: Smoke standalone production login transport
-        run: bash tests/production-runtime-smoke.sh login
+      - name: Diagnose login HTTP status
+        continue-on-error: true
+        run: bash tests/production-runtime-smoke.sh login-status
 
-      - name: Smoke standalone CSRF boundary
+      - name: Diagnose login error code
+        continue-on-error: true
+        run: bash tests/production-runtime-smoke.sh login-code
+
+      - name: Diagnose login token omission
+        continue-on-error: true
+        run: bash tests/production-runtime-smoke.sh login-token
+
+      - name: Diagnose standalone CSRF boundary
+        continue-on-error: true
         run: bash tests/production-runtime-smoke.sh csrf
+
+      - name: Production standalone runtime smoke gate
+        run: bash tests/production-runtime-smoke.sh all
