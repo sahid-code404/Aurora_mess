@@ -14,6 +14,7 @@ import { formatMinor } from "@/lib/money";
 import { dateKeyInTz, greetingFor, localDateMidnightUtc, partsInTz } from "@/lib/time";
 import { residentFundsSummary } from "@/lib/domain/funds";
 import { derivePaymentStatus } from "@/lib/domain/billing";
+import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
 import { serializeNotification } from "@/lib/domain/serialize";
 import { sweepOutbox } from "@/lib/outbox";
 
@@ -27,11 +28,23 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const greeting = greetingFor(parts.hour);
   const todayKey = dateKeyInTz(now, tz);
   const todayMidnight = localDateMidnightUtc(todayKey);
+  const todayEnd = new Date(todayMidnight.getTime() + 86_400_000 - 1);
   const monthPrefix = todayKey.slice(0, 7);
   const monthStart = localDateMidnightUtc(`${monthPrefix}-01`);
   const [y, m] = monthPrefix.split("-").map(Number);
   const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const monthEnd = localDateMidnightUtc(`${monthPrefix}-${String(lastDay).padStart(2, "0")}`);
+
+  // The dashboard exposes guest status, so persist time-derived lifecycle
+  // transitions before the parallel read. This keeps it consistent with the
+  // dedicated guest page and avoids stale CONFIRMED rows after cutoff/service.
+  await refreshGuestMealLifecycle({
+    institutionId: ctx.institutionId,
+    hostResidentId: ctx.user.id,
+    from: todayMidnight,
+    to: todayEnd,
+    now,
+  });
 
   const [
     profile,

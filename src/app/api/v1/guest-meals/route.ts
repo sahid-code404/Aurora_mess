@@ -5,7 +5,8 @@
  * instance FIXED snapshot price, else institution guest meal price.
  * Idempotent when the client sends an idempotencyKey (double-tap / retry
  * safe — the same key replays the original response instead of charging twice).
- * GET: own list for a date range with meal names + totals.
+ * GET: own list for a date range with meal names + totals. Time-derived states
+ * are refreshed before serialization: CONFIRMED → LOCKED → CONSUMED.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -16,6 +17,7 @@ import { addDaysToKey, dateKeyInTz, formatTimeLabel, localDateMidnightUtc } from
 import { formatMinor } from "@/lib/money";
 import { appendAudit } from "@/lib/audit";
 import { keyOfUtcDate, requireInstitutionContext, dayCountBetween } from "@/lib/domain/meal-engine";
+import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
 
 const IDEMPOTENCY_SCOPE = "GUEST_MEAL_ADD";
@@ -215,11 +217,20 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.VALIDATION_FAILED, "Please choose a valid range of 92 days or fewer.", 400);
   }
 
+  const fromDate = localDateMidnightUtc(from);
+  const toDate = new Date(localDateMidnightUtc(to).getTime() + 86_400_000 - 1);
+  await refreshGuestMealLifecycle({
+    institutionId: ctx.institutionId,
+    hostResidentId: ctx.user.id,
+    from: fromDate,
+    to: toDate,
+  });
+
   const rows = await db.guestMealRequest.findMany({
     where: {
       institutionId: ctx.institutionId,
       hostResidentId: ctx.user.id,
-      mealInstance: { serviceDate: { gte: localDateMidnightUtc(from), lte: localDateMidnightUtc(to) } },
+      mealInstance: { serviceDate: { gte: fromDate, lte: toDate } },
     },
     include: { mealInstance: { include: { definition: true } } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],

@@ -1,6 +1,8 @@
 /**
  * GUEST MEAL VARIABLE PROVIDER (spec §6, §9)
  * Guest meals must remain completely separate from regular Resident meal count.
+ * Booked guest money is historical input: use each row's frozen totalPriceMinor,
+ * never recompute old bookings from today's institution guest price.
  */
 import { PeriodBounds } from "../period-variables";
 
@@ -11,7 +13,7 @@ export async function resolveGuestVariables(
   client: any
 ): Promise<Record<string, number>> {
   const serviceDateRange = { gte: bounds.startAt, lt: bounds.endExclusiveAt };
-  const guestStatuses = ["CONFIRMED", "CONSUMED"];
+  const guestStatuses = ["CONFIRMED", "LOCKED", "CONSUMED"];
 
   const [guestAgg, settings, residentGuestAgg] = await Promise.all([
     client.guestMealRequest.aggregate({
@@ -41,10 +43,9 @@ export async function resolveGuestVariables(
 
   const guestMeals = guestAgg._sum.quantity ?? 0;
   const guestPrice = settings?.guestMealPriceMinor ?? 5500;
-  // Derive income from current price × count so admin price changes are instantly reflected
-  const guestIncome = guestMeals * guestPrice;
+  const guestIncome = guestAgg._sum.totalPriceMinor ?? 0;
   const resGuestMeals = residentGuestAgg?._sum.quantity ?? guestMeals;
-  const resGuestIncome = resGuestMeals * guestPrice;
+  const resGuestIncome = residentGuestAgg?._sum.totalPriceMinor ?? guestIncome;
 
   return {
     total_guest_meals: guestMeals,

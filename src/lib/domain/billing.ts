@@ -32,9 +32,10 @@ import { gatherPeriodVariables, periodBounds } from "./formula/period-variables"
 import { resolveFormulaVersionForPeriod } from "./formula/versions";
 import { billingSnapshotChecksum } from "./billing-integrity";
 import { isBillPastDueDate } from "./bill-status";
+import { refreshGuestMealLifecycle } from "./guest-meal-lifecycle";
 
 const UNSETTLED_BILL_STATUSES = ["GENERATED", "PARTIALLY_PAID", "OVERDUE"];
-const GUEST_CONFIRMED = ["CONFIRMED", "CONSUMED"];
+const GUEST_CONFIRMED = ["CONFIRMED", "LOCKED", "CONSUMED"];
 
 export function monthLabel(year: number, month: number): string {
   return new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric", timeZone: "UTC" }).format(
@@ -171,6 +172,17 @@ export async function computeReadiness(periodId: string, client: any = db): Prom
   const tz = inst?.timezone ?? "Asia/Kolkata";
   const bounds = periodBounds(period.year, period.month, tz);
   const serviceDateRange = { gte: bounds.startAt, lt: bounds.endExclusiveAt };
+
+  // Billing is a lifecycle boundary: persist every ended guest booking as
+  // CONSUMED before formula variables/readiness/snapshots are resolved. This
+  // must not depend on whether a Resident/Admin happened to open a guest page.
+  await refreshGuestMealLifecycle({
+    institutionId: period.institutionId,
+    from: bounds.startAt,
+    to: new Date(bounds.endExclusiveAt.getTime() - 1),
+    client,
+  });
+
   const checks: ReadinessCheck[] = [];
 
   // 1. Period must be OPEN.
