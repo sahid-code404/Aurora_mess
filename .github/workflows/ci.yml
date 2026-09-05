@@ -109,4 +109,15 @@ jobs:
         run: bash tests/production-runtime-smoke.sh csrf
 
       - name: Production standalone runtime smoke gate
+        env:
+          BOARDOPS_SMOKE_DIAGNOSTIC_DIR: smoke-diagnostics
         run: bash tests/production-runtime-smoke.sh all
+
+      - name: Upload runtime smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-runtime-smoke-diagnostics
+          path: smoke-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 3
