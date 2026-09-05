@@ -4,8 +4,11 @@ import {
   deriveGuestMealLifecycleStatus,
   refreshGuestMealLifecycle,
 } from "@/lib/domain/guest-meal-lifecycle";
+import { resolveGuestVariables } from "@/lib/domain/formula/providers/guest";
+import { periodBounds } from "@/lib/domain/formula/period-variables";
 
 const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const hostResidentId = `resident-${suffix}`;
 let institutionId = "";
 let definitionId = "";
 let versionId = "";
@@ -17,6 +20,9 @@ let cancelledGuestId = "";
 beforeAll(async () => {
   const institution = await db.institution.create({ data: { name: `Phase24 ${suffix}` } });
   institutionId = institution.id;
+  await db.institutionSettings.create({
+    data: { institutionId, guestMealPriceMinor: 9900 },
+  });
 
   const definition = await db.mealDefinition.create({
     data: {
@@ -59,7 +65,7 @@ beforeAll(async () => {
     await db.guestMealRequest.create({
       data: {
         institutionId,
-        hostResidentId: `resident-${suffix}`,
+        hostResidentId,
         mealInstanceId: future.id,
         quantity: 1,
         unitPriceMinor: 5500,
@@ -72,7 +78,7 @@ beforeAll(async () => {
     await db.guestMealRequest.create({
       data: {
         institutionId,
-        hostResidentId: `resident-${suffix}`,
+        hostResidentId,
         mealInstanceId: locked.id,
         quantity: 2,
         unitPriceMinor: 5500,
@@ -85,7 +91,7 @@ beforeAll(async () => {
     await db.guestMealRequest.create({
       data: {
         institutionId,
-        hostResidentId: `resident-${suffix}`,
+        hostResidentId,
         mealInstanceId: consumed.id,
         quantity: 3,
         unitPriceMinor: 5500,
@@ -99,7 +105,7 @@ beforeAll(async () => {
     await db.guestMealRequest.create({
       data: {
         institutionId,
-        hostResidentId: `resident-${suffix}`,
+        hostResidentId,
         mealInstanceId: cancelled.id,
         quantity: 1,
         unitPriceMinor: 5500,
@@ -116,6 +122,7 @@ afterAll(async () => {
   await db.mealInstance.deleteMany({ where: { institutionId } });
   if (definitionId) await db.mealDefinitionVersion.deleteMany({ where: { mealDefinitionId: definitionId } });
   if (definitionId) await db.mealDefinition.delete({ where: { id: definitionId } });
+  await db.institutionSettings.deleteMany({ where: { institutionId } });
   await db.institution.delete({ where: { id: institutionId } });
 });
 
@@ -176,5 +183,21 @@ describe("guest meal lifecycle", () => {
 
     const second = await refreshGuestMealLifecycle({ institutionId });
     expect(second).toEqual({ locked: 0, consumed: 0 });
+  });
+
+  test("formula variables include LOCKED guests and preserve frozen booking totals", async () => {
+    const variables = await resolveGuestVariables(
+      institutionId,
+      periodBounds(2030, 1, "UTC"),
+      hostResidentId,
+      db
+    );
+
+    // Current configured price is ₹99, but these bookings were frozen at ₹55.
+    expect(variables.guest_meal_price).toBe(9900);
+    expect(variables.total_guest_meals).toBe(6);
+    expect(variables.resident_guest_meals).toBe(6);
+    expect(variables.total_guest_income).toBe(33000);
+    expect(variables.guest_income_for_resident).toBe(33000);
   });
 });
