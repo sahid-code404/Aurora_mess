@@ -98,7 +98,7 @@ async function reserveSequences(
         EXCLUDED."nextValue"
       ),
       "updatedAt" = CURRENT_TIMESTAMP
-    RETURNING "nextValue" - ${count} AS "startAllocated"
+    RETURNING ("nextValue" - ${count})::INTEGER AS "startAllocated"
   `);
 
   const startAllocated = rows[0]?.startAllocated;
