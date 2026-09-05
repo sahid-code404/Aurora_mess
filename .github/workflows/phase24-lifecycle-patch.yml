@@ -1,0 +1,30 @@
+name: Phase 24 lifecycle patch
+
+on:
+  push:
+    branches: [feat/phase24-guest-meal-lifecycle]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase24-guest-meal-lifecycle
+          fetch-depth: 0
+      - name: Apply billing lifecycle patch
+        run: python3 scripts/phase24-lifecycle-patch.py
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/lib/domain/billing.ts
+          git commit -m "Phase 24: wire guest lifecycle into billing"
+          git push origin HEAD:feat/phase24-guest-meal-lifecycle
