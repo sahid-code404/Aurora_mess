@@ -369,7 +369,7 @@ export async function computeReadiness(periodId: string, client: any = db): Prom
   // Summary + counts.
   const [residents, mealCountAgg, guestAgg, expenseAgg, paymentAgg] = await Promise.all([
     client.user.findMany({
-      where: { institutionId: period.institutionId, role: "RESIDENT", status: "ACTIVE" },
+      where: { institutionId: period.institutionId, role: "RESIDENT", status: { in: ["ACTIVE", "INACTIVE", "PENDING_DELETION"] } },
       select: { id: true, membershipEffectiveFrom: true, membershipEffectiveUntil: true },
     }),
     client.residentMeal.count({
@@ -544,7 +544,7 @@ export async function generateBilling(
     const [residentRows, mealRows, guestRows, expenseRows, paymentRows, refundRows, exemptionRows, formulaVersion] =
       await Promise.all([
         tx.user.findMany({
-          where: { institutionId: period.institutionId, role: "RESIDENT", status: "ACTIVE" },
+          where: { institutionId: period.institutionId, role: "RESIDENT", status: { in: ["ACTIVE", "INACTIVE", "PENDING_DELETION"] } },
           select: {
             id: true,
             email: true,
@@ -628,6 +628,66 @@ export async function generateBilling(
       paymentsByResident.set(p.residentId, list);
     }
 
+    // Account credit is not scoped to the billed month. A resident may have
+    // prepaid earlier or explicitly carried forward excess from the previous
+    // bill. New bills must consume that existing approved credit immediately,
+    // otherwise the bill can incorrectly show Due while Funds shows a positive
+    // balance. Read all three authoritative components in one bounded batch.
+    const [allApprovedCreditRows, priorBillRows, completedCashRefundRows] = await Promise.all([
+      tx.payment.findMany({
+        where: {
+          institutionId: period.institutionId,
+          status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        },
+        select: { id: true, residentId: true, amountMinor: true },
+      }),
+      tx.bill.findMany({
+        where: { institutionId: period.institutionId, status: { not: "VOIDED" } },
+        select: { residentId: true, subtotalMinor: true, adjustmentsMinor: true },
+      }),
+      tx.refund.findMany({
+        where: {
+          institutionId: period.institutionId,
+          status: "COMPLETED",
+          mode: "ISSUE_REFUND",
+        },
+        select: { residentId: true, amountMinor: true },
+      }),
+    ]);
+
+    const approvedCreditByResident = new Map<string, number>();
+    for (const row of allApprovedCreditRows as any[]) {
+      approvedCreditByResident.set(
+        row.residentId,
+        (approvedCreditByResident.get(row.residentId) ?? 0) + row.amountMinor
+      );
+    }
+    const priorChargesByResident = new Map<string, number>();
+    for (const row of priorBillRows as any[]) {
+      const effectiveCharge = Math.max(0, row.subtotalMinor + row.adjustmentsMinor);
+      priorChargesByResident.set(
+        row.residentId,
+        (priorChargesByResident.get(row.residentId) ?? 0) + effectiveCharge
+      );
+    }
+    const cashRefundsByResident = new Map<string, number>();
+    for (const row of completedCashRefundRows as any[]) {
+      cashRefundsByResident.set(
+        row.residentId,
+        (cashRefundsByResident.get(row.residentId) ?? 0) + row.amountMinor
+      );
+    }
+    const accountCreditBeforeBillByResident = new Map<string, number>();
+    for (const resident of residents) {
+      const approved = approvedCreditByResident.get(resident.id) ?? 0;
+      const priorCharges = priorChargesByResident.get(resident.id) ?? 0;
+      const cashRefunds = cashRefundsByResident.get(resident.id) ?? 0;
+      accountCreditBeforeBillByResident.set(
+        resident.id,
+        Math.max(0, approved - priorCharges - cashRefunds)
+      );
+    }
+
     // ---- Immutable snapshot ----
     const ast = JSON.parse(formulaVersion.compiledAstJson) as FormulaAst;
     const payload = {
@@ -664,6 +724,7 @@ export async function generateBilling(
           guestQuantity: guest.quantity,
           guestAmountMinor: guest.amountMinor,
           approvedPaymentsMinor: (paymentsByResident.get(r.id) ?? []).reduce((s, p) => s + p.amountMinor, 0),
+          accountCreditBeforeBillMinor: accountCreditBeforeBillByResident.get(r.id) ?? 0,
         };
       }),
       eligibleExpenses: expenseRows,
@@ -733,8 +794,9 @@ export async function generateBilling(
       const guestUnitAverage = guest.quantity > 0 ? Math.round(guestAmount / guest.quantity) : guestPriceMinor;
       const subtotal = mealAmount + guestAmount;
       const myPayments = paymentsByResident.get(resident.id) ?? [];
-      const myApprovedTotal = myPayments.reduce((s, p) => s + p.amountMinor, 0);
-      const paymentsApplied = Math.min(subtotal, myApprovedTotal);
+      const periodApprovedTotal = myPayments.reduce((s, p) => s + p.amountMinor, 0);
+      const accountCreditBeforeBill = accountCreditBeforeBillByResident.get(resident.id) ?? 0;
+      const paymentsApplied = Math.min(subtotal, accountCreditBeforeBill);
       const totalDue = Math.max(0, subtotal - paymentsApplied);
 
       const lines: { code: string; label: string; quantity?: number; unitPriceMinor?: number; amountMinor: number; detailJson?: string; sortOrder: number }[] = [];
@@ -774,10 +836,12 @@ export async function generateBilling(
           label: "Payments applied",
           amountMinor: -paymentsApplied,
           detailJson: JSON.stringify({
-            policy: "Payments approved with submittedAt inside the period, capped at the subtotal.",
-            paymentCount: myPayments.length,
-            paymentIds: myPayments.slice(0, 50).map((p) => p.id),
-            approvedPaymentsMinor: myApprovedTotal,
+            policy:
+              "All approved resident account credit available at bill generation, after prior non-voided charges and completed cash refunds, capped at the subtotal.",
+            accountCreditBeforeBillMinor: accountCreditBeforeBill,
+            periodApprovedPaymentsMinor: periodApprovedTotal,
+            periodPaymentCount: myPayments.length,
+            periodPaymentIds: myPayments.slice(0, 50).map((p) => p.id),
           }),
           sortOrder: 3,
         });
