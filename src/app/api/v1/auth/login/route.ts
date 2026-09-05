@@ -3,11 +3,12 @@
  * Rate limits: 30 attempts / 15 min / IP (any traffic) and 10 FAILURES /
  * 15 min / IP+email. Only FAILED credential attempts count toward the
  * email bucket — successful sign-ins never lock anyone out, and one tester's
- * traffic can never block a different user (audit 9-c finding #6).
- * Failure message is generic (no enumeration). Non-ACTIVE accounts get
- * role-appropriate 403 codes. Success always sets the rotated HttpOnly session
- * cookie. A raw bearer token is returned only when the server explicitly sets
- * ENABLE_PREVIEW_BEARER_AUTH=1 for cookie-blocked preview testing.
+ * traffic can never block a different user.
+ *
+ * ACTIVE accounts receive a rotated HttpOnly session. Non-active accounts do
+ * not receive a session. A credential-verified CHANGES_REQUESTED applicant gets
+ * the correction reason/current profile fields so the public auth screen can
+ * offer a narrowly scoped resubmission flow without granting application access.
  */
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -32,8 +33,6 @@ async function equalizeTiming(password: string): Promise<void> {
 }
 
 export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
-  // IP-level cap on total login traffic (secondary abuse guard; generous so
-  // multiple testers behind one gateway IP are unaffected).
   const ipLimit = await rateLimit(clientKey(ctx.req, "login"), 30, 15 * 60 * 1000);
   if (!ipLimit.allowed) {
     throw new ApiError(
@@ -45,8 +44,6 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
 
   const body = await parseBody(ctx.req, loginSchema);
 
-  // Failure-based limiter per IP+email: brute-force protection without
-  // counting successes and without one network's testing blocking another user.
   const failKey = `login:fail:${clientIp(ctx.req)}:${body.email}`;
   const failLimit = await rateLimitCheck(failKey, 10);
   if (!failLimit.allowed) {
@@ -72,7 +69,25 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
     throw new ApiError(CODES.INVALID_CREDENTIALS, "Email or password is incorrect.", 401);
   }
 
-  if (user.status === "PENDING_APPROVAL" || user.status === "CHANGES_REQUESTED") {
+  if (user.status === "CHANGES_REQUESTED") {
+    const latestRequest = await db.userStatusHistory.findFirst({
+      where: { userId: user.id, toStatus: "CHANGES_REQUESTED" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { reason: true },
+    });
+    throw new ApiError(
+      CODES.ACCOUNT_CHANGES_REQUESTED,
+      "Your application needs changes before it can be approved.",
+      403,
+      {
+        reviewReason: latestRequest?.reason ?? "Please review your application details and resubmit.",
+        fullName: user.profile?.fullName ?? "",
+        phone: user.profile?.phone ?? "",
+        room: user.profile?.roomNumber ?? "",
+      }
+    );
+  }
+  if (user.status === "PENDING_APPROVAL") {
     throw new ApiError(CODES.ACCOUNT_PENDING, "Your account is waiting for admin approval.", 403);
   }
   if (user.status === "REJECTED") {
