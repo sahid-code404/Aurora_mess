@@ -150,7 +150,11 @@ function monthShortLabel(key: string): string {
 export default function AdminPayments() {
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [status, setStatus] = useState("PENDING");
+  const [status, setStatus] = useState(() =>
+    typeof window !== "undefined" && window.location.hash.startsWith("#/admin/payments/refunds")
+      ? "REFUND_CENTER"
+      : "PENDING"
+  );
   const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
   const [reviewId, setReviewId] = useState<string | null>(null);
   const [action, setAction] = useState<ReviewAction | null>(null);
