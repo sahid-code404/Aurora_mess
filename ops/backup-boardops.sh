@@ -16,6 +16,7 @@ case "${DATABASE_URL:-}" in
   *) fail "DATABASE_URL must be set to a PostgreSQL URL" ;;
 esac
 
+require_command bun
 require_command pg_dump
 require_command pg_restore
 require_command tar
@@ -32,6 +33,10 @@ PG_DATABASE_URL="${PG_DATABASE_URL//\?schema=public/}"
 
 BACKUP_ROOT="${BOARDOPS_BACKUP_DIR:-$PWD/backups}"
 UPLOAD_DIR="${UPLOAD_STORAGE_DIR:-$PWD/uploads-storage}"
+case "$UPLOAD_DIR" in
+  ""|"/") fail "UPLOAD_STORAGE_DIR must not be empty or /" ;;
+esac
+
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 ARCHIVE_NAME="boardops-backup-${TIMESTAMP}.tar.gz"
 FINAL_PATH="${BACKUP_ROOT%/}/${ARCHIVE_NAME}"
@@ -46,6 +51,12 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$BACKUP_ROOT" "$PAYLOAD_DIR"
+
+# A backup is not recoverable when PostgreSQL references proof/receipt bytes
+# that are missing or corrupt. Validate every authoritative StoredFile row
+# before publishing a database + uploads pair. Harmless unreferenced filesystem
+# orphans are intentionally ignored by the verifier.
+UPLOAD_STORAGE_DIR="$UPLOAD_DIR" bun scripts/maintenance/verify-storage-integrity.ts
 
 # PostgreSQL custom format preserves schema/data and is verifiable with pg_restore --list.
 pg_dump \
@@ -76,6 +87,7 @@ fi
   printf 'git_commit=%s\n' "$GIT_COMMIT"
   printf 'database_format=postgresql-custom\n'
   printf 'uploads_archive=uploads.tar.gz\n'
+  printf 'storage_integrity=verified\n'
 } >"$PAYLOAD_DIR/metadata.txt"
 
 (
