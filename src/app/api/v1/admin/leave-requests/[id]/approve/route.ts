@@ -47,15 +47,28 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     const now = new Date();
-    const updated = await tx.leaveRequest.update({
-      where: { id: leave.id },
+    const reviewReason = body.reason ?? null;
+    const guard = await tx.leaveRequest.updateMany({
+      where: {
+        id: leave.id,
+        institutionId: ctx.institutionId,
+        status: "PENDING",
+      },
       data: {
         status: "APPROVED",
         reviewedAt: now,
         reviewedByUserId: ctx.user.id,
-        reviewReason: body.reason ?? null,
+        reviewReason,
       },
     });
+    if (guard.count != 1) {
+      throw new ApiError(
+        CODES.RESOURCE_CHANGED,
+        "This leave request was cancelled or reviewed just now. Refresh to see its latest state.",
+        409
+      );
+    }
+    const updated = { id: leave.id, status: "APPROVED", reviewedAt: now, reviewReason };
 
     const selectedIds = leave.selectedMeals.map((selection) => selection.mealDefinitionId);
     const scopeWhere = mealInstanceScopeWhere(leave.mealScope, selectedIds);
