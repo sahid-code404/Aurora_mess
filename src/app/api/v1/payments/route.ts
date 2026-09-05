@@ -36,7 +36,7 @@ const MAX_PAYMENT_MINOR = 100_000_000; // ₹10,00,000.00 — sanity ceiling, do
 // POST — submit
 // ---------------------------------------------------------------------------
 export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
-  const rl = rateLimit(clientKey(ctx.req, "payment-submit"), 10, 60 * 60 * 1000);
+  const rl = await rateLimit(clientKey(ctx.req, "payment-submit"), 10, 60 * 60 * 1000);
   if (!rl.allowed) {
     throw new ApiError(
       CODES.RATE_LIMITED,

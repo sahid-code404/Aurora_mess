@@ -72,6 +72,9 @@ jobs:
       - name: Deployment runtime guards
         run: bash tests/database-runtime-build.sh
 
+      - name: Operations recovery guards
+        run: bash tests/operations-runtime-guards.sh
+
       - name: Unit regression tests
         run: bun test tests/unit
 

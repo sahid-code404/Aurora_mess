@@ -55,7 +55,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 });
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
-  const rl = rateLimit(clientKey(ctx.req, "announcement-create"), 10, 60 * 60 * 1000);
+  const rl = await rateLimit(clientKey(ctx.req, "announcement-create"), 10, 60 * 60 * 1000);
   if (!rl.allowed) {
     throw new ApiError(CODES.RATE_LIMITED, "Too many announcements. Try again later.", 429);
   }

@@ -3,6 +3,7 @@
  * Frontend maps these codes to plain-language copy. Never leak SQL/stack/paths.
  */
 import { NextResponse } from "next/server";
+import { logUnexpectedError } from "@/lib/observability";
 
 export type ApiEnvelope<T> =
   | { ok: true; data: T; meta?: Record<string, unknown> }
@@ -58,11 +59,16 @@ export function newRequestId(): string {
   return crypto.randomUUID();
 }
 
+function withRequestId(response: NextResponse, requestId?: string): NextResponse {
+  if (requestId) response.headers.set("x-request-id", requestId);
+  return response;
+}
+
 export function ok<T>(data: T, meta?: Record<string, unknown>, requestId?: string): NextResponse {
   const body: ApiEnvelope<T> = meta
     ? { ok: true, data, meta: { ...meta, requestId } }
     : { ok: true, data, meta: { requestId } };
-  return NextResponse.json(body);
+  return withRequestId(NextResponse.json(body), requestId);
 }
 
 export function fail(error: unknown, requestId: string): NextResponse {
@@ -71,10 +77,10 @@ export function fail(error: unknown, requestId: string): NextResponse {
       ok: false,
       error: { code: error.code, message: error.message, fields: error.fields, requestId },
     };
-    return NextResponse.json(body, { status: error.status });
+    return withRequestId(NextResponse.json(body, { status: error.status }), requestId);
   }
   // Unexpected — log server-side only, return generic message + requestId for support.
-  console.error(`[${requestId}]`, error);
+  logUnexpectedError(requestId, error);
   const body: ApiEnvelope<never> = {
     ok: false,
     error: {
@@ -83,5 +89,5 @@ export function fail(error: unknown, requestId: string): NextResponse {
       requestId,
     },
   };
-  return NextResponse.json(body, { status: 500 });
+  return withRequestId(NextResponse.json(body, { status: 500 }), requestId);
 }

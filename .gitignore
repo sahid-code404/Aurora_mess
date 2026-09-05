@@ -77,6 +77,11 @@ cookies.txt
 /db/*.sqlite-*
 /db/*.sqlite3-*
 
+# Private uploaded proof bytes and local backup artifacts
+/uploads-storage/
+/backups/
+*.pre-restore-*
+
 # OS/editor
 .DS_Store
 Thumbs.db

@@ -168,6 +168,19 @@ model Session {
 }
 
 // ---------------------------------------------------------------------
+// Shared abuse-protection counters (opaque SHA-256 keys only)
+// ---------------------------------------------------------------------
+
+model RateLimitBucket {
+  keyHash   String   @id @db.Char(64)
+  count     Int
+  resetAt   DateTime
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([resetAt])
+}
+
+// ---------------------------------------------------------------------
 // Meals: definitions → versions → instances → resident meals
 // ---------------------------------------------------------------------
 
