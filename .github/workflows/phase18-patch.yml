@@ -20,8 +20,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.4
-      - name: Centralize refund initiation
-        run: python3 .github/phase18_centralize_refunds.py
+      - name: Apply billing lifecycle consistency patch
+        run: python3 .github/phase18_billing_lifecycle.py
       - name: Validate changed TypeScript
         run: |
           bun install --frozen-lockfile
@@ -36,5 +36,5 @@ jobs:
             echo "No patch changes"
             exit 0
           fi
-          git commit -m "Phase 18: centralize refund initiation"
+          git commit -m "Phase 18: apply carry-forward credit during billing"
           git push origin HEAD:feat/phase18-flow-logic-polish
