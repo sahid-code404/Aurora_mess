@@ -72,6 +72,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const storageIdempotencyKey = idempotencyKey
     ? actorScopedIdempotencyKey(ctx.user.id, idempotencyKey)
     : null;
+  let legacyInProgress = false;
 
   // Completed idempotent retries are reads of an already-accepted business
   // action, not new submission attempts. Resolve them before consuming the
@@ -128,26 +129,28 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
           },
           select: { id: true },
         });
-        if (ownedLegacyPayment) {
-          throw new ApiError(
-            CODES.IDPOTENCY_CONFLICT,
-            "This request is already being processed. Please try again in a moment.",
-            409
-          );
-        }
+        legacyInProgress = Boolean(ownedLegacyPayment);
       }
     }
   }
 
   // Only a request that still needs business processing consumes submission
-  // quota. This keeps network retries reliable even after the client/IP has
-  // exhausted the normal new-payment budget.
+  // quota. This keeps completed network retries reliable even after the client/IP
+  // has exhausted the normal new-payment budget.
   const rl = await rateLimit(clientKey(ctx.req, "payment-submit"), 10, 60 * 60 * 1000);
   if (!rl.allowed) {
     throw new ApiError(
       CODES.RATE_LIMITED,
       `You've submitted several payments recently — try again in ${rl.retryAfterSec} seconds.`,
       429
+    );
+  }
+
+  if (legacyInProgress) {
+    throw new ApiError(
+      CODES.IDPOTENCY_CONFLICT,
+      "This request is already being processed. Please try again in a moment.",
+      409
     );
   }
 
