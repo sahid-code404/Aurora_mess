@@ -72,13 +72,15 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, fields);
   }
 
-  // Fast replay before file storage/number allocation. The key is claimed again
-  // atomically inside the write transaction to close the concurrency window.
+  // Fast replay before file storage/number allocation. Only an unexpired row is
+  // eligible for replay; expired rows must flow through the transactional claim
+  // path so they can be atomically reclaimed.
   if (idempotencyKey) {
+    const replayNow = new Date();
     const existing = await db.idempotencyRecord.findUnique({
       where: { institutionId_scope_key: { institutionId: ctx.institutionId, scope: "PAYMENT_SUBMIT", key: idempotencyKey } },
     });
-    if (existing?.responseJson) {
+    if (existing?.responseJson && existing.expiresAt.getTime() > replayNow.getTime()) {
       return { data: JSON.parse(existing.responseJson), meta: { idempotentReplay: true } };
     }
   }
