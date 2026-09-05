@@ -20,7 +20,7 @@ env:
 
 jobs:
   verify:
-    name: Typecheck, lint, tests, migrate, build
+    name: Typecheck, lint, tests, migrate, build, smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -82,3 +82,17 @@ jobs:
         env:
           NODE_ENV: production
         run: bun run build
+
+      - name: Production standalone runtime smoke
+        env:
+          BOARDOPS_SMOKE_DIAGNOSTIC_DIR: smoke-diagnostics
+        run: bash tests/production-runtime-smoke.sh all
+
+      - name: Upload runtime smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-runtime-smoke-diagnostics
+          path: smoke-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 3
