@@ -116,7 +116,7 @@ export async function sweepExpiredIdempotencyRecords(input: {
   limit?: number;
 }): Promise<number> {
   const now = input.now ?? new Date();
-  const requestedLimit = Number.isFinite(input.limit) ? Math.trunc(input.limit as number) : 100;
+  const requestedLimit = input.limit !== undefined && Number.isFinite(input.limit) ? Math.trunc(input.limit) : 100;
   const limit = Math.min(500, Math.max(1, requestedLimit));
 
   const deleted = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
