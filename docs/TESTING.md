@@ -113,7 +113,7 @@ Password: Resident#12345
 4. Create a selected-meal calendar disable as Admin; confirm unaffected meals stay available.
 5. Verify guest meals remain separate from resident meal totals.
 6. Exercise Normal Task and Market Task flows separately.
-7. Submit/review payments and check that posted financial history remains auditable.
+7. Submit a Resident payment and, while it is still `PENDING`, open its details and choose **Withdraw submission**. Confirm it moves to `VOIDED`, disappears from the Admin pending queue, stays in both histories, and never changes approved balance or bill settlement. Submit a second payment and approve it as Admin to verify the normal review path still works.
 8. After a bill exists, create an overpayment and open **Admin → Payments → Refund Center**. Test a partial cash payout, then carry forward the remaining excess. The resident should disappear from Refund Center for that bill cycle while the carried-forward credit remains available for a future bill.
 9. Review Variables + Formula Engine on the same Admin page and use preview before activation.
 10. Check previous billed month history remains unchanged while current month is open.
@@ -185,13 +185,36 @@ The test discovers a future unlocked meal through the Resident APIs and proves:
 
 Only `PENDING` leave can be self-cancelled. `APPROVED` and `REJECTED` requests are retained as immutable review history; cancellation never acts as an un-approve operation.
 
+## Production payment-withdrawal smoke
+
+Pending Resident payments have their own production-server lifecycle acceptance:
+
+```bash
+BOARDOPS_PAYMENT_WITHDRAW_SMOKE_DIAGNOSTIC_DIR=payment-withdraw-smoke-diagnostics \
+  bash tests/seeded-payment-withdrawal-smoke.sh
+```
+
+It verifies that:
+
+- a submitted payment begins as `PENDING` and increases only the pending count;
+- another Resident cannot withdraw the owner's payment;
+- the owner can withdraw it before Admin review, producing a retained `VOIDED` history row;
+- withdrawal returns the pending count to its baseline and does not change approved deposits;
+- withdrawal does not populate Admin-review metadata or create ledger/bill-settlement effects;
+- a second withdrawal is rejected;
+- Admin approval of the already-withdrawn payment is rejected;
+- the `VOIDED` record remains visible to both Resident and Admin history views.
+
+Withdrawal is intentionally different from Admin voiding an **approved** payment. An approved payment has already entered the ledger and can only be voided by Admin through the existing reversal-journal workflow.
+
 ## CI acceptance guarantee
 
-The CI pipeline runs the same development seed against PostgreSQL and builds the production standalone server. It then runs four seeded production gates:
+The CI pipeline runs the same development seed against PostgreSQL and builds the production standalone server. It then runs five seeded production gates:
 
 1. **Authentication/authorization smoke** — successful Admin and Resident login, session-role verification, Admin/Resident API isolation, and logout/session revocation.
 2. **Cross-role business-flow smoke** — guest separation/idempotency, selected-meal leave, selected-meal calendar disable, GENERAL vs MARKET task lifecycle, market-expense creation, payment submit/approve/idempotency, Formula Engine preview non-mutation, and historical-bill provenance stability.
 3. **Refund Center lifecycle smoke** — post-billing overpayment discovery, partial cash payout, remaining-excess recalculation, whole-remainder carry-forward, current-cycle closure, and Admin/Resident history visibility.
 4. **Leave cancellation lifecycle smoke** — ownership, pending-only cancellation, Admin queue/history visibility, terminal-state enforcement, and proof that cancelled pending leave never changes meal state.
+5. **Payment withdrawal lifecycle smoke** — ownership, pending-only withdrawal, retained `VOIDED` history, Admin-review exclusion, pending-count restoration, and proof that a withdrawn pending payment never changes approved funds.
 
 These gates run in addition to migrations, zero-warning lint, unit/integration tests, the PostgreSQL + uploads disaster-recovery drill, storage-integrity checks, production build and the standalone runtime smoke. CI uploads separate server/flow diagnostics when any production smoke fails.
