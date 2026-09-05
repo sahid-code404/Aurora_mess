@@ -83,6 +83,31 @@ replace_once(p, 'import { RefundDialog } from "./_shared/refund-dialog";\n', '')
 replace_once(p, '  const [refundOpen, setRefundOpen] = useState(false);\n', '')
 replace_once(
     p,
+    '''              {funds && funds.availableMinor > 0 && (
+                <GlassButton
+                  variant="primary"
+                  size="sm"
+                  icon={<RotateCcw className="size-3.5" />}
+                  onClick={() => setRefundOpen(true)}
+                >
+                  Issue refund
+                </GlassButton>
+              )}
+''',
+    '''              {funds && bills.length > 0 && funds.availableMinor > 0 && (
+                <GlassButton
+                  variant="primary"
+                  size="sm"
+                  icon={<RotateCcw className="size-3.5" />}
+                  onClick={() => navigateTo("/admin/payments/refunds")}
+                >
+                  Refund Center
+                </GlassButton>
+              )}
+''',
+)
+replace_once(
+    p,
     '''                  {funds.availableMinor > 0 && (
                     <GlassButton
                       variant="primary"
