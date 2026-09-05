@@ -25,6 +25,7 @@ export interface Envelope<T> {
 export interface UseMetaQueryOptions {
   enabled?: boolean;
   refetchInterval?: number;
+  /** Refetch when the window regains focus. Default false. */
   refetchOnWindowFocus?: boolean;
   staleTime?: number;
   placeholderData?: PlaceholderDataFunction<any>;
@@ -83,7 +84,7 @@ export function useApiMetaQuery<T>(
     staleTime: options?.staleTime ?? 15_000,
     placeholderData: (options?.placeholderData ?? keepPreviousData) as any,
     refetchInterval: options?.refetchInterval,
-    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? true,
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? false,
   }) as UseQueryResult<Envelope<T>, ApiClientError>;
 }
 
