@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useId } from "react";
-import { ArrowDownLeft, Banknote, RotateCcw, ShieldCheck, Wallet } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowDownLeft, RotateCcw, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { DetailDialog, Chip } from "./chrome";
 import { TextField } from "./fields";
@@ -17,6 +18,8 @@ export interface RefundDialogProps {
   residentId: string;
   residentName: string;
   availableMinor: number;
+  latestBillNumber?: string | null;
+  billingPeriodLabel?: string | null;
   onSaved: () => void;
 }
 
@@ -26,6 +29,8 @@ export function RefundDialog({
   residentId,
   residentName,
   availableMinor,
+  latestBillNumber,
+  billingPeriodLabel,
   onSaved,
 }: RefundDialogProps) {
   const [mode, setMode] = useState<"ISSUE_REFUND" | "CARRY_FORWARD">("ISSUE_REFUND");
@@ -35,7 +40,6 @@ export function RefundDialog({
   const [saving, setSaving] = useState(false);
   const amountId = useId();
 
-  // Reset form state when opened
   useEffect(() => {
     if (open) {
       setMode("ISSUE_REFUND");
@@ -50,7 +54,15 @@ export function RefundDialog({
   const parsedMinor = Number.isFinite(numericAmount) ? Math.round(numericAmount * 100) : 0;
   const isAmountValid = parsedMinor > 0 && parsedMinor <= availableMinor;
   const isReasonValid = reason.trim().length >= 5;
-  const canSubmit = isAmountValid && isReasonValid && !saving;
+  const carryForwardUsesFullExcess = mode !== "CARRY_FORWARD" || parsedMinor === availableMinor;
+  const canSubmit = isAmountValid && isReasonValid && carryForwardUsesFullExcess && !saving;
+
+  function selectMode(next: "ISSUE_REFUND" | "CARRY_FORWARD") {
+    setMode(next);
+    if (next === "CARRY_FORWARD" && availableMinor > 0) {
+      setAmount((availableMinor / 100).toFixed(2));
+    }
+  }
 
   async function handleSubmit() {
     if (!canSubmit) return;
@@ -61,15 +73,12 @@ export function RefundDialog({
         amount: (parsedMinor / 100).toFixed(2),
         mode,
         reason: reason.trim(),
-        destination: destination.trim() || undefined,
+        destination: mode === "ISSUE_REFUND" ? destination.trim() || undefined : undefined,
       });
 
-      toast.success(
-        mode === "ISSUE_REFUND" ? "Refund issued successfully" : "Excess credit resolved",
-        {
-          description: `₹${(parsedMinor / 100).toFixed(2)} for ${residentName} — ${reason.trim()}`,
-        }
-      );
+      toast.success(mode === "ISSUE_REFUND" ? "Refund issued successfully" : "Excess credit carried forward", {
+        description: `₹${(parsedMinor / 100).toFixed(2)} for ${residentName} — ${reason.trim()}`,
+      });
 
       onSaved();
       onOpenChange(false);
@@ -84,8 +93,8 @@ export function RefundDialog({
     <DetailDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Issue refund / Resolve excess credit"
-      description={`Process an approved credit refund for ${residentName}. Refunds strictly draw from approved available funds.`}
+      title="Resolve post-billing excess credit"
+      description={`Choose what to do with ${residentName}'s confirmed excess only after billing has been generated.`}
       footer={
         <>
           <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
@@ -104,86 +113,93 @@ export function RefundDialog({
       }
     >
       <div className="space-y-4">
-        {/* Resident & Available Funds Snapshot */}
-        <div className="glass-inset flex items-center justify-between rounded-xl p-3 sm:p-3.5">
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass-inset flex items-center justify-between gap-3 rounded-xl p-3 sm:p-3.5"
+        >
           <div className="min-w-0">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground block">
-              Available Credit
+            <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Post-billing excess
             </span>
-            <div className="mt-0.5 flex items-baseline gap-2">
+            <div className="mt-0.5 flex flex-wrap items-baseline gap-2">
               <Money minor={availableMinor} className="text-lg font-bold text-success" />
-              <span className="text-xs text-muted-foreground">approved funds</span>
+              <span className="text-xs text-muted-foreground">eligible now</span>
             </div>
+            {(latestBillNumber || billingPeriodLabel) && (
+              <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                {latestBillNumber ?? "Generated bill"}
+                {billingPeriodLabel ? ` · ${billingPeriodLabel}` : ""}
+              </p>
+            )}
           </div>
           <Chip tone={availableMinor > 0 ? "success" : "neutral"}>
-            {availableMinor > 0 ? "Refundable" : "No credit"}
+            {availableMinor > 0 ? "Refundable" : "No excess"}
           </Chip>
-        </div>
+        </motion.div>
 
-        {/* Mode Selector */}
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-foreground">Resolution Mode</label>
+          <label className="text-xs font-semibold text-foreground">Resolution mode</label>
           <div className="grid grid-cols-2 gap-2">
-            <button
+            <motion.button
               type="button"
-              onClick={() => setMode("ISSUE_REFUND")}
+              whileTap={{ scale: 0.97 }}
+              onClick={() => selectMode("ISSUE_REFUND")}
               className={cn(
                 "flex flex-col items-start gap-1 rounded-xl p-3 text-left transition-all",
                 mode === "ISSUE_REFUND"
-                  ? "bg-primary/15 border border-primary/40 text-foreground ring-1 ring-primary/30"
-                  : "glass-subtle border border-border/40 text-muted-foreground hover:text-foreground"
+                  ? "border border-primary/40 bg-primary/15 text-foreground ring-1 ring-primary/30"
+                  : "glass-subtle border border-border/40 text-muted-foreground hover:-translate-y-0.5 hover:text-foreground"
               )}
             >
-              <div className="flex items-center gap-1.5 font-semibold text-xs text-foreground">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                 <ArrowDownLeft className="size-3.5 text-primary" />
-                <span>Issue Payout</span>
+                <span>Issue payout</span>
               </div>
-              <p className="text-[11px] text-muted-foreground leading-snug">
-                Cash leaves mess accounts immediately (Dr Resident Funds / Cr Cash).
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Return some or all excess money now. Cash and resident liability both reduce.
               </p>
-            </button>
+            </motion.button>
 
-            <button
+            <motion.button
               type="button"
-              onClick={() => setMode("CARRY_FORWARD")}
+              whileTap={{ scale: 0.97 }}
+              onClick={() => selectMode("CARRY_FORWARD")}
               className={cn(
                 "flex flex-col items-start gap-1 rounded-xl p-3 text-left transition-all",
                 mode === "CARRY_FORWARD"
-                  ? "bg-primary/15 border border-primary/40 text-foreground ring-1 ring-primary/30"
-                  : "glass-subtle border border-border/40 text-muted-foreground hover:text-foreground"
+                  ? "border border-primary/40 bg-primary/15 text-foreground ring-1 ring-primary/30"
+                  : "glass-subtle border border-border/40 text-muted-foreground hover:-translate-y-0.5 hover:text-foreground"
               )}
             >
-              <div className="flex items-center gap-1.5 font-semibold text-xs text-foreground">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                 <ShieldCheck className="size-3.5 text-primary" />
-                <span>Carry Forward</span>
+                <span>Carry forward</span>
               </div>
-              <p className="text-[11px] text-muted-foreground leading-snug">
-                Keep excess credit on account for upcoming meals and bills.
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Keep the full excess as resident credit until a future bill consumes it.
               </p>
-            </button>
+            </motion.button>
           </div>
         </div>
 
-        {/* Amount Input */}
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <label htmlFor={amountId} className="text-xs font-semibold text-foreground">
-              Refund Amount (₹)
+              {mode === "ISSUE_REFUND" ? "Refund amount (₹)" : "Carry-forward amount (₹)"}
             </label>
-            {availableMinor > 0 && (
+            {availableMinor > 0 && mode === "ISSUE_REFUND" && (
               <button
                 type="button"
                 onClick={() => setAmount((availableMinor / 100).toFixed(2))}
                 className="text-[11px] font-semibold text-primary hover:underline"
               >
-                Max available (₹{(availableMinor / 100).toFixed(2)})
+                Use full excess (₹{(availableMinor / 100).toFixed(2)})
               </button>
             )}
           </div>
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
-              ₹
-            </span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">₹</span>
             <input
               id={amountId}
               type="number"
@@ -192,39 +208,53 @@ export function RefundDialog({
               max={(availableMinor / 100).toFixed(2)}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
+              disabled={mode === "CARRY_FORWARD"}
               placeholder="0.00"
               className={cn(
-                "glass-input w-full rounded-xl py-2 pl-7 pr-3 text-sm font-semibold text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary",
+                "glass-input w-full rounded-xl py-2 pl-7 pr-3 text-sm font-semibold text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-70",
                 parsedMinor > availableMinor ? "border-danger ring-1 ring-danger/40" : ""
               )}
             />
           </div>
           {parsedMinor > availableMinor && (
             <p className="text-[11px] font-medium text-danger">
-              Amount cannot exceed available credit of ₹{(availableMinor / 100).toFixed(2)}.
+              Amount cannot exceed post-billing excess of ₹{(availableMinor / 100).toFixed(2)}.
+            </p>
+          )}
+          {mode === "CARRY_FORWARD" && (
+            <p className="text-[11px] text-muted-foreground">
+              Carry forward resolves this bill cycle completely, so the full excess is retained as future credit.
             </p>
           )}
         </div>
 
-        {/* Destination (for payouts) */}
-        {mode === "ISSUE_REFUND" && (
-          <TextField
-            label="Payout Destination / Mode"
-            value={destination}
-            onChange={setDestination}
-            maxLength={120}
-            placeholder="e.g. UPI ID (resident@upi), Bank account, or Cash"
-            hint="Record the channel or payment reference used to transfer the money."
-          />
-        )}
+        <AnimatePresence initial={false}>
+          {mode === "ISSUE_REFUND" && (
+            <motion.div
+              key="destination"
+              initial={{ opacity: 0, height: 0, y: -6 }}
+              animate={{ opacity: 1, height: "auto", y: 0 }}
+              exit={{ opacity: 0, height: 0, y: -6 }}
+              transition={{ duration: 0.2 }}
+            >
+              <TextField
+                label="Payout destination / mode"
+                value={destination}
+                onChange={setDestination}
+                maxLength={120}
+                placeholder="e.g. UPI ID, bank account, cash, or transfer reference"
+                hint="Record how the money was returned for the audit trail."
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {/* Reason (mandatory audit) */}
         <TextField
-          label="Reason for refund"
+          label="Reason"
           value={reason}
           onChange={setReason}
           maxLength={500}
-          placeholder="e.g. Overpaid mess advance / security deposit return"
+          placeholder="e.g. Post-billing overpayment for September"
           hint="Mandatory audit trail reason (at least 5 characters)."
         />
       </div>
