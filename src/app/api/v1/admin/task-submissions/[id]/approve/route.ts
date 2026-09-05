@@ -1,14 +1,12 @@
 /**
- * POST /api/v1/admin/task-submissions/[id]/approve — THE money step (spec §62).
- * Single transaction: verify submission is SUBMITTED (else TASK_INVALID_STATE),
- * create the official Expense (source TASK, status APPROVED immediately,
- * displayNumber EXP-…, total recomputed SERVER-side from submission items),
- * copy items with recomputed totals, post the balanced journal
- * (Dr MESS_EXPENSE / Cr CASH, refType TASK_EXPENSE), link
- * expense.sourceTaskSubmissionId (UNIQUE → duplicate money impossible),
- * flip submission→APPROVED (+expenseId) and task→APPROVED, audit twice, notify
- * the resident. Zero-total submissions approve without an expense (journal
- * lines must be non-zero — documented).
+ * POST /api/v1/admin/task-submissions/[id]/approve — verify submitted task work.
+ *
+ * MARKET_PURCHASE: recompute item totals server-side, create exactly one official
+ * Expense, post Dr MESS_EXPENSE / Cr CASH, then approve the submission/task.
+ *
+ * GENERAL: approve the completion with NO Expense and NO journal. Any purchase
+ * lines or non-zero claimed total on a Normal Task fail closed as inconsistent
+ * data rather than silently moving money.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -44,7 +42,24 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       throw new ApiError(CODES.EXPENSE_INVALID_STATE, "An expense already exists for this submission.", 409);
     }
 
-    // Server-recomputed totals — claimedTotal is the resident's claim only.
+    const isGeneralTask = submission.task.taskType === "GENERAL";
+    if (isGeneralTask && (submission.items.length > 0 || submission.claimedTotalMinor !== 0)) {
+      throw new ApiError(
+        CODES.RESOURCE_CHANGED,
+        "This Normal Task contains purchase data and cannot be approved safely.",
+        409
+      );
+    }
+    if (!isGeneralTask && submission.items.length === 0) {
+      throw new ApiError(
+        CODES.RESOURCE_CHANGED,
+        "This Market Task has no purchase items and cannot be approved safely.",
+        409
+      );
+    }
+
+    // Server-recomputed totals — claimedTotal is informational; official money
+    // always comes from persisted submission items.
     const lines = submission.items.map((it, idx) => ({
       itemName: it.itemName,
       quantity: it.quantity,
@@ -53,7 +68,14 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       lineTotalMinor: multiplyRoundHalfUp(it.quantity, it.unitPriceMinor),
       sortOrder: idx,
     }));
-    const totalMinor = lines.reduce((s, l) => s + l.lineTotalMinor, 0);
+    const totalMinor = lines.reduce((sum, line) => sum + line.lineTotalMinor, 0);
+
+    if (isGeneralTask && totalMinor !== 0) {
+      throw new ApiError(CODES.RESOURCE_CHANGED, "Normal Tasks cannot create financial expenses.", 409);
+    }
+    if (!isGeneralTask && totalMinor <= 0) {
+      throw new ApiError(CODES.RESOURCE_CHANGED, "Market Task total must be greater than zero.", 409);
+    }
 
     const now = new Date();
     const expenseDate = localDateMidnightUtc(dateKeyInTz(now, tz));
@@ -63,7 +85,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     let journalId: string | null = null;
     let displayNumber: string | null = null;
 
-    if (totalMinor > 0) {
+    if (!isGeneralTask) {
       displayNumber = await nextExpenseNumber();
       try {
         const expense = await tx.expense.create({
@@ -79,7 +101,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
             approvedByUserId: ctx.user.id,
             reviewedAt: now,
             totalMinor,
-            sourceTaskSubmissionId: submission.id, // UNIQUE — duplicate money guard
+            sourceTaskSubmissionId: submission.id,
             proofFileId: submission.proofFileId ?? null,
           },
         });
@@ -113,15 +135,11 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         );
         journalId = journal.journalId;
         await tx.expense.update({ where: { id: expense.id }, data: { journalId } });
-      } catch (e) {
-        if (isUniqueViolation(e)) {
-          throw new ApiError(
-            CODES.EXPENSE_INVALID_STATE,
-            "An expense already exists for this submission.",
-            409
-          );
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new ApiError(CODES.EXPENSE_INVALID_STATE, "An expense already exists for this submission.", 409);
         }
-        throw e;
+        throw error;
       }
     }
 
@@ -145,7 +163,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         institutionId: ctx.institutionId,
         actorUserId: ctx.user.id,
         actorRole: "ADMIN",
-        action: "TASK_EXPENSE_APPROVED",
+        action: isGeneralTask ? "TASK_COMPLETION_APPROVED" : "TASK_EXPENSE_APPROVED",
         entityType: "TASK_SUBMISSION",
         entityId: submission.id,
         requestId: ctx.requestId,
@@ -153,12 +171,14 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         beforeSummary: JSON.stringify({ status: "SUBMITTED", claimedTotalMinor: submission.claimedTotalMinor }),
         afterSummary: JSON.stringify({
           status: "APPROVED",
+          taskType: submission.task.taskType,
           totalMinor,
           expenseId,
           journalId,
         }),
         metadata: {
           taskId: submission.taskId,
+          taskType: submission.task.taskType,
           residentId: submission.task.assignedResidentId,
           itemCount: lines.length,
           claimedTotalMinor: submission.claimedTotalMinor,
@@ -198,11 +218,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         userId: submission.task.assignedResidentId,
         institutionId: ctx.institutionId,
         type: "TASK_APPROVED",
-        title: "Market purchase approved",
-        message:
-          totalMinor > 0
-            ? `Your market purchase was approved — ${formatMinor(totalMinor)} added to expenses.`
-            : "Your market purchase submission was approved.",
+        title: isGeneralTask ? "Normal task completed" : "Market purchase approved",
+        message: isGeneralTask
+          ? `Your completion for "${submission.task.description}" was approved.`
+          : `Your market purchase was approved — ${formatMinor(totalMinor)} added to expenses.`,
         entityRef: submission.taskId,
       },
       tx
@@ -214,13 +233,14 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       types: ["TASK_SUBMITTED"],
       actorUserId: ctx.user.id,
       actorRole: "ADMIN",
-      reason: "Task purchase submission approved by admin",
+      reason: isGeneralTask ? "Normal task completion approved by admin" : "Market task purchase approved by admin",
       client: tx,
     });
 
     return {
       submissionId: submission.id,
       taskId: submission.taskId,
+      taskType: submission.task.taskType,
       status: "APPROVED",
       totalMinor,
       claimedTotalMinor: submission.claimedTotalMinor,
