@@ -21,6 +21,29 @@ export type CreateRefundInput = {
   requestId: string;
 };
 
+export type RefundEligibilityReason =
+  | "ELIGIBLE"
+  | "NO_GENERATED_BILL"
+  | "NO_EXCESS_CREDIT"
+  | "CARRIED_FORWARD";
+
+export type RefundEligibility = {
+  residentId: string;
+  eligible: boolean;
+  reason: RefundEligibilityReason;
+  refundableMinor: number;
+  summary: Awaited<ReturnType<typeof residentFundsSummary>>;
+  latestBill: {
+    id: string;
+    billNumber: string;
+    billingPeriodId: string;
+    year: number;
+    month: number;
+    generatedAt: Date;
+  } | null;
+  carriedForwardAt: Date | null;
+};
+
 function isSerializationConflict(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { code?: string }).code === "P2034";
 }
@@ -40,10 +63,117 @@ async function serializableWrite<T>(work: (tx: any) => Promise<T>): Promise<T> {
 }
 
 /**
+ * Determine whether a resident has an excess credit that may be resolved now.
+ *
+ * Refund lifecycle invariant:
+ *   approved payment -> generated bill(s) -> bill settlement -> excess credit
+ *   -> ISSUE_REFUND or CARRY_FORWARD.
+ *
+ * A positive advance before the first generated bill is intentionally NOT
+ * refundable. CARRY_FORWARD resolves the whole remaining excess for the latest
+ * generated bill cycle without removing the money from the resident balance;
+ * another refund decision becomes available only after a newer bill exists.
+ */
+export async function refundEligibilityForResident(
+  residentId: string,
+  client: any = db
+): Promise<RefundEligibility> {
+  const resident = await client.user.findUnique({
+    where: { id: residentId },
+    select: { id: true, institutionId: true, role: true },
+  });
+  if (!resident || resident.role !== "RESIDENT") {
+    throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
+  }
+
+  const [summary, latestBill] = await Promise.all([
+    residentFundsSummary(resident.id, client),
+    client.bill.findFirst({
+      where: {
+        residentId: resident.id,
+        institutionId: resident.institutionId,
+        status: { not: "VOIDED" },
+        period: { status: { in: ["BILLED", "REOPENED"] } },
+      },
+      orderBy: [{ generatedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      include: { period: { select: { id: true, year: true, month: true } } },
+    }),
+  ]);
+
+  const refundableMinor = Math.max(0, summary.availableMinor);
+  if (!latestBill) {
+    return {
+      residentId: resident.id,
+      eligible: false,
+      reason: "NO_GENERATED_BILL",
+      refundableMinor: 0,
+      summary,
+      latestBill: null,
+      carriedForwardAt: null,
+    };
+  }
+
+  const carriedForward = await client.refund.findFirst({
+    where: {
+      institutionId: resident.institutionId,
+      residentId: resident.id,
+      status: "COMPLETED",
+      mode: "CARRY_FORWARD",
+      createdAt: { gte: latestBill.generatedAt },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { createdAt: true },
+  });
+
+  const bill = {
+    id: latestBill.id,
+    billNumber: latestBill.billNumber,
+    billingPeriodId: latestBill.billingPeriodId,
+    year: latestBill.period.year,
+    month: latestBill.period.month,
+    generatedAt: latestBill.generatedAt,
+  };
+
+  if (carriedForward) {
+    return {
+      residentId: resident.id,
+      eligible: false,
+      reason: "CARRIED_FORWARD",
+      refundableMinor,
+      summary,
+      latestBill: bill,
+      carriedForwardAt: carriedForward.createdAt,
+    };
+  }
+
+  if (refundableMinor <= 0) {
+    return {
+      residentId: resident.id,
+      eligible: false,
+      reason: "NO_EXCESS_CREDIT",
+      refundableMinor: 0,
+      summary,
+      latestBill: bill,
+      carriedForwardAt: null,
+    };
+  }
+
+  return {
+    residentId: resident.id,
+    eligible: true,
+    reason: "ELIGIBLE",
+    refundableMinor,
+    summary,
+    latestBill: bill,
+    carriedForwardAt: null,
+  };
+}
+
+/**
  * Create a refund atomically.
  *
- * The available-credit read and refund write run at SERIALIZABLE isolation so
- * two admins cannot spend the same resident credit concurrently on PostgreSQL.
+ * The eligibility/available-credit read and refund write run at SERIALIZABLE
+ * isolation so two admins cannot spend the same resident credit concurrently.
  * ISSUE_REFUND creates the domain row first as PROCESSING, posts a journal that
  * references the refund ID itself, then marks the row COMPLETED. Any failure
  * rolls the entire transaction back, so PROCESSING is never left behind by a
@@ -77,13 +207,31 @@ export async function createRefund(input: CreateRefundInput) {
       }
     }
 
-    const summaryBefore = await residentFundsSummary(resident.id, tx);
-    const creditable = summaryBefore.availableMinor;
+    const eligibility = await refundEligibilityForResident(resident.id, tx);
+    if (!eligibility.eligible) {
+      const message =
+        eligibility.reason === "NO_GENERATED_BILL"
+          ? "Refunds become available only after this resident has a generated bill."
+          : eligibility.reason === "CARRIED_FORWARD"
+            ? "This bill cycle's excess credit was already carried forward. A new refund decision opens after the next bill is generated."
+            : "This resident has no post-billing excess credit available to refund.";
+      throw new ApiError(CODES.REFUND_NOT_ELIGIBLE, message, 409);
+    }
+
+    const creditable = eligibility.refundableMinor;
     if (input.amountMinor > creditable) {
       throw new ApiError(
         CODES.INSUFFICIENT_REFUND_CREDIT,
         `This resident only has ${formatMinor(Math.max(0, creditable))} available to refund.`,
         422
+      );
+    }
+    if (input.mode === "CARRY_FORWARD" && input.amountMinor !== creditable) {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        "Carry forward resolves the full excess credit for this bill cycle. Choose the full available amount.",
+        422,
+        { amount: `Use the full excess credit of ${formatMinor(creditable)}.` }
       );
     }
 
@@ -137,7 +285,7 @@ export async function createRefund(input: CreateRefundInput) {
         entityId: created.id,
         requestId: input.requestId,
         reason: input.reason,
-        beforeSummary: "—",
+        beforeSummary: formatMinor(creditable),
         afterSummary: input.mode,
         metadata: {
           amountMinor: input.amountMinor,
@@ -146,6 +294,9 @@ export async function createRefund(input: CreateRefundInput) {
           paymentId: input.paymentId ?? null,
           journalId,
           journalRefId: input.mode === "ISSUE_REFUND" ? created.id : null,
+          billingPeriodId: eligibility.latestBill?.billingPeriodId ?? null,
+          billId: eligibility.latestBill?.id ?? null,
+          billNumber: eligibility.latestBill?.billNumber ?? null,
         },
       },
       tx
@@ -158,11 +309,11 @@ export async function createRefund(input: CreateRefundInput) {
         userId: resident.id,
         institutionId: input.institutionId,
         type: "REFUND_ISSUED",
-        title: input.mode === "ISSUE_REFUND" ? "Refund issued" : "Excess credit noted",
+        title: input.mode === "ISSUE_REFUND" ? "Refund issued" : "Excess credit carried forward",
         message:
           input.mode === "ISSUE_REFUND"
             ? `A refund of ${formatMinor(input.amountMinor)} has been issued for you — ${input.reason}`
-            : `An excess credit of ${formatMinor(input.amountMinor)} was noted on your account — it stays available for future bills.`,
+            : `Your excess credit of ${formatMinor(input.amountMinor)} was carried forward for future bills — ${input.reason}`,
         entityRef: created.id,
       },
       tx
@@ -170,12 +321,12 @@ export async function createRefund(input: CreateRefundInput) {
 
     // Defense in depth. SERIALIZABLE isolation is the concurrency guarantee;
     // this assertion also catches future calculation changes that could make a
-    // successful refund overdraw resident credit within the same transaction.
+    // successful cash refund overdraw resident credit within the same transaction.
     const summaryAfter = await residentFundsSummary(resident.id, tx);
     if (summaryAfter.availableMinor < 0) {
       throw new ApiError(
         CODES.INSUFFICIENT_REFUND_CREDIT,
-        `This resident only has ${formatMinor(Math.max(0, summaryBefore.availableMinor))} available to refund.`,
+        `This resident only has ${formatMinor(Math.max(0, eligibility.summary.availableMinor))} available to refund.`,
         422
       );
     }
