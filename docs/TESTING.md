@@ -114,9 +114,10 @@ Password: Resident#12345
 5. Verify guest meals remain separate from resident meal totals.
 6. Exercise Normal Task and Market Task flows separately.
 7. Submit/review payments and check that posted financial history remains auditable.
-8. Review Variables + Formula Engine on the same Admin page and use preview before activation.
-9. Check previous billed month history remains unchanged while current month is open.
-10. Test logout and verify the old session cannot access authenticated APIs.
+8. After a bill exists, create an overpayment and open **Admin → Payments → Refund Center**. Test a partial cash payout, then carry forward the remaining excess. The resident should disappear from Refund Center for that bill cycle while the carried-forward credit remains available for a future bill.
+9. Review Variables + Formula Engine on the same Admin page and use preview before activation.
+10. Check previous billed month history remains unchanged while current month is open.
+11. Test logout and verify the old session cannot access authenticated APIs.
 
 ## Production business-flow smoke
 
@@ -140,11 +141,35 @@ This test discovers the seeded resident, future unlocked meals, definition IDs a
 
 The smoke mutates the disposable seeded database and therefore must not be pointed at a production database.
 
+## Production Refund Center smoke
+
+The Refund Center has a separate production-server acceptance because it intentionally mutates post-billing money state:
+
+```bash
+BOARDOPS_REFUND_SMOKE_DIAGNOSTIC_DIR=refund-smoke-diagnostics \
+  bash tests/seeded-refund-center-smoke.sh
+```
+
+It verifies the complete post-billing excess lifecycle through authenticated HTTP APIs:
+
+- a large resident payment is still `PENDING` until Admin approval;
+- after approval, genuine excess appears in `/api/v1/admin/refunds/eligible` with latest-bill provenance;
+- a partial `ISSUE_REFUND` completes, posts a refund journal and reduces the Refund Center amount exactly once;
+- the resident stays in Refund Center with the precise remaining excess after a partial payout;
+- partial `CARRY_FORWARD` is rejected because carry-forward must resolve the whole current-cycle remainder;
+- full carry-forward completes without a cash journal and preserves the remaining credit for a future bill;
+- the resident then disappears from Refund Center for the current bill cycle;
+- a second refund decision is rejected until a newer bill exists;
+- both Admin and Resident refund histories show the payout and carry-forward records.
+
+Like every seeded smoke, this must run only against disposable test data.
+
 ## CI acceptance guarantee
 
-The CI pipeline runs the same development seed against PostgreSQL and builds the production standalone server. It then runs two seeded production gates:
+The CI pipeline runs the same development seed against PostgreSQL and builds the production standalone server. It then runs three seeded production gates:
 
 1. **Authentication/authorization smoke** — successful Admin and Resident login, session-role verification, Admin/Resident API isolation, and logout/session revocation.
 2. **Cross-role business-flow smoke** — guest separation/idempotency, selected-meal leave, selected-meal calendar disable, GENERAL vs MARKET task lifecycle, market-expense creation, payment submit/approve/idempotency, Formula Engine preview non-mutation, and historical-bill provenance stability.
+3. **Refund Center lifecycle smoke** — post-billing overpayment discovery, partial cash payout, remaining-excess recalculation, whole-remainder carry-forward, current-cycle closure, and Admin/Resident history visibility.
 
 These gates run in addition to migrations, zero-warning lint, unit/integration tests, the PostgreSQL + uploads disaster-recovery drill, storage-integrity checks, production build and the standalone runtime smoke. CI uploads separate server/flow diagnostics when any production smoke fails.
