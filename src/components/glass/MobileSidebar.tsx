@@ -6,11 +6,11 @@
  * Spring slide-in from the left inside a glass-strong floating card:
  * brand header with close · user row · "Search Aurora" row (⌘K) · grouped
  * nav where the active item is a SOLID primary pill with a chevron. Escape
- * closes, body scroll locks, and the closed drawer is aria-hidden +
- * inert so keyboard focus never reaches it.
+ * closes, body scroll locks, focus is trapped while open, and focus returns
+ * to the invoking control when the drawer closes.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronRight, LogOut, Search, X } from "lucide-react";
 import { navGroups, type NavItem } from "@/components/app/nav";
@@ -43,6 +43,15 @@ const ROLE_LABELS: Record<string, string> = {
   ADMIN: "Administrator",
   RESIDENT: "Resident",
 };
+
+const FOCUSABLE_SELECTOR = [
+  "button:not([disabled])",
+  "a[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
 
 function DrawerItem({
   item,
@@ -110,6 +119,8 @@ export function MobileSidebar({
 }: MobileSidebarProps) {
   const reduced = useReducedMotion();
   const groups = navGroups(role);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   /* body scroll lock while open */
   useEffect(() => {
@@ -120,14 +131,52 @@ export function MobileSidebar({
     };
   }, [open]);
 
-  /* Escape closes */
+  /* Modal keyboard behavior: focus entry, Escape, Tab containment, restoration. */
   useEffect(() => {
     if (!open) return;
+
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onOpenChange(false);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onOpenChange(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (element) => element.getAttribute("aria-hidden") !== "true" && !element.hasAttribute("disabled")
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panel.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      }
     };
+
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
   }, [open, onOpenChange]);
 
   const handleNav = (hash: string) => {
@@ -144,7 +193,7 @@ export function MobileSidebar({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: reduced ? 0 : 0.2 }}
             onClick={() => onOpenChange(false)}
             className="fixed inset-0 z-[var(--z-nav)] bg-black/55 backdrop-blur-sm"
             aria-hidden
@@ -152,11 +201,15 @@ export function MobileSidebar({
 
           {/* drawer */}
           <motion.aside
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-sidebar-title"
+            tabIndex={-1}
             initial={reduced ? { x: 0, opacity: 0 } : { x: "-102%", opacity: 1 }}
             animate={{ x: 0, opacity: 1 }}
             exit={reduced ? { x: 0, opacity: 0 } : { x: "-102%", opacity: 1 }}
-            transition={reduced ? { duration: 0.12 } : { ...SPRING_SOFT, damping: 30, stiffness: 320 }}
-            aria-label="Navigation"
+            transition={reduced ? { duration: 0 } : { ...SPRING_SOFT, damping: 30, stiffness: 320 }}
             className="fixed inset-y-0 left-0 z-[var(--z-modal)] flex w-[86vw] max-w-[400px] flex-col p-2 md:w-[400px] md:shrink-0"
             style={{
               paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
@@ -177,7 +230,7 @@ export function MobileSidebar({
                     />
                   </span>
                   <div className="min-w-0">
-                    <p className="font-display truncate text-[15px] font-bold leading-tight tracking-tight">
+                    <p id="mobile-sidebar-title" className="font-display truncate text-[15px] font-bold leading-tight tracking-tight">
                       Aurora Mess
                     </p>
                     <p className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -186,6 +239,7 @@ export function MobileSidebar({
                   </div>
                 </div>
                 <button
+                  ref={closeButtonRef}
                   type="button"
                   onClick={() => onOpenChange(false)}
                   aria-label="Close menu"
