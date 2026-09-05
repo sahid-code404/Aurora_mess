@@ -31,6 +31,7 @@ import { evaluateFormula } from "./formula/evaluator";
 import { gatherPeriodVariables, periodBounds } from "./formula/period-variables";
 import { resolveFormulaVersionForPeriod } from "./formula/versions";
 import { billingSnapshotChecksum } from "./billing-integrity";
+import { isBillPastDueDate } from "./bill-status";
 
 const UNSETTLED_BILL_STATUSES = ["GENERATED", "PARTIALLY_PAID", "OVERDUE"];
 const GUEST_CONFIRMED = ["CONFIRMED", "CONSUMED"];
@@ -1049,9 +1050,13 @@ export async function reopenBillingPeriod(
 }
 
 /** Convenience for resident views: latest unsettled/overdue derivation. */
-export function derivePaymentStatus(bills: { status: string; dueDate: Date }[]): string {
+export function derivePaymentStatus(
+  bills: { status: string; dueDate: Date }[],
+  timeZone = "Asia/Kolkata",
+  now = new Date()
+): string {
   const unsettled = bills.filter((b) => UNSETTLED_BILL_STATUSES.includes(b.status));
-  if (unsettled.some((b) => b.status === "OVERDUE" || b.dueDate < new Date())) return "Overdue";
+  if (unsettled.some((b) => isBillPastDueDate(b.dueDate, timeZone, now))) return "Overdue";
   if (unsettled.length > 0) return "Due";
   return "Settled";
 }

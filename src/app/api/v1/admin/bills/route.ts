@@ -5,10 +5,12 @@
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
+import { getInstitution } from "@/lib/institution";
 import { ApiError, CODES } from "@/lib/errors";
 import { formatMinor } from "@/lib/money";
 import { finishPage, keysetWhere } from "@/lib/domain/http";
 import { serializeBill } from "@/lib/domain/serialize";
+import { currentLocalDateMarker, effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const q = (url.searchParams.get("q") ?? "").trim();
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 25) || 25));
+  const institution = await getInstitution(ctx.institutionId);
+  const timeZone = institution?.timezone ?? "UTC";
+  const now = new Date();
+  const todayMarker = currentLocalDateMarker(timeZone, now);
 
   const fields: Record<string, string> = {};
   if (status && !BILL_STATUSES.includes(status)) fields.status = "Unknown bill status filter.";
@@ -64,7 +70,26 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   const base: Record<string, unknown> = { institutionId: ctx.institutionId };
   if (periodId) base.billingPeriodId = periodId;
-  if (status) base.status = status;
+  if (status === "VOIDED") {
+    base.status = "VOIDED";
+  } else if (status === "PAID") {
+    base.status = { not: "VOIDED" };
+    base.totalDueMinor = 0;
+  } else if (status === "OVERDUE") {
+    base.status = { not: "VOIDED" };
+    base.totalDueMinor = { gt: 0 };
+    base.dueDate = { lt: todayMarker };
+  } else if (status === "PARTIALLY_PAID") {
+    base.status = { not: "VOIDED" };
+    base.totalDueMinor = { gt: 0 };
+    base.paymentsMinor = { gt: 0 };
+    base.dueDate = { gte: todayMarker };
+  } else if (status === "GENERATED") {
+    base.status = { not: "VOIDED" };
+    base.totalDueMinor = { gt: 0 };
+    base.paymentsMinor = 0;
+    base.dueDate = { gte: todayMarker };
+  }
   let searchConditions: Record<string, unknown>[] | null = null;
   if (q) {
     const matched = await db.user.findMany({
@@ -104,8 +129,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   };
   const overdueWhere: Record<string, unknown> = {
     institutionId: ctx.institutionId,
-    status: { in: ["GENERATED", "PARTIALLY_PAID", "OVERDUE"] },
-    dueDate: { lt: new Date() },
+    status: { not: "VOIDED" },
+    totalDueMinor: { gt: 0 },
+    dueDate: { lt: todayMarker },
     ...(periodId ? { billingPeriodId: periodId } : {}),
   };
 
@@ -123,10 +149,8 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     }),
   ]);
 
-  const now = new Date();
   const sortedItems = [...page.items].sort((a, b) => {
-    const isOverdue = (bill: typeof a) =>
-      bill.status === "OVERDUE" || (bill.totalDueMinor > 0 && bill.dueDate < now);
+    const isOverdue = (bill: typeof a) => bill.totalDueMinor > 0 && bill.dueDate < todayMarker;
     const isActionNeeded = (bill: typeof a) => bill.totalDueMinor > 0;
 
     const getRank = (bill: typeof a) => {
@@ -150,6 +174,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   return {
     data: sortedItems.map((b) => ({
       ...serializeBill(b),
+      status: effectiveBillStatus(b, timeZone, now),
       residentName: nameMap.get(b.residentId) ?? "Resident",
     })),
     meta: {

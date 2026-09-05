@@ -33,6 +33,7 @@ import {
   type DeficitPolicyState,
 } from "@/lib/domain/policy/deficit-policy";
 import { resolveActiveDeficitRuleSet } from "@/lib/domain/rules/deficit-rules";
+import { effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export type { DeficitPolicyState } from "@/lib/domain/policy/deficit-policy";
 
@@ -229,11 +230,20 @@ export type BillApplication = {
 function deriveBillStatus(
   bill: { dueDate: Date },
   totalDueMinor: number,
-  appliedMinor: number
+  appliedMinor: number,
+  timeZone: string,
+  now: Date
 ): string {
-  if (totalDueMinor === 0) return "PAID";
-  if (bill.dueDate < new Date()) return "OVERDUE";
-  return appliedMinor > 0 ? "PARTIALLY_PAID" : "GENERATED";
+  return effectiveBillStatus(
+    {
+      status: "GENERATED",
+      dueDate: bill.dueDate,
+      totalDueMinor,
+      paymentsMinor: appliedMinor,
+    },
+    timeZone,
+    now
+  );
 }
 
 /**
@@ -253,6 +263,15 @@ export async function recomputeBillSettlement(
   client: any,
   residentId: string
 ): Promise<{ poolMinor: number; changedBills: BillApplication[]; unappliedMinor: number }> {
+  const resident = await client.user.findUnique({
+    where: { id: residentId },
+    select: { institutionId: true },
+  });
+  if (!resident) throw new Error("RESIDENT_NOT_FOUND");
+  const institution = await getInstitution(resident.institutionId);
+  const timeZone = institution?.timezone ?? "UTC";
+  const statusNow = new Date();
+
   const poolAgg = await client.payment.aggregate({
     where: { residentId, status: "APPROVED" },
     _sum: { amountMinor: true },
@@ -270,7 +289,7 @@ export async function recomputeBillSettlement(
     const capacity = Math.max(0, bill.subtotalMinor + bill.adjustmentsMinor);
     const appliedMinor = Math.min(remaining, capacity);
     const totalDueMinor = Math.max(0, capacity - appliedMinor);
-    const status = deriveBillStatus(bill, totalDueMinor, appliedMinor);
+    const status = deriveBillStatus(bill, totalDueMinor, appliedMinor, timeZone, statusNow);
     if (appliedMinor !== bill.paymentsMinor || totalDueMinor !== bill.totalDueMinor || status !== bill.status) {
       await client.bill.update({
         where: { id: bill.id },

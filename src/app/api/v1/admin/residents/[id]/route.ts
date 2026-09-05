@@ -16,6 +16,7 @@ import { appendAudit } from "@/lib/audit";
 import { formatMinor } from "@/lib/money";
 import { getInstitution } from "@/lib/institution";
 import { zonedTimeToUtc } from "@/lib/time";
+import { effectiveBillStatus } from "@/lib/domain/bill-status";
 
 const updateResidentSchema = z.object({
   fullName: z.string().trim().min(2, "Name must be at least 2 characters.").max(80).optional(),
@@ -46,6 +47,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   if (!user) {
     throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
   }
+
+  const institution = await getInstitution(ctx.institutionId);
+  const timeZone = institution?.timezone ?? "UTC";
+  const statusNow = new Date();
 
   const [statusHistory, funds, payments, bills, tasks, leave, audit, refunds] = await Promise.all([
     db.userStatusHistory.findMany({
@@ -156,7 +161,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       bills: bills.map((b) => ({
         id: b.id,
         billNumber: b.billNumber,
-        status: b.status,
+        status: effectiveBillStatus(b, timeZone, statusNow),
         totalDueMinor: b.totalDueMinor,
         subtotalMinor: b.subtotalMinor,
         dueDate: b.dueDate,

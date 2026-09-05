@@ -283,10 +283,8 @@ export default function ResidentBilling() {
   );
 
   const sortedBills = useMemo(() => {
-    const now = new Date();
     return [...bills].sort((a, b) => {
-      const isOverdue = (bill: BillDto) =>
-        bill.status === "OVERDUE" || (bill.totalDueMinor > 0 && bill.dueDate && new Date(bill.dueDate) < now);
+      const isOverdue = (bill: BillDto) => bill.status === "OVERDUE";
       const isActionNeeded = (bill: BillDto) => bill.totalDueMinor > 0;
 
       const getRank = (bill: BillDto) => {

@@ -7,9 +7,11 @@
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
+import { getInstitution } from "@/lib/institution";
 import { ApiError, CODES } from "@/lib/errors";
 import { formatMinor } from "@/lib/money";
 import { serializeBill, serializeBillLine } from "@/lib/domain/serialize";
+import { effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +32,10 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.FORBIDDEN, "You do not have access to this bill.", 403);
   }
 
+  const institution = await getInstitution(ctx.institutionId);
+  const timeZone = institution?.timezone ?? "UTC";
+  const now = new Date();
+
   const snapshot = await db.billingSnapshot.findUnique({
     where: { billingPeriodId: bill.billingPeriodId },
     select: { id: true, checksum: true, mealChargeMinor: true, createdAt: true },
@@ -38,6 +44,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   return {
     data: {
       ...serializeBill(bill),
+      status: effectiveBillStatus(bill, timeZone, now),
       lines: bill.lines.map((line) => serializeBillLine(line)),
       adjustments: bill.adjustments.map((a) => ({
         id: a.id,

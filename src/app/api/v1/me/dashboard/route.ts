@@ -103,7 +103,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   sweepOutbox(20).catch(() => {});
 
   const myMealMap = new Map(myMealsToday.map((m) => [m.mealInstanceId, m]));
-  const paymentStatus = derivePaymentStatus(unsettledBills);
+  const paymentStatus = derivePaymentStatus(unsettledBills, tz, now);
   const mealsToday = myMealsToday.filter((m) => m.effectiveState === "ON").length;
 
   return {
