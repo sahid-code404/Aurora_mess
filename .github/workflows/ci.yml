@@ -136,6 +136,11 @@ jobs:
           BOARDOPS_LEAVE_SMOKE_DIAGNOSTIC_DIR: leave-smoke-diagnostics
         run: bash tests/seeded-leave-cancel-smoke.sh
 
+      - name: Seeded Resident payment withdrawal lifecycle smoke
+        env:
+          BOARDOPS_PAYMENT_WITHDRAW_SMOKE_DIAGNOSTIC_DIR: payment-withdraw-smoke-diagnostics
+        run: bash tests/seeded-payment-withdrawal-smoke.sh
+
       - name: Upload runtime smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -147,5 +152,6 @@ jobs:
             business-smoke-diagnostics/
             refund-smoke-diagnostics/
             leave-smoke-diagnostics/
+            payment-withdraw-smoke-diagnostics/
           if-no-files-found: ignore
           retention-days: 3
