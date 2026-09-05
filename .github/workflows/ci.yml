@@ -71,26 +71,19 @@ jobs:
 
       - name: Setup PostgreSQL 17 recovery client
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl ca-certificates
-          sudo install -d /usr/share/postgresql-common/pgdg
-          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-            --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
-          . /etc/os-release
-          ARCH="$(dpkg --print-architecture)"
-          sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null <<EOF
-          Types: deb
-          URIs: https://apt.postgresql.org/pub/repos/apt
-          Suites: ${VERSION_CODENAME}-pgdg
-          Architectures: ${ARCH}
-          Components: main
-          Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          mkdir -p "$RUNNER_TEMP/pg17-bin"
+          cat > "$RUNNER_TEMP/pg17-bin/pg_dump" <<'EOF'
+          #!/usr/bin/env bash
+          exec docker run --rm --network host -v /tmp:/tmp postgres:17-alpine pg_dump "$@"
           EOF
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client-17
-          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
-          /usr/lib/postgresql/17/bin/pg_dump --version
-          /usr/lib/postgresql/17/bin/pg_restore --version
+          cat > "$RUNNER_TEMP/pg17-bin/pg_restore" <<'EOF'
+          #!/usr/bin/env bash
+          exec docker run --rm --network host -v /tmp:/tmp postgres:17-alpine pg_restore "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/pg17-bin/pg_dump" "$RUNNER_TEMP/pg17-bin/pg_restore"
+          echo "$RUNNER_TEMP/pg17-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/pg17-bin/pg_dump" --version
+          "$RUNNER_TEMP/pg17-bin/pg_restore" --version
 
       - name: Deployment runtime guards
         run: bash tests/database-runtime-build.sh
