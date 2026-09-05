@@ -3,7 +3,7 @@ set -euo pipefail
 
 CHECK_MODE="${1:-all}"
 case "$CHECK_MODE" in
-  all|process|readiness|session|login|login-status|login-code|login-token|csrf) ;;
+  all|process|readiness|session|login|csrf) ;;
   *) echo "unknown production smoke mode: $CHECK_MODE" >&2; exit 2 ;;
 esac
 
@@ -181,26 +181,6 @@ if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "login" ]; then
   CURRENT_STAGE="login-error-code"
   assert_json invalid_credentials
   CURRENT_STAGE="login-token-omission"
-  assert_json no_session_token
-fi
-
-if [ "$CHECK_MODE" = "login-status" ]; then
-  CURRENT_STAGE="login-status"
-  status="$(login_request)"
-  if [ "$status" != "401" ]; then
-    fail "invalid same-origin login returned HTTP $status; expected 401"
-  fi
-fi
-
-if [ "$CHECK_MODE" = "login-code" ]; then
-  CURRENT_STAGE="login-error-code"
-  login_request >/dev/null
-  assert_json invalid_credentials
-fi
-
-if [ "$CHECK_MODE" = "login-token" ]; then
-  CURRENT_STAGE="login-token-omission"
-  login_request >/dev/null
   assert_json no_session_token
 fi
 
