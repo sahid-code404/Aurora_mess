@@ -3,6 +3,7 @@
  * Resolves available funds, deficits, credit balances, and outstanding balances.
  */
 import { getAccountBalances } from "@/lib/domain/ledger";
+import { PAYMENT_CREDIT_STATUSES } from "@/lib/domain/payment-lifecycle";
 
 export async function resolveFundsVariables(
   institutionId: string,
@@ -28,7 +29,7 @@ export async function resolveFundsVariables(
   const [paymentsAgg, billsAgg, refundsAgg] = await Promise.all([
     client.payment.aggregate({
       _sum: { amountMinor: true },
-      where: { institutionId, status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] } },
+      where: { institutionId, status: { in: [...PAYMENT_CREDIT_STATUSES] } },
     }),
     client.bill.aggregate({
       _sum: { subtotalMinor: true, adjustmentsMinor: true, totalDueMinor: true },

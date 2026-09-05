@@ -32,6 +32,7 @@ import { gatherPeriodVariables, periodBounds } from "./formula/period-variables"
 import { resolveFormulaVersionForPeriod } from "./formula/versions";
 import { billingSnapshotChecksum } from "./billing-integrity";
 import { isBillPastDueDate } from "./bill-status";
+import { PAYMENT_CREDIT_STATUSES } from "./payment-lifecycle";
 
 const UNSETTLED_BILL_STATUSES = ["GENERATED", "PARTIALLY_PAID", "OVERDUE"];
 const GUEST_CONFIRMED = ["CONFIRMED", "CONSUMED"];
@@ -638,7 +639,7 @@ export async function generateBilling(
       tx.payment.findMany({
         where: {
           institutionId: period.institutionId,
-          status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+          status: { in: [...PAYMENT_CREDIT_STATUSES] },
         },
         select: { id: true, residentId: true, amountMinor: true },
       }),

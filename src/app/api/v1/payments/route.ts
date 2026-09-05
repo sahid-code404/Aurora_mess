@@ -27,6 +27,7 @@ import { finishPage, formFile, formText, keysetWhere, readFormData } from "@/lib
 import { serializePayment } from "@/lib/domain/serialize";
 import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-variables";
 import { residentFundsSummary } from "@/lib/domain/funds";
+import { isPaymentReadStatus, PAYMENT_CREDIT_STATUSES } from "@/lib/domain/payment-lifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -222,7 +223,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 25) || 25));
 
-  if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"].includes(status)) {
+  if (status && !isPaymentReadStatus(status)) {
     throw new ApiError(CODES.VALIDATION_FAILED, "Unknown payment status filter.", 400);
   }
 
@@ -256,7 +257,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
       where: {
         residentId: ctx.user.id,
         institutionId: ctx.institutionId,
-        status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: { in: [...PAYMENT_CREDIT_STATUSES] },
         submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),

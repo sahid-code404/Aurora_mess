@@ -402,7 +402,7 @@ model Payment {
   method            String // UPI | CASH | BANK_TRANSFER | OTHER
   reference         String?
   notes             String?
-  status            String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
+  status            String    @default("PENDING") // current: PENDING | APPROVED | REJECTED | VOIDED; legacy read-only: REFUNDED | PARTIALLY_REFUNDED
   idempotencyKey    String?   @unique
   proofFileId       String?
   submittedAt       DateTime  @default(now())

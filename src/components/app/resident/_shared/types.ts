@@ -299,7 +299,7 @@ export interface PaymentDto {
   amountMinor: number;
   amountFormatted: string;
   method: PaymentMethod;
-  status: "PENDING" | "APPROVED" | "REJECTED" | "VOIDED" | "REFUNDED" | "PARTIALLY_REFUNDED" | string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "VOIDED" | "REFUNDED" | "PARTIALLY_REFUNDED" | string; // refund-like values are legacy read-only compatibility
   reference: string | null;
   notes: string | null;
   hasProof: boolean;

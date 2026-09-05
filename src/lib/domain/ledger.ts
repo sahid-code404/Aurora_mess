@@ -6,6 +6,7 @@
  */
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
+import { PAYMENT_LEDGER_STATUSES } from "@/lib/domain/payment-lifecycle";
 
 export const ACCOUNT_CODES = {
   CASH: "CASH",
@@ -196,7 +197,7 @@ export async function reconcileInstitution(
     client.payment.findMany({
       where: {
         institutionId,
-        status: { in: ["APPROVED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: { in: [...PAYMENT_LEDGER_STATUSES] },
       },
       select: { id: true, status: true, approvedJournalId: true, voidJournalId: true },
     }),

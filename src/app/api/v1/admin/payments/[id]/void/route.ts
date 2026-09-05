@@ -16,6 +16,7 @@ import { postJournal } from "@/lib/domain/ledger";
 import { recomputeBillSettlement } from "@/lib/domain/funds";
 import { serializePayment } from "@/lib/domain/serialize";
 import { resolveNotificationsForEntity } from "@/lib/domain/notify";
+import { isLegacyPaymentRefundStatus } from "@/lib/domain/payment-lifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -30,10 +31,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (payment.status === "VOIDED") {
       throw new ApiError(CODES.PAYMENT_INVALID_STATE, "This payment was already voided.", 409);
     }
-    if (payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED") {
+    if (isLegacyPaymentRefundStatus(payment.status)) {
       throw new ApiError(
         CODES.PAYMENT_INVALID_STATE,
-        "Refunded payments cannot be voided — issue a correcting refund instead.",
+        "This legacy refunded payment cannot be voided directly. Use the account refund history for correction.",
         409
       );
     }

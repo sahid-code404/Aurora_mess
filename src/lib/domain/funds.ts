@@ -33,6 +33,7 @@ import {
   type DeficitPolicyState,
 } from "@/lib/domain/policy/deficit-policy";
 import { resolveActiveDeficitRuleSet } from "@/lib/domain/rules/deficit-rules";
+import { PAYMENT_CREDIT_STATUSES } from "@/lib/domain/payment-lifecycle";
 import { effectiveBillStatus } from "@/lib/domain/bill-status";
 
 export type { DeficitPolicyState } from "@/lib/domain/policy/deficit-policy";
@@ -70,7 +71,7 @@ export async function residentFundsSummary(residentId: string, client: any = db)
     activeExemption,
   ] = await Promise.all([
     client.payment.aggregate({
-      where: { residentId, status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] } },
+      where: { residentId, status: { in: [...PAYMENT_CREDIT_STATUSES] } },
       _sum: { amountMinor: true },
     }),
     client.payment.aggregate({ where: { residentId, status: "PENDING" }, _sum: { amountMinor: true } }),

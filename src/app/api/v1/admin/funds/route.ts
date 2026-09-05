@@ -12,6 +12,7 @@ import { ApiError, CODES } from "@/lib/errors";
 import { formatMinor } from "@/lib/money";
 import { getInstitution } from "@/lib/institution";
 import { residentFundsSummary } from "@/lib/domain/funds";
+import { PAYMENT_CREDIT_STATUSES } from "@/lib/domain/payment-lifecycle";
 import { getAccountBalances } from "@/lib/domain/ledger";
 import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-variables";
 
@@ -54,7 +55,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       _sum: { amountMinor: true },
       where: {
         institutionId: ctx.institutionId,
-        status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: { in: [...PAYMENT_CREDIT_STATUSES] },
         submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),

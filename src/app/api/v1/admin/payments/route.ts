@@ -11,6 +11,7 @@ import { formatMinor } from "@/lib/money";
 import { getInstitution } from "@/lib/institution";
 import { finishPage, keysetWhere } from "@/lib/domain/http";
 import { serializePayment } from "@/lib/domain/serialize";
+import { isPaymentReadStatus, PAYMENT_CREDIT_STATUSES } from "@/lib/domain/payment-lifecycle";
 import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-variables";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +26,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 25) || 25));
 
-  if (status && !STATUSES.includes(status)) {
+  if (status && !isPaymentReadStatus(status)) {
     throw new ApiError(CODES.VALIDATION_FAILED, "Unknown payment status filter.", 400);
   }
 
@@ -86,7 +87,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       _sum: { amountMinor: true },
       where: {
         institutionId: ctx.institutionId,
-        status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: { in: [...PAYMENT_CREDIT_STATUSES] },
         submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
