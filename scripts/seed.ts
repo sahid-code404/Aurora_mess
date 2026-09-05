@@ -8,7 +8,7 @@
  * Run: bun scripts/seed.ts
  */
 import { PrismaClient } from "@prisma/client";
-import { hashPassword } from "../src/lib/auth/password";
+import { hashPassword, verifyPassword } from "../src/lib/auth/password";
 import {
   partsInTz,
   dateKeyInTz,
@@ -130,6 +130,18 @@ async function main() {
   }
 
   // ---------------------------------------------------------------- users
+  // Generate and verify the two deterministic development credential hashes once.
+  // Reusing a role hash keeps the seed fast and guarantees every documented
+  // Resident test account authenticates with the same advertised password.
+  const adminPasswordHash = await hashPassword(ADMIN_PASSWORD);
+  const residentPasswordHash = await hashPassword(RESIDENT_PASSWORD);
+  if (!(await verifyPassword(ADMIN_PASSWORD, adminPasswordHash))) {
+    throw new Error("Development Admin credential hash self-check failed.");
+  }
+  if (!(await verifyPassword(RESIDENT_PASSWORD, residentPasswordHash))) {
+    throw new Error("Development Resident credential hash self-check failed.");
+  }
+
   const mkUser = async (email: string, role: string, status: string, fullName: string, room: string, from?: Date) => {
     const u = await db.user.create({
       data: {
@@ -137,7 +149,7 @@ async function main() {
         role,
         status,
         email,
-        passwordHash: await hashPassword(role === "ADMIN" ? ADMIN_PASSWORD : RESIDENT_PASSWORD),
+        passwordHash: role === "ADMIN" ? adminPasswordHash : residentPasswordHash,
         membershipEffectiveFrom: from ?? new Date(Date.UTC(prev.year, prev.month - 1, 1)),
       },
     });
@@ -169,6 +181,18 @@ async function main() {
     await mkUser("farhan@messtest.in", "RESIDENT", "ACTIVE", "Farhan Khan", "B-205"),
   ];
   const pendingResident = await mkUser("newres@messtest.in", "RESIDENT", "PENDING_APPROVAL", "Nikhil Verma", "B-210");
+
+  // Fail the seed before creating dependent fixture data if the documented
+  // credentials do not verify against what PostgreSQL actually persisted.
+  const persistedAdmin = await db.user.findUnique({ where: { email: ADMIN_EMAIL }, select: { passwordHash: true } });
+  const persistedResident = await db.user.findUnique({ where: { email: "sahid@messtest.in" }, select: { passwordHash: true } });
+  if (!persistedAdmin || !(await verifyPassword(ADMIN_PASSWORD, persistedAdmin.passwordHash))) {
+    throw new Error("Persisted development Admin credential verification failed.");
+  }
+  if (!persistedResident || !(await verifyPassword(RESIDENT_PASSWORD, persistedResident.passwordHash))) {
+    throw new Error("Persisted development Resident credential verification failed.");
+  }
+
   for (const r of residents) {
     for (const p of policyRows) {
       const v = await db.policyVersion.findFirst({ where: { policyId: p.id }, orderBy: { version: "desc" } });
