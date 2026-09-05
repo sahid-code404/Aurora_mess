@@ -13,7 +13,13 @@ export async function claimIdempotencyKey(input: {
   scope: string;
   key: string;
   expiresAt: Date;
+  now?: Date;
 }): Promise<ClaimResult> {
+  const now = input.now ?? new Date();
+  if (input.expiresAt.getTime() <= now.getTime()) {
+    throw new Error("IDEMPOTENCY_EXPIRY_MUST_BE_FUTURE");
+  }
+
   const created = await input.client.idempotencyRecord.createMany({
     data: [
       {
@@ -32,6 +38,26 @@ export async function claimIdempotencyKey(input: {
 
   if (created.count === 1) return { state: "CLAIMED" };
 
+  // The key already exists. Expiry is part of the lifecycle, not informational
+  // metadata: exactly one caller may atomically reclaim an expired key. The
+  // conditional UPDATE is safe under PostgreSQL READ COMMITTED semantics. If
+  // another transaction renews the row first, this update affects zero rows and
+  // the loser falls through to the winner's current state below.
+  const reclaimed = await input.client.idempotencyRecord.updateMany({
+    where: {
+      institutionId: input.institutionId,
+      scope: input.scope,
+      key: input.key,
+      expiresAt: { lte: now },
+    },
+    data: {
+      responseJson: null,
+      expiresAt: input.expiresAt,
+    },
+  });
+
+  if (reclaimed.count === 1) return { state: "CLAIMED" };
+
   const existing = await input.client.idempotencyRecord.findUnique({
     where: {
       institutionId_scope_key: {
@@ -42,7 +68,12 @@ export async function claimIdempotencyKey(input: {
     },
   });
 
-  if (existing?.responseJson) {
+  // A row can disappear only through maintenance between the conflict and this
+  // read. Treat that narrow race as in-progress instead of manufacturing a
+  // second logical request; the client can retry safely.
+  if (!existing) return { state: "IN_PROGRESS" };
+
+  if (existing.responseJson) {
     return {
       state: "REPLAY",
       payload: JSON.parse(existing.responseJson) as Record<string, unknown>,
