@@ -397,13 +397,11 @@ export default function ResidentPayments() {
             <KpiCard
               label="Refunds"
               value={
-                meta?.refundsThisMonthFormatted && meta.refundsThisMonthFormatted !== "₹0.00"
-                  ? meta.refundsThisMonthFormatted
-                  : meta?.refundPendingCount
-                    ? `${meta.refundPendingCount} Pending`
-                    : "—"
+                meta?.refundPendingCount
+                  ? `${meta.refundPendingCount} Pending`
+                  : meta?.refundsThisMonthFormatted ?? "₹0.00"
               }
-              sub={meta?.refundPendingCount ? "In review" : "Processed"}
+              sub={meta?.refundPendingCount ? "In review" : (meta?.refundsThisMonth ?? 0) > 0 ? "Processed" : "No refunds"}
               icon={<RotateCcw />}
               tone="primary"
               glow="primary"

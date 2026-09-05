@@ -67,7 +67,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     db.user.count({ where: { institutionId: ctx.institutionId, status: "PENDING_APPROVAL" } }),
     db.payment.count({ where: { institutionId: ctx.institutionId, status: "PENDING" } }),
     db.leaveRequest.count({ where: { institutionId: ctx.institutionId, status: "PENDING" } }),
-    db.taskSubmission.count({ where: { status: "SUBMITTED" } }),
+    db.taskSubmission.count({
+      where: { status: "SUBMITTED", task: { institutionId: ctx.institutionId } },
+    }),
     db.expense.count({ where: { institutionId: ctx.institutionId, status: "PENDING" } }),
     db.auditEvent.findMany({
       where: { institutionId: ctx.institutionId },
