@@ -14,6 +14,7 @@ import { formatMinor } from "@/lib/money";
 import { reasonSchema } from "@/lib/validation";
 import { postJournal } from "@/lib/domain/ledger";
 import { recomputeBillSettlement } from "@/lib/domain/funds";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 import { serializePayment } from "@/lib/domain/serialize";
 import { resolveNotificationsForEntity } from "@/lib/domain/notify";
 
@@ -40,6 +41,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (payment.status !== "APPROVED") {
       throw new ApiError(CODES.PAYMENT_INVALID_STATE, "Only approved payments can be voided.", 409);
     }
+
+    // Serialize the resident's entire settlement mutation before changing the
+    // payment status. A concurrent approval/void/adjustment must commit first.
+    await lockResidentFinancialMutation(tx, ctx.institutionId, payment.residentId);
 
     const guard = await tx.payment.updateMany({
       where: { id: payment.id, status: "APPROVED" },

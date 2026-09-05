@@ -6,6 +6,7 @@ import { appendOutbox } from "@/lib/outbox";
 import { formatMinor } from "@/lib/money";
 import { postJournal } from "@/lib/domain/ledger";
 import { recomputeBillSettlement } from "@/lib/domain/funds";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 
 export type CreateBillAdjustmentInput = {
   institutionId: string;
@@ -20,13 +21,26 @@ export type CreateBillAdjustmentInput = {
  * Apply one immutable historical bill correction without allowing concurrent
  * admins to race a stale `adjustmentsMinor` read.
  *
- * The Bill row is locked before the mutable aggregate is read. PostgreSQL's
- * READ COMMITTED `FOR UPDATE` semantics make a waiter observe the row version
- * committed by the previous adjustment, so both the non-negative charge guard
- * and the aggregate update are evaluated from the current state.
+ * Lock order is always resident → bill. The resident row serializes every FIFO
+ * settlement mutation across all of that resident's payments and bills; the
+ * Bill row then protects this bill's adjustment aggregate. Reversing that order
+ * could deadlock two adjustments on different bills when settlement recomputes
+ * the resident's complete bill set.
  */
 export async function createBillAdjustment(input: CreateBillAdjustmentInput) {
   return db.$transaction(async (tx) => {
+    // The owner identity is used only to acquire the stable resident mutex. The
+    // Bill is revalidated under its own row lock immediately afterwards.
+    const identity = await tx.bill.findFirst({
+      where: { id: input.billId, institutionId: input.institutionId },
+      select: { id: true, residentId: true },
+    });
+    if (!identity) {
+      throw new ApiError(CODES.NOT_FOUND, "Bill not found.", 404);
+    }
+
+    await lockResidentFinancialMutation(tx, input.institutionId, identity.residentId);
+
     const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT "id"
       FROM "Bill"
@@ -38,7 +52,7 @@ export async function createBillAdjustment(input: CreateBillAdjustmentInput) {
       throw new ApiError(CODES.NOT_FOUND, "Bill not found.", 404);
     }
 
-    // Re-read only after the lock. This must be the current aggregate, never the
+    // Re-read only after both locks. This is the current aggregate, never the
     // stale pre-lock version that allowed concurrent lost updates.
     const bill = await tx.bill.findUnique({
       where: { id: input.billId },
@@ -47,7 +61,11 @@ export async function createBillAdjustment(input: CreateBillAdjustmentInput) {
         lines: { orderBy: { sortOrder: "asc" } },
       },
     });
-    if (!bill || bill.institutionId !== input.institutionId) {
+    if (
+      !bill ||
+      bill.institutionId !== input.institutionId ||
+      bill.residentId !== identity.residentId
+    ) {
       throw new ApiError(CODES.NOT_FOUND, "Bill not found.", 404);
     }
     if (bill.status === "VOIDED") {
