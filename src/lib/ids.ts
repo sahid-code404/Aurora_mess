@@ -2,12 +2,15 @@
  * Human-facing sequential-ish display numbers (spec §254): PAY-202609-0042.
  * Internal authorization always uses opaque cuid ids.
  *
- * Allocation is persisted in DisplayNumberSequence with one atomic PostgreSQL
- * UPSERT per prefix/month. This prevents two concurrent requests from receiving
- * the same candidate. Callers inside an existing write transaction should still
- * pass that transaction client so allocation commits or rolls back with the
- * business write; callers outside a transaction may use the global default and
- * accept harmless gaps if their later write fails.
+ * Allocation reconciles the highest identifier visible to the caller with a
+ * DisplayNumberSequence row, then advances that row with one atomic PostgreSQL
+ * UPSERT. This preserves transaction-local visibility while preventing two
+ * concurrent requests from receiving the same candidate.
+ *
+ * Callers inside an existing write transaction should pass that transaction
+ * client so allocation commits or rolls back with the business write. Callers
+ * outside a transaction may use the global default and accept harmless gaps if
+ * their later write fails.
  */
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
@@ -15,6 +18,7 @@ import { db } from "@/lib/db";
 type SequenceClient = Pick<Prisma.TransactionClient, "$queryRaw">;
 type SequencePrefix = "PAY" | "EXP" | "BILL";
 type SequenceRow = { allocated: number };
+type MaxSequenceRow = { maxSequence: number | null };
 
 function pad(n: number, width: number): string {
   return String(n).padStart(width, "0");
@@ -24,18 +28,57 @@ function monthStamp(date = new Date()): string {
   return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1, 2)}`;
 }
 
+async function highestVisibleSequence(
+  prefix: SequencePrefix,
+  stamp: string,
+  client: SequenceClient
+): Promise<number> {
+  const pattern = `^${prefix}-${stamp}-[0-9]+$`;
+  const rows =
+    prefix === "PAY"
+      ? await client.$queryRaw<MaxSequenceRow[]>(Prisma.sql`
+          SELECT MAX(split_part("displayNumber", '-', 3)::INTEGER) AS "maxSequence"
+          FROM "Payment"
+          WHERE "displayNumber" ~ ${pattern}
+        `)
+      : prefix === "EXP"
+        ? await client.$queryRaw<MaxSequenceRow[]>(Prisma.sql`
+            SELECT MAX(split_part("displayNumber", '-', 3)::INTEGER) AS "maxSequence"
+            FROM "Expense"
+            WHERE "displayNumber" ~ ${pattern}
+          `)
+        : await client.$queryRaw<MaxSequenceRow[]>(Prisma.sql`
+            SELECT MAX(split_part("billNumber", '-', 3)::INTEGER) AS "maxSequence"
+            FROM "Bill"
+            WHERE "billNumber" ~ ${pattern}
+          `);
+
+  const maxSequence = rows[0]?.maxSequence ?? 0;
+  if (!Number.isSafeInteger(maxSequence) || maxSequence < 0) {
+    throw new Error("DISPLAY_NUMBER_SEQUENCE_INVALID");
+  }
+  return maxSequence;
+}
+
 async function nextSequence(
   prefix: SequencePrefix,
   stamp: string,
   client: SequenceClient
 ): Promise<number> {
   const key = `${prefix}:${stamp}`;
+  const highestVisible = await highestVisibleSequence(prefix, stamp, client);
+  const firstUnallocatedAfterVisible = highestVisible + 1;
+  const storedNextValueAfterAllocation = firstUnallocatedAfterVisible + 1;
+
   const rows = await client.$queryRaw<SequenceRow[]>(Prisma.sql`
     INSERT INTO "DisplayNumberSequence" ("key", "nextValue", "updatedAt")
-    VALUES (${key}, 2, CURRENT_TIMESTAMP)
+    VALUES (${key}, ${storedNextValueAfterAllocation}, CURRENT_TIMESTAMP)
     ON CONFLICT ("key") DO UPDATE
     SET
-      "nextValue" = "DisplayNumberSequence"."nextValue" + 1,
+      "nextValue" = GREATEST(
+        "DisplayNumberSequence"."nextValue" + 1,
+        EXCLUDED."nextValue"
+      ),
       "updatedAt" = CURRENT_TIMESTAMP
     RETURNING "nextValue" - 1 AS "allocated"
   `);
