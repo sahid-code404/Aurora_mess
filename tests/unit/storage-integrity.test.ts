@@ -60,7 +60,7 @@ describe("private upload integrity", () => {
     );
     expect(wrongSize?.type).toBe("SIZE_MISMATCH");
 
-    const sameLengthDifferentBytes = Buffer.from("different-proof");
+    const sameLengthDifferentBytes = Buffer.from("replaced-proof");
     expect(sameLengthDifferentBytes.length).toBe(expected.length);
     await writeFile(path.join(dir, "wrong-sha.bin"), sameLengthDifferentBytes);
     const wrongSha = await verifyStoredFileIntegrity(dir, record("wrong-sha", "wrong-sha.bin", expected));
