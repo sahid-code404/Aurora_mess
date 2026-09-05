@@ -83,32 +83,7 @@ jobs:
           NODE_ENV: production
         run: bun run build
 
-      - name: Smoke standalone process and UI
-        run: bash tests/production-runtime-smoke.sh process
-
-      - name: Smoke standalone PostgreSQL readiness
-        run: bash tests/production-runtime-smoke.sh readiness
-
-      - name: Smoke standalone unauthenticated session
-        run: bash tests/production-runtime-smoke.sh session
-
-      - name: Diagnose login HTTP status
-        continue-on-error: true
-        run: bash tests/production-runtime-smoke.sh login-status
-
-      - name: Diagnose login error code
-        continue-on-error: true
-        run: bash tests/production-runtime-smoke.sh login-code
-
-      - name: Diagnose login token omission
-        continue-on-error: true
-        run: bash tests/production-runtime-smoke.sh login-token
-
-      - name: Diagnose standalone CSRF boundary
-        continue-on-error: true
-        run: bash tests/production-runtime-smoke.sh csrf
-
-      - name: Production standalone runtime smoke gate
+      - name: Production standalone runtime smoke
         env:
           BOARDOPS_SMOKE_DIAGNOSTIC_DIR: smoke-diagnostics
         run: bash tests/production-runtime-smoke.sh all
