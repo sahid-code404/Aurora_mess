@@ -4,8 +4,8 @@
  * POST — submit a payment for review (spec §37-38).
  *   multipart/form-data: amount (decimal string), method (UPI|CASH|BANK_TRANSFER|OTHER),
  *   reference?, notes?, proof? (JPEG/PNG/PDF ≤ 2 MB), idempotencyKey? (uuid).
- *   - Rate limited 10/hour per client.
- *   - Idempotent: an existing PAYMENT_SUBMIT key replays the stored response.
+ *   - Rate limited 10/hour per client for genuinely new/in-progress attempts.
+ *   - Completed idempotent retries replay before consuming rate-limit quota.
  *   - residentId is ALWAYS derived from the session — never client-supplied.
  *   - No journal yet: approval (admin) posts Dr CASH / Cr RESIDENT_FUNDS.
  *
@@ -43,15 +43,6 @@ const PAYMENT_IDEMPOTENCY_SCOPE = "PAYMENT_SUBMIT";
 // POST — submit
 // ---------------------------------------------------------------------------
 export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
-  const rl = await rateLimit(clientKey(ctx.req, "payment-submit"), 10, 60 * 60 * 1000);
-  if (!rl.allowed) {
-    throw new ApiError(
-      CODES.RATE_LIMITED,
-      `You've submitted several payments recently — try again in ${rl.retryAfterSec} seconds.`,
-      429
-    );
-  }
-
   const form = await readFormData(ctx.req);
   const amountRaw = formText(form, "amount");
   const methodRaw = formText(form, "method");
@@ -82,10 +73,10 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     ? actorScopedIdempotencyKey(ctx.user.id, idempotencyKey)
     : null;
 
-  // Fast replay before file storage/number allocation. New records are scoped to
-  // the authenticated resident. During the legacy 24-hour window, an old raw-key
-  // record is replayed only after its payment id is verified to belong to this
-  // resident; another resident can never receive that payload.
+  // Completed idempotent retries are reads of an already-accepted business
+  // action, not new submission attempts. Resolve them before consuming the
+  // payment-submit abuse budget. New records are resident-scoped; legacy raw-key
+  // records replay only after their payment ownership is verified.
   if (idempotencyKey && storageIdempotencyKey) {
     const replayNow = new Date();
     const existing = await db.idempotencyRecord.findUnique({
@@ -146,6 +137,18 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         }
       }
     }
+  }
+
+  // Only a request that still needs business processing consumes submission
+  // quota. This keeps network retries reliable even after the client/IP has
+  // exhausted the normal new-payment budget.
+  const rl = await rateLimit(clientKey(ctx.req, "payment-submit"), 10, 60 * 60 * 1000);
+  if (!rl.allowed) {
+    throw new ApiError(
+      CODES.RATE_LIMITED,
+      `You've submitted several payments recently — try again in ${rl.retryAfterSec} seconds.`,
+      429
+    );
   }
 
   // File storage + display number are prepared BEFORE the transaction. A
