@@ -11,10 +11,12 @@ SERVER_PID=""
 CURRENT_STAGE="bootstrap"
 DIAGNOSTIC_DIR="${BOARDOPS_SEEDED_SMOKE_DIAGNOSTIC_DIR:-}"
 
-ADMIN_EMAIL="${BOARDOPS_TEST_ADMIN_EMAIL:-admin@messtest.in}"
-ADMIN_PASSWORD="${BOARDOPS_TEST_ADMIN_PASSWORD:-Admin#12345}"
-RESIDENT_EMAIL="${BOARDOPS_TEST_RESIDENT_EMAIL:-sahid@messtest.in}"
-RESIDENT_PASSWORD="${BOARDOPS_TEST_RESIDENT_PASSWORD:-Resident#12345}"
+# These are deliberately exact literals: this smoke validates the deterministic
+# development seed contract documented in docs/TESTING.md.
+ADMIN_EMAIL="admin@messtest.in"
+ADMIN_PASSWORD="Admin#12345"
+RESIDENT_EMAIL="sahid@messtest.in"
+RESIDENT_PASSWORD="Resident#12345"
 
 cleanup() {
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -140,6 +142,13 @@ login() {
   local email="$1"
   local password="$2"
   local role="$3"
+  local payload
+  payload="$(python3 - "$email" "$password" <<'PY'
+import json
+import sys
+print(json.dumps({"email": sys.argv[1], "password": sys.argv[2]}, separators=(",", ":")))
+PY
+)"
   : >"$HEADER_FILE"
   local status
   status="$(curl --silent --show-error --max-time 10 \
@@ -149,7 +158,7 @@ login() {
     -X POST "$BASE_URL/api/v1/auth/login" \
     -H "Origin: $BASE_URL" \
     -H "Content-Type: application/json" \
-    --data "{\"email\":\"$email\",\"password\":\"$password\"}")"
+    --data-binary "$payload")"
   [ "$status" = "200" ] || fail "$role login returned HTTP $status; expected 200"
   assert_login_json "$role" "$email"
   extract_session_cookie
