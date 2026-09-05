@@ -86,7 +86,9 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     let displayNumber: string | null = null;
 
     if (!isGeneralTask) {
-      displayNumber = await nextExpenseNumber();
+      // Number allocation participates in this exact transaction so it sees any
+      // uncommitted expense rows created earlier in the same approval workflow.
+      displayNumber = await nextExpenseNumber(tx, now);
       try {
         const expense = await tx.expense.create({
           data: {
