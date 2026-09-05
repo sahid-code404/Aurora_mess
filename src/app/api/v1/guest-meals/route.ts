@@ -16,6 +16,7 @@ import { dateKeySchema } from "@/lib/validation";
 import { addDaysToKey, dateKeyInTz, formatTimeLabel, localDateMidnightUtc } from "@/lib/time";
 import { formatMinor } from "@/lib/money";
 import { appendAudit } from "@/lib/audit";
+import { claimIdempotencyKey, completeIdempotencyKey } from "@/lib/idempotency";
 import { keyOfUtcDate, requireInstitutionContext, dayCountBetween } from "@/lib/domain/meal-engine";
 import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
@@ -44,40 +45,23 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const body = await parseBody(ctx.req, createSchema);
 
   const result = await db.$transaction(async (tx) => {
-    // Idempotent replay: same key → same original response (spec §71).
     if (body.idempotencyKey) {
-      const existing = await tx.idempotencyRecord.findUnique({
-        where: {
-          institutionId_scope_key: {
-            institutionId: ctx.institutionId,
-            scope: IDEMPOTENCY_SCOPE,
-            key: body.idempotencyKey,
-          },
-        },
+      const claim = await claimIdempotencyKey({
+        client: tx,
+        institutionId: ctx.institutionId,
+        scope: IDEMPOTENCY_SCOPE,
+        key: body.idempotencyKey,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       });
-      if (existing?.responseJson) {
-        return { replay: true as const, payload: JSON.parse(existing.responseJson) as Record<string, unknown> };
+      if (claim.state === "REPLAY") {
+        return { replay: true as const, payload: claim.payload };
       }
-      // Claim the key FIRST: the unique constraint is the concurrency guard.
-      try {
-        await tx.idempotencyRecord.create({
-          data: {
-            institutionId: ctx.institutionId,
-            scope: IDEMPOTENCY_SCOPE,
-            key: body.idempotencyKey,
-            responseJson: null,
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          },
-        });
-      } catch (error: unknown) {
-        if ((error as { code?: string })?.code === "P2002") {
-          throw new ApiError(
-            CODES.IDPOTENCY_CONFLICT,
-            "This request is already being processed. Please try again in a moment.",
-            409
-          );
-        }
-        throw error;
+      if (claim.state === "IN_PROGRESS") {
+        throw new ApiError(
+          CODES.IDPOTENCY_CONFLICT,
+          "This request is already being processed. Please try again in a moment.",
+          409
+        );
       }
     }
 
@@ -155,42 +139,36 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       tx
     );
 
-    return {
-      replay: false as const,
-      payload: {
-        id: guest.id,
-        mealInstanceId: instance.id,
-        mealName,
-        serviceDate,
-        quantity: guest.quantity,
-        unitPriceMinor,
-        totalPriceMinor,
-        note: guest.note,
-        status: guest.status,
-        createdAt: guest.createdAt.toISOString(),
-      },
+    const payload = {
+      id: guest.id,
+      mealInstanceId: instance.id,
+      mealName,
+      serviceDate,
+      quantity: guest.quantity,
+      unitPriceMinor,
+      totalPriceMinor,
+      note: guest.note,
+      status: guest.status,
+      createdAt: guest.createdAt.toISOString(),
     };
+
+    // Persist the replay payload before commit. A concurrent duplicate blocks on
+    // the claim row, then observes this exact response after the winner commits.
+    if (body.idempotencyKey) {
+      await completeIdempotencyKey({
+        client: tx,
+        institutionId: ctx.institutionId,
+        scope: IDEMPOTENCY_SCOPE,
+        key: body.idempotencyKey,
+        payload,
+      });
+    }
+
+    return { replay: false as const, payload };
   });
 
   if (result.replay) {
     return { data: result.payload, meta: { idempotentReplay: true } };
-  }
-
-  // Store the response for future replays (best-effort; the claim row already
-  // blocks duplicates even if this write fails).
-  if (body.idempotencyKey) {
-    await db.idempotencyRecord
-      .update({
-        where: {
-          institutionId_scope_key: {
-            institutionId: ctx.institutionId,
-            scope: IDEMPOTENCY_SCOPE,
-            key: body.idempotencyKey,
-          },
-        },
-        data: { responseJson: JSON.stringify(result.payload) },
-      })
-      .catch(() => {});
   }
 
   await sweepOutboxSafe();
