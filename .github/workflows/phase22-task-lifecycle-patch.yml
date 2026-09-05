@@ -30,10 +30,10 @@ jobs:
           from pathlib import Path
           path = Path("src/components/app/admin/tasks.tsx")
           text = path.read_text()
-          old = '''      toast.success(\n        kind === "approve"\n          ? task.taskType === "MARKET_PURCHASE"\n            ? "Expense created and posted"\n            : "Normal task completion approved"\n          : "Submission rejected",\n        {\n          description: `${currentTask.residentName} · ${currentTask.description}`,\n        }\n      );'''
-          new = '''      toast.success(\n        kind === "approve"\n          ? currentTask.taskType === "MARKET_PURCHASE"\n            ? "Expense created and posted"\n            : "Normal task completion approved"\n          : "Submission rejected",\n        {\n          description: `${currentTask.residentName} · ${currentTask.description}`,\n        }\n      );'''
+          old = 'kind === "approve"\n          ? task.taskType === "MARKET_PURCHASE"'
+          new = 'kind === "approve"\n          ? currentTask.taskType === "MARKET_PURCHASE"'
           if old not in text:
-              raise SystemExit("expected nullable task toast transform not found")
+              raise SystemExit("expected nullable task type check not found")
           path.write_text(text.replace(old, new, 1))
           PY
 
