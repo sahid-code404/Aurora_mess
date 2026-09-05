@@ -181,7 +181,7 @@ export default function AdminPayments() {
   const refundCandidatesQuery = useApiMetaQuery<RefundCandidate[]>(
     "/api/v1/admin/refunds/eligible",
     { q: status === "REFUND_CENTER" ? appliedSearch || undefined : undefined },
-    { staleTime: 5_000 }
+    { enabled: status === "REFUND_CENTER", staleTime: 5_000 }
   );
 
   const payments = data?.data ?? [];
@@ -189,7 +189,7 @@ export default function AdminPayments() {
   const refundCandidates = refundCandidatesQuery.data?.data ?? [];
   const refundCandidateMeta = refundCandidatesQuery.data?.meta ?? {};
   const refundCandidateCount = metaNum(refundCandidateMeta, "candidateCount") ?? refundCandidates.length;
-  const hasGeneratedBills = refundCandidateMeta.hasGeneratedBills === true;
+  const hasGeneratedBills = meta.hasGeneratedBills === true;
 
   const sortedPayments = useMemo(() => {
     return [...payments].sort((a, b) => {

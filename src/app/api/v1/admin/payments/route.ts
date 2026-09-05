@@ -81,7 +81,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     : [];
   const nameMap = new Map(profiles.map((p) => [p.userId, p.fullName]));
 
-  const [receivedAgg, pendingCount, refundsAgg] = await Promise.all([
+  const [receivedAgg, pendingCount, refundsAgg, generatedBillCount] = await Promise.all([
     db.payment.aggregate({
       _sum: { amountMinor: true },
       where: {
@@ -98,6 +98,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         status: "COMPLETED",
         createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
+    }),
+    db.bill.count({
+      where: { institutionId: ctx.institutionId, status: { not: "VOIDED" } },
     }),
   ]);
 
@@ -122,6 +125,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       pendingApproval: pendingCount,
       refundsThisMonth: refundsAgg._sum.amountMinor ?? 0,
       refundsThisMonthFormatted: formatMinor(refundsAgg._sum.amountMinor ?? 0),
+      hasGeneratedBills: generatedBillCount > 0,
     },
   };
 });
