@@ -20,8 +20,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.4
-      - name: Apply institution-local overdue patch
-        run: python3 .github/phase18_overdue.py
+      - name: Lazy-load Refund Center eligibility
+        run: python3 .github/phase18_refund_perf.py
       - name: Validate TypeScript and focused status tests
         run: |
           bun install --frozen-lockfile
@@ -37,5 +37,5 @@ jobs:
             echo "No patch changes"
             exit 0
           fi
-          git commit -m "Phase 18: use institution-local bill due dates"
+          git commit -m "Phase 18: lazy-load refund eligibility"
           git push origin HEAD:feat/phase18-flow-logic-polish
