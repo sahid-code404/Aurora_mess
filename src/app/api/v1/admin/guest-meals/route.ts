@@ -1,6 +1,7 @@
 /**
  * GET /api/v1/admin/guest-meals?date=YYYY-MM-DD — all guest meals for a date
- * with host names and totals.
+ * with host names and totals. Time-derived lifecycle states are refreshed
+ * before serialization so history cannot remain CONFIRMED after cutoff/service.
  */
 import { z } from "zod";
 import { route } from "@/lib/auth/guard";
@@ -9,6 +10,7 @@ import { ApiError, CODES } from "@/lib/errors";
 import { dateKeySchema } from "@/lib/validation";
 import { dateKeyInTz, localDateMidnightUtc } from "@/lib/time";
 import { keyOfUtcDate, requireInstitutionContext } from "@/lib/domain/meal-engine";
+import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
 import { formatMinor } from "@/lib/money";
 
 const querySchema = z.object({ date: dateKeySchema.optional() });
@@ -29,6 +31,12 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const dateKey = parsed.data.date ?? todayKey;
   const dayStart = localDateMidnightUtc(dateKey);
   const dayEnd = new Date(dayStart.getTime() + 86_400_000 - 1);
+
+  await refreshGuestMealLifecycle({
+    institutionId: ctx.institutionId,
+    from: dayStart,
+    to: dayEnd,
+  });
 
   const rows = await db.guestMealRequest.findMany({
     where: {
@@ -60,6 +68,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       totalPriceMinor: g.totalPriceMinor,
       note: g.note,
       status: g.status,
+      lockedAt: g.lockedAt?.toISOString() ?? null,
       createdAt: g.createdAt.toISOString(),
     };
   });
@@ -68,7 +77,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     const getRank = (st: string) => {
       if (st === "REQUESTED" || st === "PENDING") return 0;
       if (st === "CONFIRMED") return 1;
-      return 2; // CANCELLED
+      if (st === "LOCKED") return 2;
+      if (st === "CONSUMED") return 3;
+      return 4; // CANCELLED
     };
     const rA = getRank(a.status);
     const rB = getRank(b.status);
