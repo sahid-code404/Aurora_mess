@@ -250,7 +250,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const rows = await db.payment.findMany({ where, orderBy: [{ submittedAt: "desc" }, { id: "desc" }], take });
   const page = finishPage(rows, limit, (row) => row.submittedAt);
 
-  const [depositsAgg, pendingCount, refundPendingCount, refundsThisMonthAgg, funds] = await Promise.all([
+  const [depositsAgg, pendingCount, refundPendingCount, refundsThisMonthAgg, carryForwardThisMonthAgg, funds] = await Promise.all([
     db.payment.aggregate({
       _sum: { amountMinor: true },
       where: {
@@ -268,6 +268,17 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
         residentId: ctx.user.id,
         institutionId: ctx.institutionId,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        residentId: ctx.user.id,
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
         createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
@@ -290,6 +301,8 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
       refundPendingCount,
       refundsThisMonth: refundsThisMonthAgg._sum.amountMinor ?? 0,
       refundsThisMonthFormatted: formatMinor(refundsThisMonthAgg._sum.amountMinor ?? 0),
+      carriedForwardThisMonth: carryForwardThisMonthAgg._sum.amountMinor ?? 0,
+      carriedForwardThisMonthFormatted: formatMinor(carryForwardThisMonthAgg._sum.amountMinor ?? 0),
     },
   };
 });

@@ -300,7 +300,7 @@ export default function AdminPayments() {
             label: "Refunds",
             value: metaStr(meta, "refundsThisMonthFormatted") ?? "₹0.00",
             icon: <RotateCcw />,
-            sub: "Processed",
+            sub: "Cash paid",
             tone: "primary",
             glow: "primary",
             onClick: () => setStatus("REFUNDS"),

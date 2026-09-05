@@ -33,13 +33,14 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
 
   const inst = await getInstitution(ctx.institutionId);
   const bounds = currentPeriodBounds(inst?.timezone ?? "UTC");
-  const [thisMonthAgg, totalAgg] = await Promise.all([
+  const [cashThisMonthAgg, cashTotalAgg, carryThisMonthAgg, carryTotalAgg] = await Promise.all([
     db.refund.aggregate({
       _sum: { amountMinor: true },
       where: {
         institutionId: ctx.institutionId,
         residentId: ctx.user.id,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
         createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
@@ -49,6 +50,26 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
         institutionId: ctx.institutionId,
         residentId: ctx.user.id,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        residentId: ctx.user.id,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        residentId: ctx.user.id,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
       },
     }),
   ]);
@@ -57,10 +78,14 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
     data: page.items.map((r) => serializeRefund(r)),
     meta: {
       nextCursor: page.nextCursor,
-      refundsThisMonth: thisMonthAgg._sum.amountMinor ?? 0,
-      refundsThisMonthFormatted: formatMinor(thisMonthAgg._sum.amountMinor ?? 0),
-      totalRefunded: totalAgg._sum.amountMinor ?? 0,
-      totalRefundedFormatted: formatMinor(totalAgg._sum.amountMinor ?? 0),
+      refundsThisMonth: cashThisMonthAgg._sum.amountMinor ?? 0,
+      refundsThisMonthFormatted: formatMinor(cashThisMonthAgg._sum.amountMinor ?? 0),
+      totalRefunded: cashTotalAgg._sum.amountMinor ?? 0,
+      totalRefundedFormatted: formatMinor(cashTotalAgg._sum.amountMinor ?? 0),
+      carriedForwardThisMonth: carryThisMonthAgg._sum.amountMinor ?? 0,
+      carriedForwardThisMonthFormatted: formatMinor(carryThisMonthAgg._sum.amountMinor ?? 0),
+      totalCarriedForward: carryTotalAgg._sum.amountMinor ?? 0,
+      totalCarriedForwardFormatted: formatMinor(carryTotalAgg._sum.amountMinor ?? 0),
     },
   };
 });

@@ -297,7 +297,17 @@ export const SYSTEM_VARIABLES: VariableDefinitionSpec[] = [
   {
     key: "total_refunds",
     displayName: "Total Refunds",
-    description: "Approved refunds paid out during the period.",
+    description: "Cash refunds actually paid out to residents during the period. Carry-forward credit is excluded.",
+    category: "SYSTEM",
+    valueType: "MONEY",
+    unit: "INR",
+    scope: "BILLING_PERIOD",
+    providerKey: "PAYMENT_ENGINE",
+  },
+  {
+    key: "total_carry_forward",
+    displayName: "Total Carry Forward",
+    description: "Resident excess credit explicitly retained for future bills during the period; this is not a cash refund.",
     category: "SYSTEM",
     valueType: "MONEY",
     unit: "INR",

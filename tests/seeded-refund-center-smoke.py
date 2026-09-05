@@ -181,6 +181,8 @@ def main() -> None:
     payments_before = resident.get("/api/v1/payments?limit=100")
     available_before = payments_before.meta.get("totalAvailableMinor")
     deposits_before = payments_before.meta.get("totalDepositsAllTime")
+    cash_refunds_before = int(payments_before.meta.get("refundsThisMonth") or 0)
+    carry_forward_before = int(payments_before.meta.get("carriedForwardThisMonth") or 0)
     check(isinstance(available_before, int), "resident available-balance baseline missing")
     check(isinstance(deposits_before, int), "resident deposit baseline missing")
 
@@ -310,6 +312,25 @@ def main() -> None:
     check(any(row.get("id") == carry_id for row in admin_history), "Admin refund history omitted carry-forward")
     check(any(row.get("id") == payout_id for row in resident_history), "Resident refund history omitted cash payout")
     check(any(row.get("id") == carry_id for row in resident_history), "Resident refund history omitted carry-forward")
+
+    resident_payment_metrics = resident.get("/api/v1/payments?limit=100").meta
+    admin_payment_metrics = admin.get("/api/v1/admin/payments?limit=100").meta
+    resident_refund_metrics = resident.get("/api/v1/refunds?limit=100").meta
+    admin_refund_metrics = admin.get(f"/api/v1/admin/refunds?residentId={resident_id}&limit=100").meta
+    for label, metrics in [
+        ("resident payments", resident_payment_metrics),
+        ("admin payments", admin_payment_metrics),
+        ("resident refunds", resident_refund_metrics),
+        ("admin refunds", admin_refund_metrics),
+    ]:
+        check(
+            int(metrics.get("refundsThisMonth") or 0) >= cash_refunds_before + partial,
+            f"{label} cash-refund KPI did not include the payout",
+        )
+        check(
+            int(metrics.get("carriedForwardThisMonth") or 0) >= carry_forward_before + remainder,
+            f"{label} carry-forward KPI did not expose retained credit separately",
+        )
 
     print(
         json.dumps(

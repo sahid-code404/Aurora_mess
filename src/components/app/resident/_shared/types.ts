@@ -323,6 +323,8 @@ export interface PaymentsMeta {
   refundPendingCount: number;
   refundsThisMonth?: number;
   refundsThisMonthFormatted?: string;
+  carriedForwardThisMonth?: number;
+  carriedForwardThisMonthFormatted?: string;
 }
 
 export interface RefundDto {
