@@ -16,7 +16,7 @@ import { dateKeySchema } from "@/lib/validation";
 import { addDaysToKey, dateKeyInTz, formatTimeLabel, localDateMidnightUtc } from "@/lib/time";
 import { formatMinor } from "@/lib/money";
 import { appendAudit } from "@/lib/audit";
-import { claimIdempotencyKey, completeIdempotencyKey } from "@/lib/idempotency";
+import { claimIdempotencyKey, completeIdempotencyKey, sweepExpiredIdempotencyRecords } from "@/lib/idempotency";
 import { keyOfUtcDate, requireInstitutionContext, dayCountBetween } from "@/lib/domain/meal-engine";
 import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
@@ -172,6 +172,8 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   }
 
   await sweepOutboxSafe();
+  // Opportunistic retention must not affect the committed guest booking.
+  await sweepExpiredIdempotencyRecords({ institutionId: ctx.institutionId }).catch(() => 0);
   return { data: result.payload };
 });
 
