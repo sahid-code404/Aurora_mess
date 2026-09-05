@@ -6,7 +6,8 @@ This runbook covers the repository's actual production runtime: Next.js standalo
 
 Set these outside Git. Do not commit real values.
 
-- `DATABASE_URL`: PostgreSQL only.
+- `DATABASE_URL`: PostgreSQL only. Prisma-style `?schema=public` is supported by the application and recovery scripts.
+- `BOARDOPS_PG_URL`: optional recovery-only libpq/admin connection override when `DATABASE_URL` contains other Prisma/provider-specific parameters or backup/restore should use a dedicated PostgreSQL administrator.
 - `SESSION_SECRET`: long random deployment secret.
 - `UPLOAD_STORAGE_DIR`: persistent private volume for payment proofs/receipts. It must survive application deploys and must not be directly web-served.
 - `ENABLE_PREVIEW_BEARER_AUTH`: leave unset or `0` in production.
@@ -47,6 +48,8 @@ UPLOAD_STORAGE_DIR=/var/lib/boardops/uploads \
 bash ops/backup-boardops.sh
 ```
 
+If the normal Prisma `DATABASE_URL` contains PostgreSQL-client-incompatible provider parameters or recovery should use a separate administrative account, set `BOARDOPS_PG_URL` only for the backup/restore command. The scripts automatically remove Prisma's common `schema=public` parameter when no override is supplied.
+
 The script creates a permission-restricted `boardops-backup-<UTC>.tar.gz` containing:
 
 - PostgreSQL custom-format dump;
@@ -54,7 +57,7 @@ The script creates a permission-restricted `boardops-backup-<UTC>.tar.gz` contai
 - metadata including the Git commit when available;
 - SHA-256 checksums.
 
-The script validates both component archives before publishing the final backup file and never writes `DATABASE_URL` into the backup.
+The script validates both component archives before publishing the final backup file and never writes `DATABASE_URL` or `BOARDOPS_PG_URL` into the backup.
 
 Recommended operating policy: take backups at least daily and immediately before production migrations/deployments. Copy backups to encrypted off-host storage with a retention policy appropriate for the deployment. For stronger recovery objectives, also enable managed PostgreSQL point-in-time recovery where available.
 
@@ -63,7 +66,7 @@ Recommended operating policy: take backups at least daily and immediately before
 A restore replaces the target database. Test restoration periodically in an isolated staging database and volume; do not make an incident the first restore rehearsal.
 
 1. Stop BoardOps so no requests can write during recovery.
-2. Point `DATABASE_URL` to the intended PostgreSQL target and `UPLOAD_STORAGE_DIR` to the intended private volume.
+2. Point `DATABASE_URL` to the intended PostgreSQL target and `UPLOAD_STORAGE_DIR` to the intended private volume. Set `BOARDOPS_PG_URL` if a separate libpq/admin connection is required.
 3. Verify the backup archive location.
 4. Run the guarded restore:
 
@@ -93,6 +96,21 @@ Then restart BoardOps and verify:
 - ledger/reconciliation screens show no new integrity failure.
 
 Keep the preserved pre-restore upload directory until recovery has been verified.
+
+## Automated recovery drill
+
+CI executes `tests/disaster-recovery-drill.sh` against its disposable PostgreSQL database and temporary uploads volume. The drill:
+
+1. writes known database and upload-file markers;
+2. creates a real paired backup using the same Prisma-style `DATABASE_URL` shape used by CI;
+3. mutates the database and uploaded files and adds post-backup-only state;
+4. performs the guarded restore;
+5. proves the original database value and file checksum return;
+6. proves post-backup-only state disappears;
+7. proves the previous uploads directory is preserved;
+8. rechecks Prisma migration status before the normal regression suite continues.
+
+A green CI run therefore proves more than script syntax: it exercises an actual PostgreSQL + filesystem recovery cycle.
 
 ## Shared rate-limit maintenance
 

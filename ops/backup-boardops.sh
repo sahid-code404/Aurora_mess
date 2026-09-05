@@ -22,6 +22,14 @@ require_command tar
 require_command sha256sum
 require_command mktemp
 
+# Prisma commonly appends `schema=public`, which libpq tools do not recognize.
+# BOARDOPS_PG_URL is an explicit escape hatch for deployments with additional
+# Prisma-only query parameters or a dedicated administrative connection URL.
+PG_DATABASE_URL="${BOARDOPS_PG_URL:-$DATABASE_URL}"
+PG_DATABASE_URL="${PG_DATABASE_URL//\?schema=public&/?}"
+PG_DATABASE_URL="${PG_DATABASE_URL//&schema=public/}"
+PG_DATABASE_URL="${PG_DATABASE_URL//\?schema=public/}"
+
 BACKUP_ROOT="${BOARDOPS_BACKUP_DIR:-$PWD/backups}"
 UPLOAD_DIR="${UPLOAD_STORAGE_DIR:-$PWD/uploads-storage}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -45,7 +53,7 @@ pg_dump \
   --no-owner \
   --no-privileges \
   --file="$PAYLOAD_DIR/database.dump" \
-  "$DATABASE_URL"
+  "$PG_DATABASE_URL"
 pg_restore --list "$PAYLOAD_DIR/database.dump" >/dev/null
 
 # File bytes are a second authoritative recovery input because StoredFile rows
@@ -75,7 +83,7 @@ fi
   sha256sum database.dump uploads.tar.gz metadata.txt > checksums.sha256
 )
 
-# Package only verified payload files. Credentials and DATABASE_URL are never written.
+# Package only verified payload files. Credentials and database URLs are never written.
 tar -C "$PAYLOAD_DIR" -czf "$PARTIAL_PATH" \
   metadata.txt checksums.sha256 database.dump uploads.tar.gz
 mv "$PARTIAL_PATH" "$FINAL_PATH"

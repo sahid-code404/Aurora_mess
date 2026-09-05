@@ -28,6 +28,13 @@ require_command tar
 require_command sha256sum
 require_command mktemp
 
+# Prisma commonly appends `schema=public`, which libpq tools do not recognize.
+# BOARDOPS_PG_URL can supply a dedicated administrative/libpq-safe URL instead.
+PG_DATABASE_URL="${BOARDOPS_PG_URL:-$DATABASE_URL}"
+PG_DATABASE_URL="${PG_DATABASE_URL//\?schema=public&/?}"
+PG_DATABASE_URL="${PG_DATABASE_URL//&schema=public/}"
+PG_DATABASE_URL="${PG_DATABASE_URL//\?schema=public/}"
+
 UPLOAD_DIR="${UPLOAD_STORAGE_DIR:-$PWD/uploads-storage}"
 case "$UPLOAD_DIR" in
   ""|"/") fail "UPLOAD_STORAGE_DIR must not be empty or /" ;;
@@ -75,7 +82,7 @@ pg_restore \
   --no-owner \
   --no-privileges \
   --exit-on-error \
-  --dbname="$DATABASE_URL" \
+  --dbname="$PG_DATABASE_URL" \
   "$PAYLOAD_DIR/database.dump"
 
 UPLOAD_PARENT="$(dirname "$UPLOAD_DIR")"
