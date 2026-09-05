@@ -22,16 +22,41 @@ type RouteResult = { data: unknown; meta?: Record<string, unknown> } | NextRespo
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-function requestOrigin(req: NextRequest): string {
-  return new URL(req.url).origin;
-}
-
 function originOf(value: string): string | null {
   try {
     return new URL(value).origin;
   } catch {
     return null;
   }
+}
+
+function firstForwardedValue(value: string | null): string | null {
+  const first = value?.split(",", 1)[0]?.trim();
+  return first || null;
+}
+
+/**
+ * Resolve the externally visible origin of this HTTP request.
+ *
+ * `NextRequest.url` can describe the internal standalone listener rather than
+ * the browser-facing origin after a reverse proxy. Host, however, is the
+ * destination the browser actually addressed; Caddy preserves that Host and
+ * supplies X-Forwarded-Proto for TLS termination. Using those request-facing
+ * headers prevents legitimate same-origin mutations from being rejected while
+ * still comparing attacker Origin/Referer values against the destination host.
+ */
+function requestOrigin(req: NextRequest): string {
+  const internal = new URL(req.url);
+  const host = req.headers.get("host")?.trim();
+  if (!host) return internal.origin;
+
+  const forwardedProto = firstForwardedValue(req.headers.get("x-forwarded-proto"))?.toLowerCase();
+  const protocol =
+    forwardedProto === "https" || forwardedProto === "http"
+      ? forwardedProto
+      : internal.protocol.replace(/:$/, "");
+
+  return originOf(`${protocol}://${host}`) ?? internal.origin;
 }
 
 /**
@@ -42,7 +67,7 @@ function originOf(value: string): string | null {
  *   not need CSRF protection; an attacker cannot cause a browser to attach the
  *   secret Authorization header cross-site.
  * - Cookie-backed mutation requests must not be browser-classified cross-site.
- * - Origin/Referer, when present, must match the API origin exactly.
+ * - Origin/Referer, when present, must match the request-facing API origin.
  *
  * Modern browsers send Sec-Fetch-Site and/or Origin for cross-site mutation
  * requests. We intentionally do not require those headers to exist so trusted
