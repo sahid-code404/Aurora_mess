@@ -48,11 +48,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         residentId: ctx.user.id,
         status: "PENDING",
       },
-      data: {
-        status: "VOIDED",
-        reviewedAt: new Date(),
-        reviewedByUserId: ctx.user.id,
-      },
+      data: { status: "VOIDED" },
     });
 
     if (guard.count !== 1) {
