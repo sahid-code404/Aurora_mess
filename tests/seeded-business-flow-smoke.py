@@ -14,10 +14,9 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from http.cookiejar import CookieJar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import Request, build_opener
 
 BASE_URL = os.environ.get("BOARDOPS_BUSINESS_SMOKE_BASE_URL", "http://127.0.0.1:3102").rstrip("/")
 ADMIN_EMAIL = "admin@messtest.in"
@@ -76,7 +75,8 @@ class Response:
 class ApiClient:
     def __init__(self, label: str):
         self.label = label
-        self.opener = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.opener = build_opener()
+        self.session_token: str | None = None
 
     def request(
         self,
@@ -89,6 +89,8 @@ class ApiClient:
     ) -> Response:
         url = f"{BASE_URL}{path}"
         headers = {"Accept": "application/json"}
+        if self.session_token:
+            headers["Cookie"] = f"mes_session={self.session_token}"
         raw: bytes | None = None
         if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
             headers["Origin"] = BASE_URL
@@ -102,15 +104,23 @@ class ApiClient:
             headers["Content-Type"] = content_type
 
         req = Request(url, data=raw, headers=headers, method=method.upper())
+        set_cookies: list[str] = []
         try:
             with self.opener.open(req, timeout=15) as response:
                 status = response.status
+                set_cookies = response.headers.get_all("Set-Cookie") or []
                 text = response.read().decode("utf-8")
         except HTTPError as error:
             status = error.code
+            set_cookies = error.headers.get_all("Set-Cookie") or []
             text = error.read().decode("utf-8", errors="replace")
         except URLError as error:
             raise SmokeFailure(f"{self.label} {method} {path} failed to connect: {error}") from error
+
+        for cookie in set_cookies:
+            if cookie.startswith("mes_session="):
+                token = cookie.split(";", 1)[0].split("=", 1)[1]
+                self.session_token = token or None
 
         try:
             payload = json.loads(text) if text else {}
@@ -143,6 +153,7 @@ class ApiClient:
         check(user.get("email") == email, f"{self.label} login returned wrong email")
         check(user.get("role") == role, f"{self.label} login returned wrong role")
         check("sessionToken" not in json_fingerprint(response.payload), f"{self.label} login leaked sessionToken")
+        check(bool(self.session_token), f"{self.label} login did not emit mes_session")
         me = self.get("/api/v1/auth/me").data or {}
         check((me.get("user") or {}).get("role") == role, f"{self.label} session role mismatch")
         return me
