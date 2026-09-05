@@ -12,8 +12,9 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { ComponentType } from "react";
+import dynamic from "next/dynamic";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -23,7 +24,6 @@ import { useApiQuery } from "@/hooks/use-api-query";
 import { api } from "@/lib/api";
 import { getNotificationTargetRoute } from "@/lib/notification-routes";
 import { onNotificationBroadcast } from "@/lib/broadcast";
-import { cn } from "@/lib/utils";
 import AuthScreen from "./AuthScreen";
 import { bottomBarItems, navItemByKey } from "./nav";
 import { useRoute, type AppRoute } from "./router";
@@ -34,31 +34,44 @@ import MobileSidebar from "@/components/glass/MobileSidebar";
 import CommandPalette from "@/components/glass/CommandPalette";
 import SplashScreen from "@/components/glass/SplashScreen";
 
-/* ---- views ---- */
-import AdminDashboard from "./admin/dashboard";
-import AdminMeals from "./admin/meals";
-import AdminMealConfiguration from "./admin/meal-configuration";
-import AdminPayments from "./admin/payments";
-import AdminFunds from "./admin/funds";
-import AdminExpenses from "./admin/expenses";
-import AdminBilling from "./admin/billing";
-import AdminResidents from "./admin/residents";
-import AdminResident360 from "./admin/resident360";
-import AdminTasks from "./admin/tasks";
-import AdminCalendar from "./admin/calendar";
-import AdminAnnouncements from "./admin/announcements";
-import AdminNotifications from "./admin/notifications";
-import AdminFormulas from "./admin/formulas";
-import AdminSettings from "./admin/settings";
-import AdminAudit from "./admin/audit";
+function RouteChunkFallback() {
+  return (
+    <div role="status" aria-label="Loading page" className="space-y-4 py-2">
+      <div className="h-8 w-44 rounded-lg bg-muted/50" />
+      <div className="h-28 w-full rounded-2xl bg-muted/35" />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="h-24 rounded-2xl bg-muted/30" />
+        <div className="h-24 rounded-2xl bg-muted/30" />
+      </div>
+    </div>
+  );
+}
 
-import ResidentDashboard from "./resident/dashboard";
-import ResidentMeals from "./resident/meals";
-import ResidentBilling from "./resident/billing";
-import ResidentPayments from "./resident/payments";
-import ResidentTasks from "./resident/tasks";
-import ResidentProfile from "./resident/profile";
-import ResidentNotifications from "./resident/notifications";
+/* ---- route chunks: load only the active product surface ---- */
+const AdminDashboard = dynamic(() => import("./admin/dashboard"), { loading: RouteChunkFallback });
+const AdminMeals = dynamic(() => import("./admin/meals"), { loading: RouteChunkFallback });
+const AdminMealConfiguration = dynamic(() => import("./admin/meal-configuration"), { loading: RouteChunkFallback });
+const AdminPayments = dynamic(() => import("./admin/payments"), { loading: RouteChunkFallback });
+const AdminFunds = dynamic(() => import("./admin/funds"), { loading: RouteChunkFallback });
+const AdminExpenses = dynamic(() => import("./admin/expenses"), { loading: RouteChunkFallback });
+const AdminBilling = dynamic(() => import("./admin/billing"), { loading: RouteChunkFallback });
+const AdminResidents = dynamic(() => import("./admin/residents"), { loading: RouteChunkFallback });
+const AdminResident360 = dynamic(() => import("./admin/resident360"), { loading: RouteChunkFallback });
+const AdminTasks = dynamic(() => import("./admin/tasks"), { loading: RouteChunkFallback });
+const AdminCalendar = dynamic(() => import("./admin/calendar"), { loading: RouteChunkFallback });
+const AdminAnnouncements = dynamic(() => import("./admin/announcements"), { loading: RouteChunkFallback });
+const AdminNotifications = dynamic(() => import("./admin/notifications"), { loading: RouteChunkFallback });
+const AdminFormulas = dynamic(() => import("./admin/formulas"), { loading: RouteChunkFallback });
+const AdminSettings = dynamic(() => import("./admin/settings"), { loading: RouteChunkFallback });
+const AdminAudit = dynamic(() => import("./admin/audit"), { loading: RouteChunkFallback });
+
+const ResidentDashboard = dynamic(() => import("./resident/dashboard"), { loading: RouteChunkFallback });
+const ResidentMeals = dynamic(() => import("./resident/meals"), { loading: RouteChunkFallback });
+const ResidentBilling = dynamic(() => import("./resident/billing"), { loading: RouteChunkFallback });
+const ResidentPayments = dynamic(() => import("./resident/payments"), { loading: RouteChunkFallback });
+const ResidentTasks = dynamic(() => import("./resident/tasks"), { loading: RouteChunkFallback });
+const ResidentProfile = dynamic(() => import("./resident/profile"), { loading: RouteChunkFallback });
+const ResidentNotifications = dynamic(() => import("./resident/notifications"), { loading: RouteChunkFallback });
 
 const ADMIN_VIEWS: Record<string, ComponentType> = {
   dashboard: AdminDashboard,
@@ -127,7 +140,6 @@ function deriveUnread(data: unknown): number | null {
   }
   return null;
 }
-
 
 /* ---- the root ---- */
 
@@ -253,17 +265,6 @@ export default function AppRoot() {
   const notificationsHash = role === "ADMIN" ? "#/admin/notifications" : "#/app/notifications";
   const activeRouteKey = route.param ? `${route.key}:${route.param}` : route.key;
 
-  const [visitedKeys, setVisitedKeys] = useState<string[]>(() => [activeRouteKey]);
-  if (!visitedKeys.includes(activeRouteKey)) {
-    setVisitedKeys((prev) => [...prev, activeRouteKey]);
-  }
-
-  const [currentUserEmail, setCurrentUserEmail] = useState(user?.email);
-  if (user?.email !== currentUserEmail) {
-    setCurrentUserEmail(user?.email);
-    setVisitedKeys([activeRouteKey]);
-  }
-
   const userCard = profile
     ? { name: profile.fullName, email: user?.email ?? "", role }
     : { name: user?.email ?? "", email: user?.email ?? "", role };
@@ -286,10 +287,10 @@ export default function AppRoot() {
       ) : (
         <motion.div
           key="app-shell"
-          initial={reduced ? { opacity: 0 } : { opacity: 0 }}
+          initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={reduced ? { opacity: 0 } : { opacity: 0 }}
-          transition={{ duration: 0.25 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: reduced ? 0 : 0.25 }}
           className="min-h-screen"
         >
           {/* content column — full width; navigation lives in the floating bar */}
@@ -309,19 +310,19 @@ export default function AppRoot() {
             <div className="flex flex-1 flex-col">
               <main className="flex-1 px-3 pb-28 pt-4 min-[420px]:px-4 sm:px-6">
                 <div className="mx-auto w-full max-w-6xl">
-                  {visitedKeys.map((k) => {
-                    const isActive = k === activeRouteKey;
-                    return (
-                      <div
-                        key={k}
-                        role="tabpanel"
-                        aria-hidden={!isActive}
-                        className={cn("w-full", isActive ? "block" : "hidden")}
-                      >
-                        <RouteViewByKey routeKey={k} currentRoute={route} />
-                      </div>
-                    );
-                  })}
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.div
+                      key={activeRouteKey}
+                      role="tabpanel"
+                      className="w-full"
+                      initial={reduced ? { opacity: 1 } : { opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={reduced ? { opacity: 1 } : { opacity: 0, y: -4 }}
+                      transition={{ duration: reduced ? 0 : 0.2, ease: "easeOut" }}
+                    >
+                      <RouteViewByKey routeKey={activeRouteKey} currentRoute={route} />
+                    </motion.div>
+                  </AnimatePresence>
                 </div>
               </main>
             </div>
