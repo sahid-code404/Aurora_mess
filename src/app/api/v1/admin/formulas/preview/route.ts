@@ -27,7 +27,7 @@ const bodySchema = z.object({
 });
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
-  const rl = rateLimit(clientKey(ctx.req, "formula-preview"), 40, 5 * 60 * 1000);
+  const rl = await rateLimit(clientKey(ctx.req, "formula-preview"), 40, 5 * 60 * 1000);
   if (!rl.allowed) {
     throw new ApiError(
       CODES.RATE_LIMITED,

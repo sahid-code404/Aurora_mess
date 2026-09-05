@@ -48,7 +48,7 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
-  const limit = rateLimit(clientKey(ctx.req, "register"), 5, 60 * 60 * 1000);
+  const limit = await rateLimit(clientKey(ctx.req, "register"), 5, 60 * 60 * 1000);
   if (!limit.allowed) {
     throw new ApiError(
       CODES.RATE_LIMITED,

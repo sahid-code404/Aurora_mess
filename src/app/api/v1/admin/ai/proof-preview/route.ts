@@ -24,7 +24,7 @@ Respond with STRICT JSON (no markdown): {"amount": string|null, "method": "UPI"|
 If the image is not a payment proof, set fields null and say so in summary.`;
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
-  const rl = rateLimit(clientKey(ctx.req, "ai-proof-preview"), 12, 5 * 60 * 1000);
+  const rl = await rateLimit(clientKey(ctx.req, "ai-proof-preview"), 12, 5 * 60 * 1000);
   if (!rl.allowed) {
     throw new ApiError(CODES.RATE_LIMITED, "AI preview is busy — try again in a moment.", 429);
   }
