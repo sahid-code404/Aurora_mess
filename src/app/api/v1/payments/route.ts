@@ -19,7 +19,12 @@ import { getInstitution } from "@/lib/institution";
 import { appendAudit } from "@/lib/audit";
 import { parseDecimalToMinor, formatMinor } from "@/lib/money";
 import { nextPaymentNumber } from "@/lib/ids";
-import { claimIdempotencyKey, completeIdempotencyKey, sweepExpiredIdempotencyRecords } from "@/lib/idempotency";
+import {
+  actorScopedIdempotencyKey,
+  claimIdempotencyKey,
+  completeIdempotencyKey,
+  sweepExpiredIdempotencyRecords,
+} from "@/lib/idempotency";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { paymentMethodSchema } from "@/lib/validation";
 import { storeUpload } from "@/lib/storage";
@@ -32,6 +37,7 @@ import { residentFundsSummary } from "@/lib/domain/funds";
 export const dynamic = "force-dynamic";
 
 const MAX_PAYMENT_MINOR = 100_000_000; // ₹10,00,000.00 — sanity ceiling, documented
+const PAYMENT_IDEMPOTENCY_SCOPE = "PAYMENT_SUBMIT";
 
 // ---------------------------------------------------------------------------
 // POST — submit
@@ -72,16 +78,73 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, fields);
   }
 
-  // Fast replay before file storage/number allocation. Only an unexpired row is
-  // eligible for replay; expired rows must flow through the transactional claim
-  // path so they can be atomically reclaimed.
-  if (idempotencyKey) {
+  const storageIdempotencyKey = idempotencyKey
+    ? actorScopedIdempotencyKey(ctx.user.id, idempotencyKey)
+    : null;
+
+  // Fast replay before file storage/number allocation. New records are scoped to
+  // the authenticated resident. During the legacy 24-hour window, an old raw-key
+  // record is replayed only after its payment id is verified to belong to this
+  // resident; another resident can never receive that payload.
+  if (idempotencyKey && storageIdempotencyKey) {
     const replayNow = new Date();
     const existing = await db.idempotencyRecord.findUnique({
-      where: { institutionId_scope_key: { institutionId: ctx.institutionId, scope: "PAYMENT_SUBMIT", key: idempotencyKey } },
+      where: {
+        institutionId_scope_key: {
+          institutionId: ctx.institutionId,
+          scope: PAYMENT_IDEMPOTENCY_SCOPE,
+          key: storageIdempotencyKey,
+        },
+      },
     });
     if (existing?.responseJson && existing.expiresAt.getTime() > replayNow.getTime()) {
       return { data: JSON.parse(existing.responseJson), meta: { idempotentReplay: true } };
+    }
+
+    const legacy = await db.idempotencyRecord.findUnique({
+      where: {
+        institutionId_scope_key: {
+          institutionId: ctx.institutionId,
+          scope: PAYMENT_IDEMPOTENCY_SCOPE,
+          key: idempotencyKey,
+        },
+      },
+    });
+    if (legacy && legacy.expiresAt.getTime() > replayNow.getTime()) {
+      if (legacy.responseJson) {
+        const payload = JSON.parse(legacy.responseJson) as Record<string, unknown>;
+        const legacyPaymentId = typeof payload.id === "string" ? payload.id : null;
+        const ownedLegacyPayment = legacyPaymentId
+          ? await db.payment.findFirst({
+              where: {
+                id: legacyPaymentId,
+                institutionId: ctx.institutionId,
+                residentId: ctx.user.id,
+                idempotencyKey,
+              },
+              select: { id: true },
+            })
+          : null;
+        if (ownedLegacyPayment) {
+          return { data: payload, meta: { idempotentReplay: true } };
+        }
+      } else {
+        const ownedLegacyPayment = await db.payment.findFirst({
+          where: {
+            institutionId: ctx.institutionId,
+            residentId: ctx.user.id,
+            idempotencyKey,
+          },
+          select: { id: true },
+        });
+        if (ownedLegacyPayment) {
+          throw new ApiError(
+            CODES.IDPOTENCY_CONFLICT,
+            "This request is already being processed. Please try again in a moment.",
+            409
+          );
+        }
+      }
     }
   }
 
@@ -91,12 +154,12 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const displayNumber = await nextPaymentNumber();
 
   const result = await db.$transaction(async (tx) => {
-    if (idempotencyKey) {
+    if (storageIdempotencyKey) {
       const claim = await claimIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
-        scope: "PAYMENT_SUBMIT",
-        key: idempotencyKey,
+        scope: PAYMENT_IDEMPOTENCY_SCOPE,
+        key: storageIdempotencyKey,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       });
       if (claim.state === "REPLAY") {
@@ -136,12 +199,12 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
 
     const payload = serializePayment(payment);
 
-    if (idempotencyKey) {
+    if (storageIdempotencyKey) {
       await completeIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
-        scope: "PAYMENT_SUBMIT",
-        key: idempotencyKey,
+        scope: PAYMENT_IDEMPOTENCY_SCOPE,
+        key: storageIdempotencyKey,
         payload,
       });
     }
