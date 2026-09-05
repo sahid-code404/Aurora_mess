@@ -12,6 +12,13 @@ export function getNotificationTargetRoute(
   const t = (type ?? "").toUpperCase();
 
   if (role === "ADMIN") {
+    // Refunds are resolved from the post-billing Refund Center in Payments.
+    // Keep this before generic FUND/DEFICIT routing so refund notifications do
+    // not send the Admin back to the legacy Funds entry point.
+    if (t.includes("REFUND")) {
+      return "#/admin/payments/refunds";
+    }
+
     // Payments: review resident payment proofs, approvals, rejections, voids
     if (t.includes("PAYMENT")) {
       return "#/admin/payments";
@@ -53,8 +60,8 @@ export function getNotificationTargetRoute(
       return "#/admin/billing";
     }
 
-    // Funds, Refunds & Deficits: deficit warnings, refund processing, resident ledger
-    if (t.includes("DEFICIT") || t.includes("REFUND") || t.includes("FUND")) {
+    // Funds & Deficits: deficit warnings and resident-fund state.
+    if (t.includes("DEFICIT") || t.includes("FUND")) {
       return "#/admin/funds";
     }
 
@@ -92,6 +99,12 @@ export function getNotificationTargetRoute(
   }
 
   // RESIDENT role
+  // Refund history is shown alongside the resident's payment history, not on
+  // Billing, so refund notifications should open that actual destination.
+  if (t.includes("REFUND")) {
+    return "#/app/payments";
+  }
+
   // Payments: balance, payment proofs, transaction history
   if (t.includes("PAYMENT")) {
     return "#/app/payments";
@@ -114,13 +127,7 @@ export function getNotificationTargetRoute(
   }
 
   // Billing & Deficits: itemized breakdowns, monthly bills, deficit alerts
-  if (
-    t.includes("BILL") ||
-    t.includes("DEFICIT") ||
-    t.includes("REFUND") ||
-    t.includes("FUND") ||
-    t.includes("INVOICE")
-  ) {
+  if (t.includes("BILL") || t.includes("DEFICIT") || t.includes("FUND") || t.includes("INVOICE")) {
     return "#/app/billing";
   }
 
