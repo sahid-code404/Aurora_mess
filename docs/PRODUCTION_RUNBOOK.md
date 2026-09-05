@@ -38,6 +38,24 @@ For a single-host deployment, use a persistent mounted volume such as `/var/lib/
 
 Horizontal application replicas can share PostgreSQL rate-limit counters, but all replicas also need access to the same uploaded-file bytes. Before active-active multi-host deployment, use a shared private volume or replace the filesystem transport with private object storage.
 
+### Storage integrity check
+
+Run the same integrity verifier used by backups at any time with:
+
+```bash
+UPLOAD_STORAGE_DIR=/var/lib/boardops/uploads \
+bun run maintenance:storage-integrity
+```
+
+For every authoritative `StoredFile` row, the verifier requires:
+
+- a path-safe single-file object key;
+- a regular file directly under the configured storage root (symlinks are rejected);
+- matching byte size;
+- matching SHA-256 checksum.
+
+Unreferenced filesystem orphans are not treated as corruption because an upload transaction can leave harmless bytes behind if its later database write rolls back. Missing or mismatched files that are referenced by PostgreSQL are authoritative integrity failures.
+
 ## Backups
 
 Create a paired PostgreSQL + uploads backup:
@@ -50,11 +68,13 @@ bash ops/backup-boardops.sh
 
 If the normal Prisma `DATABASE_URL` contains PostgreSQL-client-incompatible provider parameters or recovery should use a separate administrative account, set `BOARDOPS_PG_URL` only for the backup/restore command. The scripts automatically remove Prisma's common `schema=public` parameter when no override is supplied.
 
+Before running `pg_dump`, the backup command runs the authoritative storage-integrity verifier. If any referenced proof/receipt is missing, not a regular file, has a different size, or has a different SHA-256 digest, the command fails and does not publish a backup archive. Successful backup metadata records `storage_integrity=verified`.
+
 The script creates a permission-restricted `boardops-backup-<UTC>.tar.gz` containing:
 
 - PostgreSQL custom-format dump;
 - private uploads archive;
-- metadata including the Git commit when available;
+- metadata including the Git commit when available and the storage-integrity verification marker;
 - SHA-256 checksums.
 
 The script validates both component archives before publishing the final backup file and never writes `DATABASE_URL` or `BOARDOPS_PG_URL` into the backup.
@@ -84,6 +104,7 @@ After restore:
 bunx prisma generate
 bunx prisma migrate deploy
 bunx prisma migrate status
+UPLOAD_STORAGE_DIR=/var/lib/boardops/uploads bun run maintenance:storage-integrity
 ```
 
 Then restart BoardOps and verify:
@@ -101,16 +122,17 @@ Keep the preserved pre-restore upload directory until recovery has been verified
 
 CI executes `tests/disaster-recovery-drill.sh` against its disposable PostgreSQL database and temporary uploads volume. The drill:
 
-1. writes known database and upload-file markers;
-2. creates a real paired backup using the same Prisma-style `DATABASE_URL` shape used by CI;
-3. mutates the database and uploaded files and adds post-backup-only state;
-4. performs the guarded restore;
-5. proves the original database value and file checksum return;
-6. proves post-backup-only state disappears;
-7. proves the previous uploads directory is preserved;
-8. rechecks Prisma migration status before the normal regression suite continues.
+1. creates a real `StoredFile` database row and matching upload bytes plus a database recovery marker;
+2. creates a real paired backup using the same Prisma-style `DATABASE_URL` shape used by CI and requires the storage-integrity marker in backup metadata;
+3. corrupts the referenced file without changing its byte length and proves a second backup attempt fails without publishing an archive;
+4. mutates the database and adds post-backup-only filesystem state;
+5. performs the guarded restore;
+6. proves the original database value, `StoredFile` metadata, and file checksum return;
+7. proves post-backup-only state disappears;
+8. proves the previous uploads directory preserves the pre-restore corrupted state;
+9. reruns storage-integrity verification and Prisma migration status before the normal regression suite continues.
 
-A green CI run therefore proves more than script syntax: it exercises an actual PostgreSQL + filesystem recovery cycle.
+A green CI run therefore proves more than script syntax: it exercises an actual PostgreSQL + filesystem recovery cycle and proves corrupt authoritative proof bytes cannot be blessed into a new backup.
 
 ## Shared rate-limit maintenance
 
@@ -140,8 +162,9 @@ For application errors:
 2. check the structured server event with that ID;
 3. check `/api/v1/health/live` and `/api/v1/health/ready`;
 4. check PostgreSQL availability and migration status;
-5. confirm the persistent upload volume is mounted and writable if files are affected;
-6. avoid editing posted financial history directly—use existing reversal/correction workflows.
+5. run `bun run maintenance:storage-integrity` when stored proofs/receipts or backup integrity are involved;
+6. confirm the persistent upload volume is mounted and writable if files are affected;
+7. avoid editing posted financial history directly—use existing reversal/correction workflows.
 
 ## Known operational boundaries
 
