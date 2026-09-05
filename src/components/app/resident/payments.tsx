@@ -219,6 +219,15 @@ function PaymentDetailDialog({
             </div>
           )}
 
+          {payment.status === "VOIDED" && (
+            <div className="rounded-xl border border-border/50 bg-muted/45 p-3 text-xs leading-relaxed">
+              <p className="font-semibold text-foreground">Payment closed</p>
+              <p className="mt-0.5 text-muted-foreground">
+                This payment is no longer part of your approved balance. Pending submissions can be withdrawn before review; approved payments can only be voided by an administrator with an auditable reversal.
+              </p>
+            </div>
+          )}
+
           {/* Key values */}
           <div className="glass-inset rounded-2xl p-3.5 space-y-2 border border-border/40 text-xs">
             <div className="flex items-center justify-between py-1 border-b border-border/20">
