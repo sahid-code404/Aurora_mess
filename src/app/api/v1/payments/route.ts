@@ -19,6 +19,7 @@ import { getInstitution } from "@/lib/institution";
 import { appendAudit } from "@/lib/audit";
 import { parseDecimalToMinor, formatMinor } from "@/lib/money";
 import { nextPaymentNumber } from "@/lib/ids";
+import { claimIdempotencyKey, completeIdempotencyKey } from "@/lib/idempotency";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { paymentMethodSchema } from "@/lib/validation";
 import { storeUpload } from "@/lib/storage";
@@ -71,7 +72,8 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, fields);
   }
 
-  // Idempotent replay (checked before AND claimed inside the transaction).
+  // Fast replay before file storage/number allocation. The key is claimed again
+  // atomically inside the write transaction to close the concurrency window.
   if (idempotencyKey) {
     const existing = await db.idempotencyRecord.findUnique({
       where: { institutionId_scope_key: { institutionId: ctx.institutionId, scope: "PAYMENT_SUBMIT", key: idempotencyKey } },
@@ -81,45 +83,29 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     }
   }
 
-  // File storage + display number are prepared BEFORE the transaction (they use
-  // the global client; a rollback may leave a harmless orphan file/number gap).
+  // File storage + display number are prepared BEFORE the transaction. A
+  // rollback may therefore leave a harmless orphan file/number gap.
   const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null;
   const displayNumber = await nextPaymentNumber();
 
   const result = await db.$transaction(async (tx) => {
     if (idempotencyKey) {
-      // Claim the key FIRST: the unique constraint is the concurrency guard.
-      try {
-        await tx.idempotencyRecord.create({
-          data: {
-            institutionId: ctx.institutionId,
-            scope: "PAYMENT_SUBMIT",
-            key: idempotencyKey,
-            responseJson: null,
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          },
-        });
-      } catch (error: unknown) {
-        if ((error as { code?: string })?.code === "P2002") {
-          const winner = await tx.idempotencyRecord.findUnique({
-            where: {
-              institutionId_scope_key: {
-                institutionId: ctx.institutionId,
-                scope: "PAYMENT_SUBMIT",
-                key: idempotencyKey,
-              },
-            },
-          });
-          if (winner?.responseJson) {
-            return { replay: true as const, payload: JSON.parse(winner.responseJson) as Record<string, unknown> };
-          }
-          throw new ApiError(
-            CODES.IDPOTENCY_CONFLICT,
-            "This request is already being processed. Please try again in a moment.",
-            409
-          );
-        }
-        throw error;
+      const claim = await claimIdempotencyKey({
+        client: tx,
+        institutionId: ctx.institutionId,
+        scope: "PAYMENT_SUBMIT",
+        key: idempotencyKey,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      });
+      if (claim.state === "REPLAY") {
+        return { replay: true as const, payload: claim.payload };
+      }
+      if (claim.state === "IN_PROGRESS") {
+        throw new ApiError(
+          CODES.IDPOTENCY_CONFLICT,
+          "This request is already being processed. Please try again in a moment.",
+          409
+        );
       }
     }
 
@@ -149,15 +135,12 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     const payload = serializePayment(payment);
 
     if (idempotencyKey) {
-      await tx.idempotencyRecord.update({
-        where: {
-          institutionId_scope_key: {
-            institutionId: ctx.institutionId,
-            scope: "PAYMENT_SUBMIT",
-            key: idempotencyKey,
-          },
-        },
-        data: { responseJson: JSON.stringify(payload) },
+      await completeIdempotencyKey({
+        client: tx,
+        institutionId: ctx.institutionId,
+        scope: "PAYMENT_SUBMIT",
+        key: idempotencyKey,
+        payload,
       });
     }
 
