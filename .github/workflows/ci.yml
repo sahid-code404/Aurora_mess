@@ -22,7 +22,7 @@ jobs:
   verify:
     name: Typecheck, lint, tests, recovery, seeded acceptance, build, smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 24
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -131,6 +131,11 @@ jobs:
           BOARDOPS_REFUND_SMOKE_DIAGNOSTIC_DIR: refund-smoke-diagnostics
         run: bash tests/seeded-refund-center-smoke.sh
 
+      - name: Seeded Resident leave cancellation lifecycle smoke
+        env:
+          BOARDOPS_LEAVE_SMOKE_DIAGNOSTIC_DIR: leave-smoke-diagnostics
+        run: bash tests/seeded-leave-cancel-smoke.sh
+
       - name: Upload runtime smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -141,5 +146,6 @@ jobs:
             seeded-smoke-diagnostics/
             business-smoke-diagnostics/
             refund-smoke-diagnostics/
+            leave-smoke-diagnostics/
           if-no-files-found: ignore
           retention-days: 3
