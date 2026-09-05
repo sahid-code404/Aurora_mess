@@ -543,9 +543,8 @@ function TaskDetailDialog({
             ? "Expense created and posted"
             : "Normal task completion approved"
           : "Submission rejected",
-        {
-        description: `${currentTask.residentName} · ${currentTask.description}`,
-      });
+        { description: `${currentTask.residentName} · ${currentTask.description}` }
+      );
       setConfirm(null);
       onClose();
     } catch (err) {
@@ -681,9 +680,13 @@ function SubmissionReviewCard({ task, tz, onDone }: { task: TaskRow; tz: string;
     try {
       await postJson(`${SUBMISSIONS_PATH}/${sub.id}/${kind}`, kind === "reject" ? { reason } : reason ? { reason } : {});
       onDone();
-      toast.success(kind === "approve" ? "Expense created and posted" : "Submission rejected", {
-          description: `${task.residentName} · ${task.description}`,
-        }
+      toast.success(
+        kind === "approve"
+          ? task.taskType === "MARKET_PURCHASE"
+            ? "Expense created and posted"
+            : "Normal task completion approved"
+          : "Submission rejected",
+        { description: `${task.residentName} · ${task.description}` }
       );
       setConfirm(null);
     } catch (err) {
@@ -784,7 +787,7 @@ function SubmissionReviewCard({ task, tz, onDone }: { task: TaskRow; tz: string;
               )
             ) : (
               <>
-                {task.residentName} is notified with your reason and can resubmit corrected items.
+                {task.residentName} is notified with your reason. This submission closes; assign a new task if the work must be retried.
                 <span className="mt-2 block font-medium">{task.description}</span>
               </>
             )
