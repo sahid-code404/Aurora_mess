@@ -374,6 +374,32 @@ def main() -> None:
     check(resident.post(f"/api/v1/tasks/{general_id}/accept").data.get("status") == "ACCEPTED", "GENERAL task accept failed")
     check(resident.post(f"/api/v1/tasks/{general_id}/start").data.get("status") == "IN_PROGRESS", "GENERAL task start failed")
 
+    # Normal Tasks reject purchase data, submit zero money, and require Admin verification.
+    resident.post_form(
+        f"/api/v1/tasks/{general_id}/submission",
+        {
+            "comment": "invalid purchase payload on normal task",
+            "itemsJson": json.dumps([{"itemName": "should fail", "quantity": 1, "unitPrice": "1.00"}]),
+        },
+        expected=400,
+    )
+    general_submission = resident.post_form(
+        f"/api/v1/tasks/{general_id}/submission",
+        {"comment": "Water container checked and filled for Phase 22 acceptance"},
+    ).data or {}
+    check(general_submission.get("status") == "SUBMITTED", "GENERAL task completion did not reach SUBMITTED")
+    check(general_submission.get("claimedTotalMinor") == 0, "GENERAL task completion carried money")
+    check((general_submission.get("items") or []) == [], "GENERAL task completion created purchase lines")
+    general_submission_id = general_submission.get("id")
+    general_approved = admin.post(
+        f"/api/v1/admin/task-submissions/{general_submission_id}/approve",
+        {"reason": "Phase 22 normal task verified"},
+    ).data or {}
+    check(general_approved.get("status") == "APPROVED", "GENERAL task approval failed")
+    check(general_approved.get("totalMinor") == 0, "GENERAL task approval produced a financial total")
+    check(general_approved.get("expenseId") is None, "GENERAL task approval created an Expense")
+    check(general_approved.get("journalId") is None, "GENERAL task approval created a journal")
+
     market_description = f"Phase19 market rice purchase {suffix}"
     market_task = admin.post(
         "/api/v1/admin/tasks",
@@ -429,7 +455,9 @@ def main() -> None:
 
     task_search = admin.get(f"/api/v1/admin/tasks?{urlencode({'q': suffix, 'limit': '25'})}").data or []
     by_description = {task.get("description"): task for task in task_search}
-    check(by_description.get(general_description, {}).get("status") == "IN_PROGRESS", "GENERAL task was not independently preserved")
+    check(by_description.get(general_description, {}).get("status") == "APPROVED", "GENERAL task did not complete independently")
+    general_task_after = by_description.get(general_description, {})
+    check((general_task_after.get("submission") or {}).get("expenseId") is None, "GENERAL task gained an expense link")
     check(by_description.get(market_description, {}).get("status") == "APPROVED", "MARKET task did not finish independently")
     check(
         (by_description.get(market_description, {}).get("submission") or {}).get("expenseId") == market_approved.get("expenseId"),

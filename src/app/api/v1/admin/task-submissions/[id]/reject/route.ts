@@ -67,8 +67,14 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         userId: submission.task.assignedResidentId,
         institutionId: ctx.institutionId,
         type: "TASK_REJECTED_BY_ADMIN",
-        title: "Submission rejected",
-        message: `Your submission for "${submission.task.description}" was rejected. Reason: ${body.reason}`,
+        title:
+          submission.task.taskType === "GENERAL"
+            ? "Normal task completion rejected"
+            : "Market task submission rejected",
+        message:
+          submission.task.taskType === "GENERAL"
+            ? `Your completion for "${submission.task.description}" was rejected. Reason: ${body.reason}`
+            : `Your purchase submission for "${submission.task.description}" was rejected. Reason: ${body.reason}`,
         entityRef: submission.taskId,
       },
       tx
@@ -80,7 +86,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       types: ["TASK_SUBMITTED"],
       actorUserId: ctx.user.id,
       actorRole: "ADMIN",
-      reason: `Task purchase submission rejected by admin: ${body.reason}`,
+      reason:
+        submission.task.taskType === "GENERAL"
+          ? `Normal task completion rejected by admin: ${body.reason}`
+          : `Market task purchase rejected by admin: ${body.reason}`,
       client: tx,
     });
 

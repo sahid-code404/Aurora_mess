@@ -400,6 +400,92 @@ function SubmissionDialog({
   );
 }
 
+function GeneralCompletionDialog({
+  task,
+  open,
+  onOpenChange,
+}: {
+  task: TaskDto;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const invalidate = useInvalidateResident();
+  const [comment, setComment] = useState("");
+  const [proof, setProof] = useState<File | null>(null);
+  const [proofError, setProofError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      if (comment.trim()) form.set("comment", comment.trim());
+      if (proof) form.set("proof", proof);
+      await apiMultipart(`/api/v1/tasks/${task.id}/submission`, form);
+      invalidate([RESIDENT_KEYS.tasks, RESIDENT_KEYS.dashboard, RESIDENT_KEYS.notifications]);
+      broadcastNotification("task_submitted");
+      toast.success("Completion submitted — waiting for admin verification", {
+        description: "Normal Tasks never create a mess expense or ledger entry.",
+      });
+      onOpenChange(false);
+    } catch (err) {
+      setError(friendlyError(err, "We couldn't submit this completion. Please try again."));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <SheetDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!submitting) onOpenChange(next);
+      }}
+      title="Submit completion"
+      description={`"${task.description}" — tell the admin the work is done. No purchase or expense is created.`}
+      footer={
+        <SheetFooterActions onCancel={() => onOpenChange(false)}>
+          <GlassButton loading={submitting} disabled={Boolean(proofError) || submitting} onClick={() => void submit()}>
+            Submit completion
+          </GlassButton>
+        </SheetFooterActions>
+      }
+    >
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-primary/25 bg-primary/5 p-3.5 text-xs text-muted-foreground">
+          <p className="font-semibold text-foreground">Normal Task · non-financial</p>
+          <p className="mt-1 leading-relaxed">
+            This completion goes to the Admin for verification. It cannot create an Expense or change the ledger.
+          </p>
+        </div>
+        <GlassField label="Completion note (optional)" hint="Briefly describe what you completed.">
+          <GlassTextarea
+            value={comment}
+            maxLength={500}
+            placeholder="e.g. Filled and placed the water container in the kitchen"
+            onChange={(e) => setComment(e.target.value)}
+          />
+        </GlassField>
+        <FileProofInput
+          file={proof}
+          error={proofError}
+          onFile={(file) => {
+            setProofError(file ? proofProblems(file) : null);
+            setProof(file);
+          }}
+        />
+        {error && (
+          <p role="alert" className="glass-inset rounded-md px-3 py-2 text-xs font-medium text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+    </SheetDialog>
+  );
+}
+
 /* ---------------------------- task progress stepper --------------------------- */
 
 function TaskProgressStepper({ status }: { status: string }) {
@@ -537,7 +623,8 @@ function TaskDetailDialog({
   }, [task?.items]);
 
   if (!task) return null;
-  const TaskIcon = task.taskType === "MARKET_PURCHASE" ? ShoppingCart : ClipboardList;
+  const isMarketTask = task.taskType === "MARKET_PURCHASE";
+  const TaskIcon = isMarketTask ? ShoppingCart : ClipboardList;
   const orbColor = taskOrbColor(task.status);
   const sub = task.submission;
   const todayKey = todayKeyInTz(tz);
@@ -690,11 +777,19 @@ function TaskDetailDialog({
 
           {task.status === "ACCEPTED" && (
             <div className="rounded-2xl border border-primary/25 bg-primary/5 p-3.5 text-xs text-foreground leading-relaxed flex items-start gap-2.5">
-              <ShoppingCart className="size-4 text-primary shrink-0 mt-0.5" />
+              {isMarketTask ? (
+                <ShoppingCart className="size-4 text-primary shrink-0 mt-0.5" />
+              ) : (
+                <ClipboardList className="size-4 text-primary shrink-0 mt-0.5" />
+              )}
               <div>
                 <p className="font-semibold text-primary">Ready to Execute</p>
                 <p className="text-muted-foreground mt-0.5">
-                  You accepted this task. When you are ready, click <strong>Start Submission</strong> to begin recording your purchase and receipt.
+                  {isMarketTask ? (
+                    <>You accepted this Market Task. Click <strong>Start Task</strong> when you begin shopping; submit the purchase after the work is done.</>
+                  ) : (
+                    <>You accepted this Normal Task. Click <strong>Start Task</strong> when you begin, then submit completion for Admin verification.</>
+                  )}
                 </p>
               </div>
             </div>
@@ -801,20 +896,29 @@ function TaskDetailDialog({
           {sub && (
             <div className="space-y-3 border-t border-border/20 pt-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                <ShoppingCart className="size-3.5 text-primary" /> Purchase Submission Details
+                {isMarketTask ? (
+                  <ShoppingCart className="size-3.5 text-primary" />
+                ) : (
+                  <ClipboardList className="size-3.5 text-primary" />
+                )}
+                {isMarketTask ? "Purchase Submission Details" : "Completion Details"}
               </p>
               <div className="glass-inset rounded-2xl p-3.5 border border-border/40 space-y-1">
-                <KeyValueRow
-                  label="Claimed Total"
-                  value={<Money minor={sub.claimedTotalMinor} className="font-bold text-foreground text-sm" />}
-                />
+                {isMarketTask && (
+                  <KeyValueRow
+                    label="Claimed Total"
+                    value={<Money minor={sub.claimedTotalMinor} className="font-bold text-foreground text-sm" />}
+                  />
+                )}
                 <KeyValueRow
                   label="Submitted On"
                   value={formatDateTimeInTz(sub.submittedAt, tz)}
                 />
                 {sub.comment && (
                   <div className="pt-1.5 text-xs">
-                    <span className="text-muted-foreground block font-medium mb-0.5">Your comment:</span>
+                    <span className="text-muted-foreground block font-medium mb-0.5">
+                      {isMarketTask ? "Your comment:" : "Completion note:"}
+                    </span>
                     <p className="text-foreground leading-relaxed">{sub.comment}</p>
                   </div>
                 )}
@@ -823,7 +927,7 @@ function TaskDetailDialog({
               {sub.proofFileId && (
                 <div className="space-y-1.5">
                   <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
-                    <Paperclip className="size-3.5 text-primary" /> Attached Receipt / Bill Proof
+                    <Paperclip className="size-3.5 text-primary" /> {isMarketTask ? "Attached Receipt / Bill Proof" : "Completion Proof"}
                   </p>
                   <ProofImage fileId={sub.proofFileId} alt={`Proof for ${task.description}`} />
                 </div>
@@ -871,14 +975,14 @@ function TaskDetailDialog({
               <GlassButton
                 size="sm"
                 variant="primary"
-                icon={<ShoppingCart className="size-3.5" />}
+                icon={isMarketTask ? <ShoppingCart className="size-3.5" /> : <ClipboardList className="size-3.5" />}
                 loading={busy}
                 onClick={() => {
                   onClose();
                   onStart(task);
                 }}
               >
-                Start Submission
+                Start Task
               </GlassButton>
             )}
 
@@ -886,13 +990,13 @@ function TaskDetailDialog({
               <GlassButton
                 size="sm"
                 variant="primary"
-                icon={<ShoppingCart className="size-3.5" />}
+                icon={isMarketTask ? <ShoppingCart className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
                 onClick={() => {
                   onClose();
                   onSubmitPurchase(task);
                 }}
               >
-                Submit Purchase
+                {isMarketTask ? "Submit Purchase" : "Submit Completion"}
               </GlassButton>
             )}
           </div>
@@ -1041,7 +1145,12 @@ export default function ResidentTasks() {
       invalidate([RESIDENT_KEYS.tasks, RESIDENT_KEYS.dashboard, RESIDENT_KEYS.notifications]);
       broadcastNotification("task_updated");
       if (action === "accept") toast.success(`Task accepted — "${task.description}"`);
-      if (action === "start") toast.success(`Task started — you can submit your purchase any time.`);
+      if (action === "start")
+        toast.success(
+          task.taskType === "MARKET_PURCHASE"
+            ? "Market Task started — submit the purchase when shopping is complete."
+            : "Normal Task started — submit completion when the work is done."
+        );
       if (action === "reject") toast.success("Task rejected — the admin has been notified.");
       if (action === "reject") setRejectTask(null);
     } catch (err) {
@@ -1326,7 +1435,7 @@ export default function ResidentTasks() {
                                       variant="primary"
                                       className="h-7 px-3 text-xs"
                                       loading={busy}
-                                      icon={<ShoppingCart className="size-3" />}
+                                      icon={task.taskType === "MARKET_PURCHASE" ? <ShoppingCart className="size-3" /> : <ClipboardList className="size-3" />}
                                       onClick={() => void transition(task, "start")}
                                     >
                                       Start
@@ -1338,10 +1447,10 @@ export default function ResidentTasks() {
                                       size="sm"
                                       variant="primary"
                                       className="h-7 px-3 text-xs"
-                                      icon={<ShoppingCart className="size-3" />}
+                                      icon={task.taskType === "MARKET_PURCHASE" ? <ShoppingCart className="size-3" /> : <CheckCircle2 className="size-3" />}
                                       onClick={() => setSubmitTask(task)}
                                     >
-                                      Submit purchase
+                                      {task.taskType === "MARKET_PURCHASE" ? "Submit purchase" : "Submit completion"}
                                     </GlassButton>
                                   )}
                                 </div>
@@ -1393,16 +1502,27 @@ export default function ResidentTasks() {
         }}
       />
 
-      {/* Purchase submission dialog */}
+      {/* Task submission dialog — purchase details only exist for Market Tasks. */}
       {submitTask ? (
-        <SubmissionDialog
-          key={submitTask.id}
-          task={submitTask}
-          open
-          onOpenChange={(open) => {
-            if (!open) setSubmitTask(null);
-          }}
-        />
+        submitTask.taskType === "GENERAL" ? (
+          <GeneralCompletionDialog
+            key={submitTask.id}
+            task={submitTask}
+            open
+            onOpenChange={(open) => {
+              if (!open) setSubmitTask(null);
+            }}
+          />
+        ) : (
+          <SubmissionDialog
+            key={submitTask.id}
+            task={submitTask}
+            open
+            onOpenChange={(open) => {
+              if (!open) setSubmitTask(null);
+            }}
+          />
+        )
       ) : null}
     </div>
   );
