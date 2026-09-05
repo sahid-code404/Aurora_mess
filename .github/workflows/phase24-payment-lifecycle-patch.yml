@@ -1,0 +1,53 @@
+name: Phase 24 payment lifecycle patch
+
+on:
+  push:
+    branches: [feat/phase24-payment-lifecycle]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase24-payment-lifecycle
+          fetch-depth: 0
+
+      - name: Apply payment lifecycle normalization
+        run: python3 scripts/phase24-payment-lifecycle-patch.py
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.4
+
+      - name: Validate patched repository
+        run: |
+          bun install --frozen-lockfile
+          bunx prisma generate
+          bunx tsc --noEmit
+          bun run lint
+
+      - name: Commit patch if valid
+        run: |
+          if git diff --quiet; then
+            echo "No patch changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prisma/schema.prisma \
+            src/app/api/v1/admin/payments/route.ts \
+            src/app/api/v1/payments/route.ts \
+            src/lib/domain/funds.ts \
+            src/app/api/v1/admin/funds/route.ts \
+            src/lib/domain/formula/providers/funds.ts \
+            src/lib/domain/billing.ts \
+            src/lib/domain/ledger.ts \
+            'src/app/api/v1/admin/payments/[id]/void/route.ts' \
+            src/components/app/resident/_shared/types.ts
+          git commit -m "Phase 24: normalize payment lifecycle semantics"
+          git push origin HEAD:feat/phase24-payment-lifecycle
