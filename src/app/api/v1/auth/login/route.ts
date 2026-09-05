@@ -34,7 +34,7 @@ async function equalizeTiming(password: string): Promise<void> {
 export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
   // IP-level cap on total login traffic (secondary abuse guard; generous so
   // multiple testers behind one gateway IP are unaffected).
-  const ipLimit = rateLimit(clientKey(ctx.req, "login"), 30, 15 * 60 * 1000);
+  const ipLimit = await rateLimit(clientKey(ctx.req, "login"), 30, 15 * 60 * 1000);
   if (!ipLimit.allowed) {
     throw new ApiError(
       CODES.RATE_LIMITED,
@@ -48,7 +48,7 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
   // Failure-based limiter per IP+email: brute-force protection without
   // counting successes and without one network's testing blocking another user.
   const failKey = `login:fail:${clientIp(ctx.req)}:${body.email}`;
-  const failLimit = rateLimitCheck(failKey, 10);
+  const failLimit = await rateLimitCheck(failKey, 10);
   if (!failLimit.allowed) {
     throw new ApiError(
       CODES.RATE_LIMITED,
@@ -63,12 +63,12 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
   });
   if (!user) {
     await equalizeTiming(body.password);
-    rateLimitCount(failKey, 15 * 60 * 1000);
+    await rateLimitCount(failKey, 15 * 60 * 1000);
     throw new ApiError(CODES.INVALID_CREDENTIALS, "Email or password is incorrect.", 401);
   }
   const passwordOk = await verifyPassword(body.password, user.passwordHash);
   if (!passwordOk) {
-    rateLimitCount(failKey, 15 * 60 * 1000);
+    await rateLimitCount(failKey, 15 * 60 * 1000);
     throw new ApiError(CODES.INVALID_CREDENTIALS, "Email or password is incorrect.", 401);
   }
 
