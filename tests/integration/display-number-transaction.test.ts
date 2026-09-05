@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { db } from "@/lib/db";
-import { nextExpenseNumber, nextPaymentNumber } from "@/lib/ids";
+import { nextBillNumbers, nextExpenseNumber, nextPaymentNumber } from "@/lib/ids";
 
 const phase26Prefix = "EXP-209912-";
 const phase26Key = "EXP:209912";
@@ -8,6 +8,7 @@ const phase27ExpensePrefix = "EXP-209911-";
 const phase27ExpenseKey = "EXP:209911";
 const phase27PaymentPrefix = "PAY-209910-";
 const phase27PaymentKey = "PAY:209910";
+const phase33BillKey = "BILL:209912";
 
 async function deleteSequence(key: string) {
   await db.$executeRaw`DELETE FROM "DisplayNumberSequence" WHERE "key" = ${key}`;
@@ -29,6 +30,7 @@ afterAll(async () => {
     deleteSequence(phase26Key),
     deleteSequence(phase27ExpenseKey),
     deleteSequence(phase27PaymentKey),
+    deleteSequence(phase33BillKey),
   ]);
   await db.$disconnect();
 });
@@ -115,6 +117,32 @@ describe("transaction-aware display-number allocation", () => {
     expect([...numbers].sort()).toEqual(
       Array.from({ length: 8 }, (_, index) =>
         `EXP-209911-${String(index + 1).padStart(4, "0")}`
+      )
+    );
+  });
+
+  test("concurrent bill transactions reserve distinct contiguous ranges for the same month", async () => {
+    await deleteSequence(phase33BillKey);
+
+    const batches = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        db.$transaction((tx) => nextBillNumbers(2099, 12, 5, tx))
+      )
+    );
+
+    for (const batch of batches) {
+      expect(batch).toHaveLength(5);
+      const suffixes = batch.map((value) => Number(value.split("-")[2]));
+      expect(suffixes).toEqual(
+        Array.from({ length: 5 }, (_, index) => suffixes[0] + index)
+      );
+    }
+
+    const numbers = batches.flat();
+    expect(new Set(numbers).size).toBe(20);
+    expect([...numbers].sort()).toEqual(
+      Array.from({ length: 20 }, (_, index) =>
+        `BILL-209912-${String(index + 1).padStart(4, "0")}`
       )
     );
   });
