@@ -29,6 +29,7 @@ import {
   UserPlus,
   Users,
   Utensils,
+  X,
   type LucideIcon,
 } from "lucide-react";
 
@@ -193,6 +194,9 @@ export default function ResidentMeals() {
   const [guestDialogDate, setGuestDialogDate] = useState<string | undefined>(undefined);
   const [guestDialogInstance, setGuestDialogInstance] = useState<string | undefined>(undefined);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaveConfirmId, setLeaveConfirmId] = useState<string | null>(null);
+  const [cancellingLeaveId, setCancellingLeaveId] = useState<string | null>(null);
+  const [leaveActionError, setLeaveActionError] = useState<Record<string, string>>({});
   const [flash, setFlash] = useState<Record<string, Flash>>({});
   const flashTimers = useRef<Record<string, number>>({});
   const [guestFlash, setGuestFlash] = useState<Record<string, Flash>>({});
@@ -321,6 +325,53 @@ export default function ResidentMeals() {
       } else {
         flashFor(meal.id, { tone: "danger", text: friendlyError(err) });
       }
+    }
+  }
+
+
+  /* -------------------------- leave cancellation -------------------------- */
+
+  async function handleCancelLeave(leave: LeaveRequestDto) {
+    if (leave.status !== "PENDING" || cancellingLeaveId) return;
+
+    const snapshots = queryClient.getQueriesData<LeaveRequestDto[]>({
+      queryKey: ["api", RESIDENT_KEYS.leaveRequests],
+    });
+
+    setCancellingLeaveId(leave.id);
+    setLeaveActionError((current) => {
+      const next = { ...current };
+      delete next[leave.id];
+      return next;
+    });
+
+    // Optimistic lifecycle transition. A concurrent Admin review can still win;
+    // the catch path restores every cached copy before showing the server truth.
+    for (const [key] of snapshots) {
+      queryClient.setQueryData<LeaveRequestDto[]>(key, (old) =>
+        old?.map((row) => (row.id === leave.id ? { ...row, status: "CANCELLED" } : row))
+      );
+    }
+
+    try {
+      await apiJson<{ id: string; status: "CANCELLED" }>(
+        `/api/v1/leave-requests/${leave.id}/cancel`,
+        "POST",
+        {}
+      );
+      setLeaveConfirmId(null);
+      invalidate([RESIDENT_KEYS.leaveRequests, RESIDENT_KEYS.notifications]);
+    } catch (error) {
+      for (const [key, value] of snapshots) queryClient.setQueryData(key, value);
+      setLeaveActionError((current) => ({
+        ...current,
+        [leave.id]: friendlyError(error),
+      }));
+      if (error instanceof ApiClientError && error.code === "RESOURCE_CHANGED") {
+        invalidate([RESIDENT_KEYS.leaveRequests]);
+      }
+    } finally {
+      setCancellingLeaveId(null);
     }
   }
 
@@ -938,29 +989,101 @@ export default function ResidentMeals() {
           />
         ) : (
           <div className="max-h-96 space-y-2.5 overflow-y-auto pr-1">
-            {leaves.map((l) => (
-              <div key={l.id} className="glass-inset hover:glass border border-border/40 rounded-2xl p-3.5 transition-all">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="kpi-num text-sm font-semibold text-foreground">
-                      {l.startDate} → {l.endDate}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{l.reason}</p>
+            <AnimatePresence initial={false} mode="popLayout">
+              {leaves.map((l) => (
+                <motion.div
+                  key={l.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.98 }}
+                  transition={SPRING_SNAPPY}
+                  className="glass-inset hover:glass rounded-2xl border border-border/40 p-3.5 transition-[border-color,box-shadow,background-color]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="kpi-num text-sm font-semibold text-foreground">
+                        {l.startDate} → {l.endDate}
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{l.reason}</p>
+                    </div>
+                    <StatusBadge status={l.status} />
                   </div>
-                  <StatusBadge status={l.status} />
-                </div>
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  {l.preview.futureUnlockedMeals} future unlocked meals will turn off
-                  {l.preview.alreadyLockedMeals > 0
-                    ? `; ${l.preview.alreadyLockedMeals} locked meals stay unchanged`
-                    : ""}
-                  .
-                </p>
-                {l.status === "REJECTED" && l.reviewReason && (
-                  <p className="mt-1 text-xs font-medium text-danger">Reason: {l.reviewReason}</p>
-                )}
-              </div>
-            ))}
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {l.status === "CANCELLED"
+                      ? "Cancelled before Admin review. No meal state was changed."
+                      : `${l.preview.futureUnlockedMeals} future unlocked meals will turn off${
+                          l.preview.alreadyLockedMeals > 0
+                            ? `; ${l.preview.alreadyLockedMeals} locked meals stay unchanged`
+                            : ""
+                        }.`}
+                  </p>
+                  {l.status === "REJECTED" && l.reviewReason && (
+                    <p className="mt-1 text-xs font-medium text-danger">Reason: {l.reviewReason}</p>
+                  )}
+
+                  <AnimatePresence initial={false} mode="wait">
+                    {l.status === "PENDING" && leaveConfirmId === l.id ? (
+                      <motion.div
+                        key="confirm-cancel"
+                        initial={{ opacity: 0, height: 0, y: -4 }}
+                        animate={{ opacity: 1, height: "auto", y: 0 }}
+                        exit={{ opacity: 0, height: 0, y: -4 }}
+                        transition={SPRING_SNAPPY}
+                        className="mt-3 flex flex-wrap items-center justify-end gap-2 overflow-hidden border-t border-border/30 pt-3"
+                      >
+                        <span className="mr-auto text-xs text-muted-foreground">Cancel this pending request?</span>
+                        <GlassButton
+                          size="sm"
+                          variant="ghost"
+                          disabled={cancellingLeaveId === l.id}
+                          onClick={() => setLeaveConfirmId(null)}
+                        >
+                          Keep
+                        </GlassButton>
+                        <GlassButton
+                          size="sm"
+                          variant="destructive"
+                          loading={cancellingLeaveId === l.id}
+                          onClick={() => void handleCancelLeave(l)}
+                        >
+                          Confirm cancel
+                        </GlassButton>
+                      </motion.div>
+                    ) : l.status === "PENDING" ? (
+                      <motion.div
+                        key="cancel-action"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.16 }}
+                        className="mt-2 flex justify-end"
+                      >
+                        <GlassButton
+                          size="sm"
+                          variant="ghost"
+                          icon={<X />}
+                          onClick={() => setLeaveConfirmId(l.id)}
+                        >
+                          Cancel request
+                        </GlassButton>
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+
+                  {leaveActionError[l.id] && (
+                    <motion.p
+                      initial={{ opacity: 0, y: -3 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mt-2 text-xs font-medium text-danger"
+                      role="alert"
+                    >
+                      {leaveActionError[l.id]}
+                    </motion.p>
+                  )}
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
         )}
       </GlassCard>
