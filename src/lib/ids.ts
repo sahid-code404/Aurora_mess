@@ -2,15 +2,19 @@
  * Human-facing sequential-ish display numbers (spec §254): PAY-202609-0042.
  * Internal authorization always uses opaque cuid ids.
  *
- * Callers that allocate a number inside an existing write transaction MUST pass
- * that transaction client. Otherwise the allocator cannot see the caller's
- * uncommitted rows and may choose a number that the same transaction already
- * consumed. Outside a transaction the default global Prisma client is fine.
+ * Allocation is persisted in DisplayNumberSequence with one atomic PostgreSQL
+ * UPSERT per prefix/month. This prevents two concurrent requests from receiving
+ * the same candidate. Callers inside an existing write transaction should still
+ * pass that transaction client so allocation commits or rolls back with the
+ * business write; callers outside a transaction may use the global default and
+ * accept harmless gaps if their later write fails.
  */
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 
-type SequenceClient = Pick<Prisma.TransactionClient, "payment" | "expense" | "bill">;
+type SequenceClient = Pick<Prisma.TransactionClient, "$queryRaw">;
+type SequencePrefix = "PAY" | "EXP" | "BILL";
+type SequenceRow = { allocated: number };
 
 function pad(n: number, width: number): string {
   return String(n).padStart(width, "0");
@@ -21,30 +25,26 @@ function monthStamp(date = new Date()): string {
 }
 
 async function nextSequence(
-  table: "Payment" | "Expense" | "Bill",
+  prefix: SequencePrefix,
   stamp: string,
   client: SequenceClient
 ): Promise<number> {
-  // Count-with-retry is intentionally evaluated through the supplied client so
-  // a transaction sees its own uncommitted inserts. Database UNIQUE constraints
-  // remain the final cross-transaction collision guard.
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const count = await (table === "Payment"
-      ? client.payment.count({ where: { displayNumber: { startsWith: `PAY-${stamp}` } } })
-      : table === "Expense"
-        ? client.expense.count({ where: { displayNumber: { startsWith: `EXP-${stamp}` } } })
-        : client.bill.count({ where: { billNumber: { startsWith: `BILL-${stamp}` } } }));
-    const seq = count + 1 + attempt;
+  const key = `${prefix}:${stamp}`;
+  const rows = await client.$queryRaw<SequenceRow[]>(Prisma.sql`
+    INSERT INTO "DisplayNumberSequence" ("key", "nextValue", "updatedAt")
+    VALUES (${key}, 2, CURRENT_TIMESTAMP)
+    ON CONFLICT ("key") DO UPDATE
+    SET
+      "nextValue" = "DisplayNumberSequence"."nextValue" + 1,
+      "updatedAt" = CURRENT_TIMESTAMP
+    RETURNING "nextValue" - 1 AS "allocated"
+  `);
 
-    const existing =
-      table === "Payment"
-        ? await client.payment.findUnique({ where: { displayNumber: `PAY-${stamp}-${pad(seq, 4)}` } })
-        : table === "Expense"
-          ? await client.expense.findUnique({ where: { displayNumber: `EXP-${stamp}-${pad(seq, 4)}` } })
-          : await client.bill.findUnique({ where: { billNumber: `BILL-${stamp}-${pad(seq, 4)}` } });
-    if (!existing) return seq;
+  const allocated = rows[0]?.allocated;
+  if (!Number.isSafeInteger(allocated) || allocated <= 0) {
+    throw new Error("DISPLAY_NUMBER_SEQUENCE_INVALID");
   }
-  throw new Error("DISPLAY_NUMBER_EXHAUSTED");
+  return allocated;
 }
 
 export async function nextPaymentNumber(
@@ -52,7 +52,7 @@ export async function nextPaymentNumber(
   date = new Date()
 ): Promise<string> {
   const stamp = monthStamp(date);
-  return `PAY-${stamp}-${pad(await nextSequence("Payment", stamp, client), 4)}`;
+  return `PAY-${stamp}-${pad(await nextSequence("PAY", stamp, client), 4)}`;
 }
 
 export async function nextExpenseNumber(
@@ -60,7 +60,7 @@ export async function nextExpenseNumber(
   date = new Date()
 ): Promise<string> {
   const stamp = monthStamp(date);
-  return `EXP-${stamp}-${pad(await nextSequence("Expense", stamp, client), 4)}`;
+  return `EXP-${stamp}-${pad(await nextSequence("EXP", stamp, client), 4)}`;
 }
 
 export async function nextBillNumber(
@@ -69,5 +69,5 @@ export async function nextBillNumber(
   client: SequenceClient = db
 ): Promise<string> {
   const stamp = `${year}${pad(month, 2)}`;
-  return `BILL-${stamp}-${pad(await nextSequence("Bill", stamp, client), 4)}`;
+  return `BILL-${stamp}-${pad(await nextSequence("BILL", stamp, client), 4)}`;
 }
