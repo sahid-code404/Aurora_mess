@@ -21,7 +21,7 @@ jobs:
         with:
           bun-version: 1.3.4
       - name: Apply scoped patch
-        run: python3 .github/phase18_patch2.py
+        run: python3 .github/phase18_patch3.py
       - name: Validate changed TypeScript syntax quickly
         run: |
           bun install --frozen-lockfile
