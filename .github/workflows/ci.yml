@@ -20,9 +20,9 @@ env:
 
 jobs:
   verify:
-    name: Typecheck, lint, tests, recovery, build, smoke
+    name: Typecheck, lint, tests, recovery, seeded acceptance, build, smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 22
 
     services:
       postgres:
@@ -100,6 +100,12 @@ jobs:
       - name: PostgreSQL financial integration tests
         run: bun test tests/integration
 
+      - name: Development seed acceptance
+        run: bun run db:seed:dev
+
+      - name: Verify migration state after seed
+        run: bunx prisma migrate status
+
       - name: Production build
         env:
           NODE_ENV: production
@@ -110,11 +116,18 @@ jobs:
           BOARDOPS_SMOKE_DIAGNOSTIC_DIR: smoke-diagnostics
         run: bash tests/production-runtime-smoke.sh all
 
+      - name: Seeded Admin + Resident production auth smoke
+        env:
+          BOARDOPS_SEEDED_SMOKE_DIAGNOSTIC_DIR: seeded-smoke-diagnostics
+        run: bash tests/seeded-auth-smoke.sh
+
       - name: Upload runtime smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: production-runtime-smoke-diagnostics
-          path: smoke-diagnostics/
+          path: |
+            smoke-diagnostics/
+            seeded-smoke-diagnostics/
           if-no-files-found: ignore
           retention-days: 3
