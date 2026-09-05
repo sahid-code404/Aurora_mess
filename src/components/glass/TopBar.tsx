@@ -10,7 +10,7 @@
  * bell with a popping unread badge · gradient avatar with the account dropdown.
  */
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Bell, Check, LogOut, Menu, Monitor, Moon, Search, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useMounted } from "@/hooks/use-mounted";
@@ -52,6 +52,7 @@ export interface TopBarProps {
 function ThemeSwitcher() {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const mounted = useMounted();
+  const reduced = useReducedMotion();
   const isDark = mounted && resolvedTheme === "dark";
   const current = mounted ? (theme ?? "system") : "system";
 
@@ -73,10 +74,10 @@ function ThemeSwitcher() {
           <AnimatePresence mode="wait" initial={false}>
             <motion.span
               key={isDark ? "sun" : "moon"}
-              initial={{ rotate: -90, opacity: 0, scale: 0.5 }}
+              initial={reduced ? false : { rotate: -90, opacity: 0, scale: 0.5 }}
               animate={{ rotate: 0, opacity: 1, scale: 1 }}
-              exit={{ rotate: 90, opacity: 0, scale: 0.5 }}
-              transition={{ duration: 0.2 }}
+              exit={reduced ? { opacity: 1 } : { rotate: 90, opacity: 0, scale: 0.5 }}
+              transition={{ duration: reduced ? 0 : 0.2 }}
               className="grid place-items-center"
             >
               {isDark ? <Sun className="size-[18px]" aria-hidden /> : <Moon className="size-[18px]" aria-hidden />}
@@ -104,9 +105,7 @@ function ThemeSwitcher() {
             >
               <Icon className="size-4" aria-hidden />
               <span className="flex-1">{option.label}</span>
-              {active && (
-                <Check className="size-4 shrink-0 stroke-[2.5]" aria-hidden />
-              )}
+              {active && <Check className="size-4 shrink-0 stroke-[2.5]" aria-hidden />}
             </DropdownMenuItem>
           );
         })}
@@ -129,6 +128,8 @@ export function TopBar({
   onProfile,
   className,
 }: TopBarProps) {
+  const reduced = useReducedMotion();
+
   return (
     <header
       className={cn(
@@ -142,8 +143,8 @@ export function TopBar({
         <motion.button
           type="button"
           aria-label="Open menu"
-          whileTap={{ scale: 0.9 }}
-          transition={SPRING_POP}
+          whileTap={reduced ? undefined : { scale: 0.9 }}
+          transition={reduced ? { duration: 0 } : SPRING_POP}
           onClick={onMenuClick}
           className="glass-inset flex size-10 shrink-0 items-center justify-center rounded-2xl text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
@@ -154,8 +155,9 @@ export function TopBar({
         <div className="min-w-0 flex-1 pl-1">
           <motion.p
             key={`${context}-ctx`}
-            initial={{ opacity: 0, x: -8 }}
+            initial={reduced ? false : { opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: reduced ? 0 : 0.2 }}
             className="truncate text-[10px] leading-tight text-muted-foreground"
           >
             {context}
@@ -163,10 +165,10 @@ export function TopBar({
           <AnimatePresence mode="wait" initial={false}>
             <motion.h1
               key={title}
-              initial={{ opacity: 0, y: 4 }}
+              initial={reduced ? false : { opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
+              exit={reduced ? { opacity: 1 } : { opacity: 0, y: -4 }}
+              transition={{ duration: reduced ? 0 : 0.2, ease: "easeOut" }}
               className="truncate font-display text-sm font-semibold leading-tight tracking-tight"
             >
               {title}
@@ -178,8 +180,8 @@ export function TopBar({
         <motion.button
           type="button"
           aria-label="Search (Ctrl+K)"
-          whileTap={{ scale: 0.9 }}
-          transition={SPRING_POP}
+          whileTap={reduced ? undefined : { scale: 0.9 }}
+          transition={reduced ? { duration: 0 } : SPRING_POP}
           onClick={onSearchClick}
           className="glass-inset flex size-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
@@ -193,9 +195,9 @@ export function TopBar({
           type="button"
           onClick={onBellClick}
           aria-label={unread ? `Notifications — ${unread} unread` : "Notifications"}
-          whileTap={{ scale: 0.88 }}
-          whileHover={{ scale: 1.06 }}
-          transition={SPRING_POP}
+          whileTap={reduced ? undefined : { scale: 0.88 }}
+          whileHover={reduced ? undefined : { scale: 1.06 }}
+          transition={reduced ? { duration: 0 } : SPRING_POP}
           className="glass-inset relative flex size-10 shrink-0 items-center justify-center rounded-2xl text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           <Bell className="size-[18px]" aria-hidden />
@@ -203,10 +205,10 @@ export function TopBar({
             {!!unread && unread > 0 && (
               <motion.span
                 key={unread}
-                initial={{ scale: 0.3, opacity: 0 }}
+                initial={reduced ? false : { scale: 0.3, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.3, opacity: 0 }}
-                transition={SPRING_POP}
+                exit={reduced ? { opacity: 1 } : { scale: 0.3, opacity: 0 }}
+                transition={reduced ? { duration: 0 } : SPRING_POP}
                 className="pulse-dot absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-white shadow-[0_2px_8px_color-mix(in_oklab,var(--destructive)_60%,transparent)]"
               >
                 {unread > 9 ? "9+" : unread}

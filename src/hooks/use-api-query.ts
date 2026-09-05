@@ -45,7 +45,7 @@ export function useApiQuery<T>(
     staleTime: options?.staleTime ?? 15_000,
     placeholderData: (options?.placeholderData ?? keepPreviousData) as any,
     refetchInterval: options?.refetchInterval,
-    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? true,
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? false,
   }) as UseQueryResult<T, ApiClientError>;
 }
 
