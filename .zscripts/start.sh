@@ -13,7 +13,7 @@ pids=""
 cleanup() {
     echo ""
     echo "🛑 正在关闭所有服务..."
-    
+
     # 发送 SIGTERM 信号给所有子进程
     for pid in $pids; do
         if kill -0 "$pid" 2>/dev/null; then
@@ -22,25 +22,23 @@ cleanup() {
             kill -TERM "$pid" 2>/dev/null
         fi
     done
-    
+
     # 等待所有进程退出（最多等待 5 秒）
     sleep 1
     for pid in $pids; do
         if kill -0 "$pid" 2>/dev/null; then
-            # 如果还在运行，等待最多 4 秒
             timeout=4
             while [ $timeout -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
                 sleep 1
                 timeout=$((timeout - 1))
             done
-            # 如果仍然在运行，强制关闭
             if kill -0 "$pid" 2>/dev/null; then
                 echo "   强制关闭进程 $pid..."
                 kill -KILL "$pid" 2>/dev/null
             fi
         fi
     done
-    
+
     echo "✅ 所有服务已关闭"
     exit 0
 }
@@ -53,8 +51,25 @@ cd "$BUILD_DIR" || exit 1
 
 ls -lah
 
-DEFAULT_PACKAGED_DB_PATH="/app/db/custom.db"
-DEFAULT_PACKAGED_DATABASE_URL="file:$DEFAULT_PACKAGED_DB_PATH"
+# BoardOps production state is PostgreSQL-only. Never fall back to a packaged
+# SQLite file: doing so can start against stale data and bypass the committed
+# migration history. DATABASE_URL is intentionally not echoed because it may
+# contain database credentials.
+if [ -z "${DATABASE_URL:-}" ]; then
+    echo "❌ 未配置 DATABASE_URL。BoardOps 运行时必须连接外部 PostgreSQL 数据库。"
+    echo "   请在部署环境中设置 postgresql:// 或 postgres:// DATABASE_URL，并在发布时执行 prisma migrate deploy。"
+    exit 1
+fi
+
+case "$DATABASE_URL" in
+    postgresql://*|postgres://*)
+        echo "🗄️  已配置外部 PostgreSQL 数据库"
+        ;;
+    *)
+        echo "❌ DATABASE_URL 不是 PostgreSQL。已拒绝启动，以避免使用遗留 SQLite/文件数据库。"
+        exit 1
+        ;;
+esac
 
 # Python 依赖在构建阶段安装进部署产物，不复用 Sandbox 的 /home/z/.venv。
 # Next.js 及其启动的子进程都会继承这组路径。
@@ -70,30 +85,18 @@ fi
 if [ -f "./next-service-dist/server.js" ]; then
     echo "🚀 启动 Next.js 服务器..."
     cd next-service-dist/ || exit 1
-    
+
     # 设置环境变量
     export NODE_ENV=production
     export PORT="${PORT:-3000}"
     export HOSTNAME="${HOSTNAME:-0.0.0.0}"
-    export DATABASE_URL="${DATABASE_URL:-$DEFAULT_PACKAGED_DATABASE_URL}"
+    export DATABASE_URL
 
-    if [ "$DATABASE_URL" = "$DEFAULT_PACKAGED_DATABASE_URL" ]; then
-        if [ ! -f "$DEFAULT_PACKAGED_DB_PATH" ]; then
-            echo "❌ 未找到打包后的数据库文件 $DEFAULT_PACKAGED_DB_PATH"
-            echo "   为避免生产环境启动到空数据库，启动已终止"
-            exit 1
-        fi
-
-        echo "🗄️  当前使用打包数据库: $DEFAULT_PACKAGED_DB_PATH"
-    else
-        echo "🗄️  当前使用外部指定数据库: $DATABASE_URL"
-    fi
-    
     # 后台启动 Next.js
     bun server.js &
     NEXT_PID=$!
     pids="$NEXT_PID"
-    
+
     # 等待一小段时间检查进程是否成功启动
     sleep 1
     if ! kill -0 "$NEXT_PID" 2>/dev/null; then
@@ -102,7 +105,7 @@ if [ -f "./next-service-dist/server.js" ]; then
     else
         echo "✅ Next.js 服务器已启动 (PID: $NEXT_PID, Port: $PORT)"
     fi
-    
+
     cd ../
 else
     echo "⚠️  未找到 Next.js 服务器文件: ./next-service-dist/server.js"
@@ -111,12 +114,12 @@ fi
 # 启动 mini-services
 if [ -f "./mini-services-start.sh" ]; then
     echo "🚀 启动 mini-services..."
-    
+
     # 运行启动脚本（从根目录运行，脚本内部会处理 mini-services-dist 目录）
     sh ./mini-services-start.sh &
     MINI_PID=$!
     pids="$pids $MINI_PID"
-    
+
     # 等待一小段时间检查进程是否成功启动
     sleep 1
     if ! kill -0 "$MINI_PID" 2>/dev/null; then

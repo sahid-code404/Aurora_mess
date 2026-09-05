@@ -2,19 +2,17 @@
  * SESSIONS — opaque 256-bit tokens; ONLY the sha256 hash is stored (spec §10).
  * Cookie: mes_session (HttpOnly, Path=/) with rotation on login.
  *
- * TRANSPORT NOTE (why two Set-Cookie headers + a bearer fallback):
- * The app is embedded in a cross-site iframe by the sandbox preview panel.
- * Browsers reject `SameSite=Lax` cookies set in third-party iframe contexts,
- * which silently broke sign-in (login 200 → /auth/me 401 → stuck on the auth
- * screen). We therefore:
- *   1. Emit BOTH a `SameSite=Lax` and a `SameSite=None; Secure` Set-Cookie for
- *      the same token. Over HTTPS the None/Secure cookie replaces the Lax one
- *      and is accepted inside iframes; over plain HTTP the browser discards the
- *      Secure variant and the Lax cookie survives (local dev / E2E).
- *   2. Accept the session token via `Authorization: Bearer` as a fallback for
- *      browsers that block third-party cookies entirely (e.g. Safari ITP). The
- *      login response returns the token; the client keeps it in localStorage.
- * __Host- prefix reserved for real HTTPS production (documented in worklog).
+ * TRANSPORT:
+ * - Normal deployments authenticate exclusively through the HttpOnly cookie.
+ * - Cross-site sandbox previews may explicitly opt into a bearer fallback by
+ *   setting ENABLE_PREVIEW_BEARER_AUTH=1 on the server. When enabled, login may
+ *   return the raw token to the client for in-memory-only transport in browsers
+ *   that block third-party cookies entirely. The fallback is disabled by
+ *   default and is never required for normal production operation.
+ *
+ * Two cookie variants are emitted for compatibility with both HTTPS embedded
+ * previews and plain-HTTP local development: SameSite=Lax first, then
+ * SameSite=None; Secure. Browsers accept the variant valid for their context.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
@@ -28,6 +26,11 @@ export function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
+/** Whether the explicitly preview-only bearer transport is enabled. */
+export function previewBearerAuthEnabled(): boolean {
+  return process.env.ENABLE_PREVIEW_BEARER_AUTH === "1";
+}
+
 export type SessionUser = {
   id: string;
   institutionId: string;
@@ -37,8 +40,9 @@ export type SessionUser = {
   sessionId: string;
 };
 
-/** Extract a bearer token from the Authorization header (null when absent). */
+/** Extract a preview bearer token from Authorization when the fallback is enabled. */
 export function bearerToken(req: NextRequest): string | null {
+  if (!previewBearerAuthEnabled()) return null;
   const header = req.headers.get("authorization");
   if (!header) return null;
   const [scheme, ...rest] = header.trim().split(/\s+/);
@@ -48,19 +52,16 @@ export function bearerToken(req: NextRequest): string | null {
 }
 
 /**
- * Create a session and revoke every session this browser can reach (cookie AND
- * bearer token — rotation). Returns the raw token; the caller hands it to the
- * client as a Bearer fallback transport for cookie-blocked contexts and
- * stamps it onto the response via applySessionCookies().
+ * Create a session and revoke every current session transport this browser can
+ * reach. Returns the raw token so the caller can set HttpOnly cookies; when
+ * preview bearer auth is explicitly enabled, login may also return it to the
+ * client for in-memory fallback transport.
  */
 export async function createSession(
   userId: string,
   institutionId: string,
   req: NextRequest
 ): Promise<string> {
-  // Rotate: revoke any current session reachable from this browser. In
-  // cookie-blocked iframe contexts the browser still holds the previous
-  // token in localStorage, so the bearer header must be rotated too.
   const oldTokens = new Set(
     [req.cookies.get(SESSION_COOKIE)?.value, bearerToken(req)].filter(
       (v): v is string => typeof v === "string" && v.length > 0
@@ -124,9 +125,8 @@ async function sessionUserForToken(token: string): Promise<SessionUser | null> {
 }
 
 /**
- * Resolve the authenticated user: cookie first, bearer-token fallback.
- * The fallback keeps sessions alive in third-party-cookie-blocked iframe
- * contexts where the browser refuses to store/send the session cookie.
+ * Resolve the authenticated user: HttpOnly cookie first. The Authorization
+ * header is considered only when ENABLE_PREVIEW_BEARER_AUTH=1.
  */
 export async function getSessionUser(req: NextRequest): Promise<SessionUser | null> {
   const cookieToken = req.cookies.get(SESSION_COOKIE)?.value ?? null;
@@ -141,7 +141,7 @@ export async function getSessionUser(req: NextRequest): Promise<SessionUser | nu
   return null;
 }
 
-/** Revoke the current session — both transports (cookie + bearer token). */
+/** Revoke the current session — cookie plus preview bearer transport when enabled. */
 export async function revokeSession(req: NextRequest, res: NextResponse): Promise<void> {
   const cookieToken = req.cookies.get(SESSION_COOKIE)?.value ?? null;
   const headerToken = bearerToken(req);

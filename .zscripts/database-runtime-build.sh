@@ -2,32 +2,33 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/home/z/my-project}"
+# BoardOps uses an external PostgreSQL database. Build artifacts must never copy,
+# initialize, migrate, or otherwise embed a runtime database file. Database
+# migrations are committed under prisma/migrations and are applied explicitly by
+# the release/deployment environment with `prisma migrate deploy`.
+#
+# This script is retained because the platform build wrapper already invokes it;
+# it now acts only as a fail-closed deployment configuration guard.
+
 BUILD_DIR="${BUILD_DIR:?BUILD_DIR is required}"
-SOURCE_DB_DIR="$PROJECT_DIR/db"
-SOURCE_DB_PATH="$SOURCE_DB_DIR/custom.db"
-TARGET_DB_DIR="$BUILD_DIR/db"
-TARGET_DB_PATH="$TARGET_DB_DIR/custom.db"
 
-mkdir -p "$TARGET_DB_DIR"
-
-if [ -f "$SOURCE_DB_PATH" ]; then
-    echo "🗄️  复制 Preview 数据库到构建产物..."
-    cp -a "$SOURCE_DB_DIR/." "$TARGET_DB_DIR/"
-else
-    echo "ℹ️  未找到 Preview 数据库 db/custom.db，将初始化空的生产数据库"
-fi
-
-echo "🗄️  同步构建产物中的数据库结构..."
-(
-    cd "$PROJECT_DIR"
-    DATABASE_URL="file:$TARGET_DB_PATH" bun run db:push
-)
-
-if [ ! -f "$TARGET_DB_PATH" ]; then
-    echo "❌ 数据库初始化命令执行成功，但未生成 $TARGET_DB_PATH"
+if [ -e "$BUILD_DIR/db/custom.db" ]; then
+    echo "❌ Refusing to package legacy SQLite database: $BUILD_DIR/db/custom.db"
     exit 1
 fi
 
-echo "✅ 构建产物数据库已准备完成"
-ls -lah "$TARGET_DB_DIR"
+if [ -z "${DATABASE_URL:-}" ]; then
+    echo "ℹ️  DATABASE_URL is not present during build; no database is packaged."
+    echo "   Runtime must provide an external PostgreSQL DATABASE_URL."
+    exit 0
+fi
+
+case "$DATABASE_URL" in
+    postgresql://*|postgres://*)
+        echo "✅ External PostgreSQL DATABASE_URL detected; no database is copied into the build artifact."
+        ;;
+    *)
+        echo "❌ BoardOps requires PostgreSQL. Refusing non-PostgreSQL DATABASE_URL during build."
+        exit 1
+        ;;
+esac

@@ -3,12 +3,12 @@
  * CLIENT API helper — typed envelopes, friendly errors (client side of spec §78).
  * All requests are same-origin relative paths (Caddy gateway safe).
  *
- * SESSION TRANSPORT FALLBACK: browsers may refuse the session cookie when the
- * app runs inside the sandbox preview panel's cross-site iframe (third-party
- * cookie blocking). After a successful login the raw session token returned
- * by /api/v1/auth/login is persisted here and attached as an
- * `Authorization: Bearer` header on every call. The server prefers the cookie
- * and falls back to the header, so sign-in works in every context.
+ * SESSION TRANSPORT:
+ * Normal authentication is the HttpOnly session cookie. An explicitly enabled
+ * preview-only bearer fallback may return a raw token from /api/v1/auth/login
+ * for cookie-blocked cross-site iframe testing. That token is kept in module
+ * memory only: never localStorage, sessionStorage, IndexedDB, or any other
+ * persistent browser storage. A full reload therefore clears the fallback.
  */
 
 export type ApiEnvelope<T> =
@@ -29,32 +29,24 @@ export class ApiClientError extends Error {
   }
 }
 
-const SESSION_TOKEN_KEY = "mes_session_token";
+let previewSessionToken: string | null = null;
 
-/** Persist the login session token (Bearer fallback transport). */
+/**
+ * Hold the preview-only bearer token for this JavaScript runtime. The legacy
+ * function name is kept to avoid churn at existing auth call sites; nothing is
+ * persisted to browser storage.
+ */
 export function persistSessionToken(token: string): void {
-  try {
-    window.localStorage.setItem(SESSION_TOKEN_KEY, token);
-  } catch {
-    /* storage unavailable (private mode) — cookie transport still applies */
-  }
+  previewSessionToken = token;
 }
 
-/** Drop the persisted session token (logout / session expiry). */
+/** Drop the in-memory preview bearer token (logout / session expiry). */
 export function clearSessionToken(): void {
-  try {
-    window.localStorage.removeItem(SESSION_TOKEN_KEY);
-  } catch {
-    /* ignore */
-  }
+  previewSessionToken = null;
 }
 
 function storedSessionToken(): string | null {
-  try {
-    return window.localStorage.getItem(SESSION_TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return previewSessionToken;
 }
 
 export async function api<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
@@ -63,8 +55,9 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   if (json !== undefined) {
     headers["content-type"] = "application/json";
   }
-  // Bearer fallback: attach the persisted session token when the cookie
-  // transport may be blocked (preview iframe). Harmless when both exist.
+  // Preview-only bearer fallback. In normal deployments this is always null
+  // because the login endpoint does not return a raw token unless the server
+  // explicitly enables preview bearer auth.
   const sessionToken = typeof window !== "undefined" ? storedSessionToken() : null;
   if (sessionToken) {
     headers["authorization"] = `Bearer ${sessionToken}`;
@@ -82,7 +75,7 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
     /* non-JSON body */
   }
   if (res.status === 401 && typeof window !== "undefined" && !isCredentialEntry(path)) {
-    // The server rejected both transports — the stored token is dead.
+    // The server rejected both transports — the in-memory preview token is dead.
     clearSessionToken();
   }
   if (!body || !body.ok) {
@@ -92,7 +85,7 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   return body.data;
 }
 
-/** Login/register 401s are about the submitted credentials — never nuke the stored token. */
+/** Login/register 401s are about the submitted credentials — never clear an existing session fallback. */
 function isCredentialEntry(path: string): boolean {
   return path.startsWith("/api/v1/auth/login") || path.startsWith("/api/v1/auth/register");
 }

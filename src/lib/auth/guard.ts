@@ -1,10 +1,11 @@
 /**
  * GUARD + route handler wrapper — the single authorization chokepoint (spec §8, §217).
  * Every /api/v1 route goes through `route()`: resolves params, enforces auth+role,
- * injects requestId + user context, and converts ApiError into the standard envelope.
+ * blocks cross-site cookie-forged mutations, injects requestId + user context,
+ * and converts ApiError into the standard envelope.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { getSessionUser, type SessionUser } from "@/lib/auth/session";
+import { bearerToken, getSessionUser, type SessionUser } from "@/lib/auth/session";
 import { ApiError, CODES, fail, newRequestId, ok } from "@/lib/errors";
 
 export type HandlerCtx = {
@@ -19,6 +20,56 @@ type AuthMode = "PUBLIC" | "ANY" | "ADMIN" | "RESIDENT";
 
 type RouteResult = { data: unknown; meta?: Record<string, unknown> } | NextResponse;
 
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+function requestOrigin(req: NextRequest): string {
+  return new URL(req.url).origin;
+}
+
+function originOf(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * CSRF guard for cookie-authenticated mutations.
+ *
+ * - Safe/read methods are unaffected.
+ * - Explicit preview bearer requests are not ambient credentials, so they do
+ *   not need CSRF protection; an attacker cannot cause a browser to attach the
+ *   secret Authorization header cross-site.
+ * - Cookie-backed mutation requests must not be browser-classified cross-site.
+ * - Origin/Referer, when present, must match the API origin exactly.
+ *
+ * Modern browsers send Sec-Fetch-Site and/or Origin for cross-site mutation
+ * requests. We intentionally do not require those headers to exist so trusted
+ * non-browser tooling can still call cookie-authenticated endpoints, but any
+ * supplied cross-site evidence fails closed.
+ */
+export function assertCsrfSafeRequest(req: NextRequest): void {
+  if (SAFE_METHODS.has(req.method.toUpperCase())) return;
+  if (bearerToken(req)) return;
+
+  const expectedOrigin = requestOrigin(req);
+  const fetchSite = req.headers.get("sec-fetch-site")?.toLowerCase();
+  if (fetchSite === "cross-site") {
+    throw new ApiError(CODES.FORBIDDEN, "Cross-site requests are not allowed for this action.", 403);
+  }
+
+  const origin = req.headers.get("origin");
+  if (origin && originOf(origin) !== expectedOrigin) {
+    throw new ApiError(CODES.FORBIDDEN, "Cross-site requests are not allowed for this action.", 403);
+  }
+
+  const referer = req.headers.get("referer");
+  if (!origin && referer && originOf(referer) !== expectedOrigin) {
+    throw new ApiError(CODES.FORBIDDEN, "Cross-site requests are not allowed for this action.", 403);
+  }
+}
+
 export function route(
   opts: { auth: AuthMode },
   fn: (ctx: HandlerCtx) => Promise<RouteResult>
@@ -26,6 +77,8 @@ export function route(
   return async (req, routeCtx) => {
     const requestId = newRequestId();
     try {
+      assertCsrfSafeRequest(req);
+
       let params: Record<string, string> = {};
       if (routeCtx?.params) params = await routeCtx.params;
       let user: SessionUser | null = null;
