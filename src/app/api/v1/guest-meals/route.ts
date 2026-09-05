@@ -16,7 +16,12 @@ import { dateKeySchema } from "@/lib/validation";
 import { addDaysToKey, dateKeyInTz, formatTimeLabel, localDateMidnightUtc } from "@/lib/time";
 import { formatMinor } from "@/lib/money";
 import { appendAudit } from "@/lib/audit";
-import { claimIdempotencyKey, completeIdempotencyKey, sweepExpiredIdempotencyRecords } from "@/lib/idempotency";
+import {
+  actorScopedIdempotencyKey,
+  claimIdempotencyKey,
+  completeIdempotencyKey,
+  sweepExpiredIdempotencyRecords,
+} from "@/lib/idempotency";
 import { keyOfUtcDate, requireInstitutionContext, dayCountBetween } from "@/lib/domain/meal-engine";
 import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
@@ -43,14 +48,59 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const inst = await requireInstitutionContext(ctx.institutionId);
   const tz = inst.timezone;
   const body = await parseBody(ctx.req, createSchema);
+  const storageIdempotencyKey = body.idempotencyKey
+    ? actorScopedIdempotencyKey(ctx.user.id, body.idempotencyKey)
+    : null;
+
+  // Transitional compatibility for unexpired pre-Phase-31 raw-key records.
+  // A completed legacy payload is returned only if its guest booking belongs to
+  // the authenticated resident. An incomplete legacy claim cannot be attributed
+  // safely, so it remains a temporary conflict until its existing 24-hour expiry.
+  if (body.idempotencyKey) {
+    const replayNow = new Date();
+    const legacy = await db.idempotencyRecord.findUnique({
+      where: {
+        institutionId_scope_key: {
+          institutionId: ctx.institutionId,
+          scope: IDEMPOTENCY_SCOPE,
+          key: body.idempotencyKey,
+        },
+      },
+    });
+    if (legacy && legacy.expiresAt.getTime() > replayNow.getTime()) {
+      if (legacy.responseJson) {
+        const payload = JSON.parse(legacy.responseJson) as Record<string, unknown>;
+        const legacyGuestId = typeof payload.id === "string" ? payload.id : null;
+        const ownedLegacyGuest = legacyGuestId
+          ? await db.guestMealRequest.findFirst({
+              where: {
+                id: legacyGuestId,
+                institutionId: ctx.institutionId,
+                hostResidentId: ctx.user.id,
+              },
+              select: { id: true },
+            })
+          : null;
+        if (ownedLegacyGuest) {
+          return { data: payload, meta: { idempotentReplay: true } };
+        }
+      } else {
+        throw new ApiError(
+          CODES.IDPOTENCY_CONFLICT,
+          "This request is already being processed. Please try again in a moment.",
+          409
+        );
+      }
+    }
+  }
 
   const result = await db.$transaction(async (tx) => {
-    if (body.idempotencyKey) {
+    if (storageIdempotencyKey) {
       const claim = await claimIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
         scope: IDEMPOTENCY_SCOPE,
-        key: body.idempotencyKey,
+        key: storageIdempotencyKey,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       });
       if (claim.state === "REPLAY") {
@@ -153,13 +203,13 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     };
 
     // Persist the replay payload before commit. A concurrent duplicate blocks on
-    // the claim row, then observes this exact response after the winner commits.
-    if (body.idempotencyKey) {
+    // the actor-scoped claim row, then observes this exact response after commit.
+    if (storageIdempotencyKey) {
       await completeIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
         scope: IDEMPOTENCY_SCOPE,
-        key: body.idempotencyKey,
+        key: storageIdempotencyKey,
         payload,
       });
     }
