@@ -13,6 +13,7 @@ import { appendAudit } from "@/lib/audit";
 import { hashPassword } from "@/lib/auth/password";
 import { getInstitution } from "@/lib/institution";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
+import { validateCurrentRegistrationAcceptances } from "@/lib/auth/registration-policies";
 import {
   emailSchema,
   fullNameSchema,
@@ -27,8 +28,6 @@ const registerSchema = z.object({
   fullName: fullNameSchema,
   phone: phoneSchema,
   room: roomSchema,
-  // Spec requires accepting every published policy at registration. When the
-  // instance has no published policies yet (bootstrap), an empty list is fine.
   acceptances: z
     .array(
       z.object({
@@ -67,54 +66,21 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
   }
 
   const body = await parseBody(ctx.req, registerSchema);
-
-  // Deduplicate acceptances by policy (policyId → policyVersionId).
-  const acceptanceByPolicy = new Map<string, string>();
-  for (const acceptance of body.acceptances) {
-    acceptanceByPolicy.set(acceptance.policyId, acceptance.policyVersionId);
-  }
-
-  const activePolicyCount = await db.policy.count({
-    where: { institutionId: institution.id, status: "ACTIVE" },
-  });
-  if (activePolicyCount > 0 && acceptanceByPolicy.size === 0) {
-    throw new ApiError(CODES.VALIDATION_FAILED, "You must accept the policies to continue.", 400, {
-      acceptances: "Please accept the required policies.",
-    });
-  }
-
-  // Verify every accepted version belongs to an ACTIVE policy of this institution.
-  const versionIds = [...acceptanceByPolicy.values()];
-  const versions = versionIds.length
-    ? await db.policyVersion.findMany({
-        where: { id: { in: versionIds } },
-        include: { policy: true },
-      })
-    : [];
-  const versionById = new Map(versions.map((v) => [v.id, v]));
-  for (const [policyId, versionId] of acceptanceByPolicy) {
-    const version = versionById.get(versionId);
-    if (
-      !version ||
-      version.policyId !== policyId ||
-      version.policy.institutionId !== institution.id ||
-      version.policy.status !== "ACTIVE"
-    ) {
-      throw new ApiError(
-        CODES.VALIDATION_FAILED,
-        "The policy you accepted has changed. Please refresh and try again.",
-        400,
-        { acceptances: "Policy versions could not be verified." }
-      );
-    }
-  }
-
   const passwordHash = await hashPassword(body.password);
   const ip = ctx.req.headers.get("x-forwarded-for") ?? null;
   const userAgent = ctx.req.headers.get("user-agent")?.slice(0, 250) ?? null;
 
   try {
     await db.$transaction(async (tx) => {
+      // Validate inside the transaction so policy publication cannot race the
+      // registration write. Every currently published ACTIVE policy version
+      // must be accepted, not merely one member of the set.
+      const currentAcceptances = await validateCurrentRegistrationAcceptances(
+        institution.id,
+        body.acceptances,
+        tx
+      );
+
       const user = await tx.user.create({
         data: {
           institutionId: institution.id,
@@ -142,9 +108,15 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
           reason: "Registration submitted",
         },
       });
-      for (const [policyId, policyVersionId] of acceptanceByPolicy) {
+      for (const acceptance of currentAcceptances) {
         await tx.userPolicyAcceptance.create({
-          data: { userId: user.id, policyId, policyVersionId, ip, userAgent },
+          data: {
+            userId: user.id,
+            policyId: acceptance.policyId,
+            policyVersionId: acceptance.policyVersionId,
+            ip,
+            userAgent,
+          },
         });
       }
       await appendAudit(
@@ -160,6 +132,7 @@ export const POST = route({ auth: "PUBLIC" }, async (ctx) => {
             email: body.email,
             fullName: body.fullName,
             room: body.room || null,
+            acceptedPolicies: currentAcceptances.length,
           }),
           ip,
           userAgent,
