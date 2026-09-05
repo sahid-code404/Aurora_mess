@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 
@@ -7,6 +8,17 @@ type ClaimResult =
   | { state: "CLAIMED" }
   | { state: "REPLAY"; payload: Record<string, unknown> }
   | { state: "IN_PROGRESS" };
+
+/**
+ * Storage keys are derived from the authenticated actor plus the client key.
+ * Institution and operation scope remain separate database dimensions.
+ *
+ * Hashing keeps the persisted key fixed-width and prevents one resident's
+ * arbitrary client key from becoming another resident's replay namespace.
+ */
+export function actorScopedIdempotencyKey(actorUserId: string, clientKey: string): string {
+  return createHash("sha256").update(actorUserId).update("\0").update(clientKey).digest("hex");
+}
 
 export async function claimIdempotencyKey(input: {
   client: IdempotencyClient;
