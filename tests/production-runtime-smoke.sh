@@ -13,7 +13,9 @@ BASE_URL="http://${HOST}:${PORT}"
 SERVER_LOG="$(mktemp)"
 BODY_FILE="$(mktemp)"
 SERVER_PID=""
+CURRENT_STAGE="bootstrap"
 SMOKE_EMAIL="phase13-nobody-${GITHUB_RUN_ID:-local}@example.com"
+DIAGNOSTIC_DIR="${BOARDOPS_SMOKE_DIAGNOSTIC_DIR:-}"
 
 cleanup() {
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -24,8 +26,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
+persist_diagnostics() {
+  local message="$1"
+  if [ -z "$DIAGNOSTIC_DIR" ]; then
+    return
+  fi
+  mkdir -p "$DIAGNOSTIC_DIR"
+  {
+    printf 'mode=%s\n' "$CHECK_MODE"
+    printf 'stage=%s\n' "$CURRENT_STAGE"
+    printf 'message=%s\n' "$message"
+  } >"$DIAGNOSTIC_DIR/failure.txt"
+  cp "$BODY_FILE" "$DIAGNOSTIC_DIR/response-body.txt" 2>/dev/null || true
+  cp "$SERVER_LOG" "$DIAGNOSTIC_DIR/server.log" 2>/dev/null || true
+}
+
 fail() {
-  echo "production runtime smoke failed ($CHECK_MODE): $*" >&2
+  local message="$*"
+  persist_diagnostics "$message"
+  echo "production runtime smoke failed ($CHECK_MODE/$CURRENT_STAGE): $message" >&2
+  echo "--- response body ---" >&2
+  cat "$BODY_FILE" >&2 || true
   echo "--- standalone server log ---" >&2
   cat "$SERVER_LOG" >&2 || true
   exit 1
@@ -55,15 +76,13 @@ request_status() {
   local actual
   actual="$(request_capture "$@")"
   if [ "$actual" != "$expected" ]; then
-    echo "--- response body ($label) ---" >&2
-    cat "$BODY_FILE" >&2 || true
     fail "$label returned HTTP $actual; expected $expected"
   fi
 }
 
 assert_json() {
   local assertion="$1"
-  python3 - "$BODY_FILE" "$assertion" <<'PY'
+  if ! python3 - "$BODY_FILE" "$assertion" <<'PY'
 import json
 import sys
 
@@ -96,6 +115,9 @@ else:
 if not ok:
     raise SystemExit(f"JSON assertion failed ({assertion}): {payload!r}")
 PY
+  then
+    fail "JSON assertion failed: $assertion"
+  fi
 }
 
 login_request() {
@@ -111,9 +133,11 @@ export PORT
 export HOSTNAME="$HOST"
 export ENABLE_PREVIEW_BEARER_AUTH=0
 
+CURRENT_STAGE="server-start"
 bun .next/standalone/server.js >"$SERVER_LOG" 2>&1 &
 SERVER_PID="$!"
 
+CURRENT_STAGE="liveness"
 live_status=""
 for _ in $(seq 1 60); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -132,29 +156,36 @@ fi
 assert_json live
 
 if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "process" ]; then
+  CURRENT_STAGE="application-root"
   request_status 200 "application root" "$BASE_URL/"
 fi
 
 if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "readiness" ]; then
+  CURRENT_STAGE="database-readiness"
   request_status 200 "database readiness" "$BASE_URL/api/v1/health/ready"
   assert_json ready
 fi
 
 if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "session" ]; then
+  CURRENT_STAGE="unauthenticated-session"
   request_status 401 "unauthenticated session" "$BASE_URL/api/v1/auth/me"
   assert_json unauthenticated
 fi
 
 if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "login" ]; then
+  CURRENT_STAGE="login-status"
   status="$(login_request)"
   if [ "$status" != "401" ]; then
     fail "invalid same-origin login returned HTTP $status; expected 401"
   fi
+  CURRENT_STAGE="login-error-code"
   assert_json invalid_credentials
+  CURRENT_STAGE="login-token-omission"
   assert_json no_session_token
 fi
 
 if [ "$CHECK_MODE" = "login-status" ]; then
+  CURRENT_STAGE="login-status"
   status="$(login_request)"
   if [ "$status" != "401" ]; then
     fail "invalid same-origin login returned HTTP $status; expected 401"
@@ -162,16 +193,19 @@ if [ "$CHECK_MODE" = "login-status" ]; then
 fi
 
 if [ "$CHECK_MODE" = "login-code" ]; then
+  CURRENT_STAGE="login-error-code"
   login_request >/dev/null
   assert_json invalid_credentials
 fi
 
 if [ "$CHECK_MODE" = "login-token" ]; then
+  CURRENT_STAGE="login-token-omission"
   login_request >/dev/null
   assert_json no_session_token
 fi
 
 if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "csrf" ]; then
+  CURRENT_STAGE="csrf-boundary"
   request_status 403 "cross-site mutation" \
     -X POST "$BASE_URL/api/v1/auth/logout" \
     -H "Origin: https://attacker.invalid" \
@@ -179,4 +213,5 @@ if [ "$CHECK_MODE" = "all" ] || [ "$CHECK_MODE" = "csrf" ]; then
   assert_json forbidden
 fi
 
+CURRENT_STAGE="complete"
 echo "production standalone runtime smoke passed ($CHECK_MODE)"
