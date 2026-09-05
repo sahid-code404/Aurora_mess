@@ -1,12 +1,24 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { db } from "@/lib/db";
-import { claimIdempotencyKey, completeIdempotencyKey } from "@/lib/idempotency";
+import {
+  claimIdempotencyKey,
+  completeIdempotencyKey,
+  sweepExpiredIdempotencyRecords,
+} from "@/lib/idempotency";
 
 const institutionPrefix = "phase28-idempotency-";
 const scope = "PHASE28_CONCURRENCY_TEST";
 
 function expiry() {
   return new Date(Date.now() + 60_000);
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 const lifecycleNow = new Date("2099-01-01T00:00:00.000Z");
@@ -289,5 +301,122 @@ describe("atomic idempotency claims", () => {
         })
       )
     ).rejects.toThrow("IDEMPOTENCY_EXPIRY_MUST_BE_FUTURE");
+  });
+
+  test("retention sweep is bounded and cannot cross institution boundaries", async () => {
+    const institutionId = `${institutionPrefix}sweep-${crypto.randomUUID()}`;
+    const otherInstitutionId = `${institutionPrefix}sweep-other-${crypto.randomUUID()}`;
+
+    await db.idempotencyRecord.createMany({
+      data: [
+        ...Array.from({ length: 4 }, (_, index) => ({
+          institutionId,
+          scope,
+          key: `expired-${index}-${crypto.randomUUID()}`,
+          responseJson: JSON.stringify({ index }),
+          expiresAt: new Date(expiredAt.getTime() - index * 1000),
+        })),
+        {
+          institutionId,
+          scope,
+          key: `live-${crypto.randomUUID()}`,
+          responseJson: JSON.stringify({ live: true }),
+          expiresAt: renewedAt,
+        },
+        {
+          institutionId: otherInstitutionId,
+          scope,
+          key: `other-expired-${crypto.randomUUID()}`,
+          responseJson: JSON.stringify({ other: true }),
+          expiresAt: expiredAt,
+        },
+      ],
+    });
+
+    const firstDeleted = await sweepExpiredIdempotencyRecords({
+      institutionId,
+      now: lifecycleNow,
+      limit: 2,
+    });
+    expect(firstDeleted).toBe(2);
+    expect(
+      await db.idempotencyRecord.count({
+        where: { institutionId, expiresAt: { lte: lifecycleNow } },
+      })
+    ).toBe(2);
+    expect(await db.idempotencyRecord.count({ where: { institutionId: otherInstitutionId } })).toBe(1);
+
+    const secondDeleted = await sweepExpiredIdempotencyRecords({
+      institutionId,
+      now: lifecycleNow,
+      limit: 10,
+    });
+    expect(secondDeleted).toBe(2);
+    expect(
+      await db.idempotencyRecord.count({
+        where: { institutionId, expiresAt: { lte: lifecycleNow } },
+      })
+    ).toBe(0);
+    expect(await db.idempotencyRecord.count({ where: { institutionId } })).toBe(1);
+    expect(await db.idempotencyRecord.count({ where: { institutionId: otherInstitutionId } })).toBe(1);
+  });
+
+  test("retention sweep skips an expired row while another transaction is reclaiming it", async () => {
+    const institutionId = `${institutionPrefix}sweep-lock-${crypto.randomUUID()}`;
+    const key = `claim-${crypto.randomUUID()}`;
+    const lockAcquired = deferred();
+    const releaseClaim = deferred();
+
+    await db.idempotencyRecord.create({
+      data: {
+        institutionId,
+        scope,
+        key,
+        responseJson: JSON.stringify({ stale: true }),
+        expiresAt: expiredAt,
+      },
+    });
+
+    const claimant = db.$transaction(
+      async (tx) => {
+        const claim = await claimIdempotencyKey({
+          client: tx,
+          institutionId,
+          scope,
+          key,
+          now: lifecycleNow,
+          expiresAt: renewedAt,
+        });
+        expect(claim.state).toBe("CLAIMED");
+        lockAcquired.resolve();
+
+        await releaseClaim.promise;
+        await completeIdempotencyKey({
+          client: tx,
+          institutionId,
+          scope,
+          key,
+          payload: { recovered: true },
+        });
+      },
+      { timeout: 10_000 }
+    );
+
+    await lockAcquired.promise;
+    const deleted = await sweepExpiredIdempotencyRecords({
+      institutionId,
+      now: lifecycleNow,
+      limit: 10,
+    });
+    expect(deleted).toBe(0);
+
+    releaseClaim.resolve();
+    await claimant;
+
+    const row = await db.idempotencyRecord.findUnique({
+      where: { institutionId_scope_key: { institutionId, scope, key } },
+    });
+    expect(row?.expiresAt.toISOString()).toBe(renewedAt.toISOString());
+    expect(JSON.parse(row?.responseJson ?? "null")).toEqual({ recovered: true });
   });
 });

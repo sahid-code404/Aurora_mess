@@ -1,4 +1,5 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import { db } from "@/lib/db";
 
 type IdempotencyClient = Pick<Prisma.TransactionClient, "idempotencyRecord">;
 
@@ -100,4 +101,39 @@ export async function completeIdempotencyKey(input: {
     },
     data: { responseJson: JSON.stringify(input.payload) },
   });
+}
+
+/**
+ * Remove a bounded batch of expired idempotency rows for one institution.
+ *
+ * FOR UPDATE SKIP LOCKED is deliberate: a request that is actively reclaiming
+ * an expired key owns that row lock and maintenance must skip it instead of
+ * blocking the business request or deleting underneath it.
+ */
+export async function sweepExpiredIdempotencyRecords(input: {
+  institutionId: string;
+  now?: Date;
+  limit?: number;
+}): Promise<number> {
+  const now = input.now ?? new Date();
+  const requestedLimit = input.limit !== undefined && Number.isFinite(input.limit) ? Math.trunc(input.limit) : 100;
+  const limit = Math.min(500, Math.max(1, requestedLimit));
+
+  const deleted = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    WITH doomed AS (
+      SELECT "id"
+      FROM "IdempotencyRecord"
+      WHERE "institutionId" = ${input.institutionId}
+        AND "expiresAt" <= ${now}
+      ORDER BY "expiresAt" ASC, "id" ASC
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM "IdempotencyRecord" AS target
+    USING doomed
+    WHERE target."id" = doomed."id"
+    RETURNING target."id"
+  `);
+
+  return deleted.length;
 }

@@ -19,7 +19,7 @@ import { getInstitution } from "@/lib/institution";
 import { appendAudit } from "@/lib/audit";
 import { parseDecimalToMinor, formatMinor } from "@/lib/money";
 import { nextPaymentNumber } from "@/lib/ids";
-import { claimIdempotencyKey, completeIdempotencyKey } from "@/lib/idempotency";
+import { claimIdempotencyKey, completeIdempotencyKey, sweepExpiredIdempotencyRecords } from "@/lib/idempotency";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { paymentMethodSchema } from "@/lib/validation";
 import { storeUpload } from "@/lib/storage";
@@ -190,6 +190,9 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   });
 
   await sweepOutboxSafe();
+  // Retention maintenance is deliberately best-effort and bounded. A cleanup
+  // failure must never turn a committed payment into an API failure.
+  await sweepExpiredIdempotencyRecords({ institutionId: ctx.institutionId }).catch(() => 0);
 
   return {
     data: result.payload,
