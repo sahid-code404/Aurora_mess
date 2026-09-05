@@ -25,36 +25,21 @@ jobs:
           from pathlib import Path
           p = Path('src/components/app/admin/tasks.tsx')
           text = p.read_text()
-          old = '''      toast.success(kind === "approve" ? "Expense created and posted" : "Submission rejected", {
-          description: `${task.residentName} · ${task.description}`,
-        }
-      );'''
-          new = '''      toast.success(
-        kind === "approve"
-          ? task.taskType === "MARKET_PURCHASE"
-            ? "Expense created and posted"
-            : "Normal task completion approved"
-          : "Submission rejected",
-        { description: `${task.residentName} · ${task.description}` }
-      );'''
+          old = '      toast.success(kind === "approve" ? "Expense created and posted" : "Submission rejected", {\n          description: `${task.residentName} · ${task.description}`,\n        }\n      );'
+          new = '      toast.success(\n        kind === "approve"\n          ? task.taskType === "MARKET_PURCHASE"\n            ? "Expense created and posted"\n            : "Normal task completion approved"\n          : "Submission rejected",\n        { description: `${task.residentName} · ${task.description}` }\n      );'
           if old not in text:
               raise SystemExit('review-card toast pattern not found')
           text = text.replace(old, new, 1)
-          old2 = '''                {task.residentName} is notified with your reason and can resubmit corrected items.'''
-          new2 = '''                {task.residentName} is notified with your reason. This submission closes; assign a new task if the work must be retried.'''
+          old2 = '                {task.residentName} is notified with your reason and can resubmit corrected items.'
+          new2 = '                {task.residentName} is notified with your reason. This submission closes; assign a new task if the work must be retried.'
           if old2 not in text:
               raise SystemExit('misleading rejection copy pattern not found')
           text = text.replace(old2, new2, 1)
-          # Normalize the detail-dialog toast indentation introduced by the scoped transform.
-          old3 = '''        {
-        description: `${currentTask.residentName} · ${currentTask.description}`,
-      });'''
-          new3 = '''        { description: `${currentTask.residentName} · ${currentTask.description}` }
-      );'''
+          old3 = '        {\n        description: `${currentTask.residentName} · ${currentTask.description}`,\n      });'
+          new3 = '        { description: `${currentTask.residentName} · ${currentTask.description}` }\n      );'
           if old3 not in text:
               raise SystemExit('detail toast formatting pattern not found')
-          text = text.replace(old3, new3, 1)
-          p.write_text(text)
+          p.write_text(text.replace(old3, new3, 1))
           PY
       - run: bunx prisma generate
       - run: bunx tsc --noEmit
