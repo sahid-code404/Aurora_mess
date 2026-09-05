@@ -12,7 +12,8 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:reset:dev": "prisma migrate reset",
-    "maintenance:rate-limits": "bun scripts/maintenance/prune-rate-limits.ts"
+    "maintenance:rate-limits": "bun scripts/maintenance/prune-rate-limits.ts",
+    "maintenance:storage-integrity": "bun scripts/maintenance/verify-storage-integrity.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
