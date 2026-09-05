@@ -21,11 +21,7 @@ jobs:
         with:
           bun-version: 1.3.4
       - name: Apply scoped patch
-        run: python3 .github/phase18_patch3.py
-      - name: Inspect transformed JSX
-        run: |
-          nl -ba src/components/app/admin/payments.tsx | sed -n '280,330p'
-          nl -ba src/components/app/admin/payments.tsx | sed -n '620,665p'
+        run: python3 .github/phase18_patch4.py
       - name: Validate changed TypeScript syntax quickly
         run: |
           bun install --frozen-lockfile
