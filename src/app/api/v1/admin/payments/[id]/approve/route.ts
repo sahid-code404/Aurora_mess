@@ -1,6 +1,6 @@
 /**
  * POST /api/v1/admin/payments/[id]/approve — approve a PENDING payment (auth ADMIN).
- * Transaction: row-status guard (double-approve impossible) → journal
+ * Transaction: resident financial lock → row-status guard → journal
  * Dr CASH / Cr RESIDENT_FUNDS → settle the resident's open bills FIFO
  * (paymentsMinor/totalDueMinor/status updated so bills actually close —
  * audit 9-a #5 / 9-c #5) → status history → audit → outbox notification.
@@ -14,6 +14,7 @@ import { appendOutbox, sweepOutbox } from "@/lib/outbox";
 import { formatMinor } from "@/lib/money";
 import { postJournal } from "@/lib/domain/ledger";
 import { recomputeBillSettlement } from "@/lib/domain/funds";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 import { serializePayment } from "@/lib/domain/serialize";
 import { resolveNotificationsForEntity } from "@/lib/domain/notify";
 
@@ -26,6 +27,11 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (payment.status !== "PENDING") {
       throw new ApiError(CODES.PAYMENT_ALREADY_REVIEWED, "This payment was already reviewed.", 409);
     }
+
+    // All settlement-changing writes for one resident share this stable row lock.
+    // A concurrent approval/void/adjustment must commit first, then this
+    // transaction's FIFO recompute sees that committed transition as well.
+    await lockResidentFinancialMutation(tx, ctx.institutionId, payment.residentId);
 
     // Concurrency guard: only one transition from PENDING can succeed.
     const guard = await tx.payment.updateMany({
