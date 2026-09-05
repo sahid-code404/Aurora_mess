@@ -7,6 +7,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { bearerToken, getSessionUser, type SessionUser } from "@/lib/auth/session";
 import { ApiError, CODES, fail, newRequestId, ok } from "@/lib/errors";
+import { logApiRequest } from "@/lib/observability";
 
 export type HandlerCtx = {
   req: NextRequest;
@@ -101,12 +102,31 @@ export function route(
 ): (req: NextRequest, routeCtx: { params: Promise<Record<string, string>> }) => Promise<Response> {
   return async (req, routeCtx) => {
     const requestId = newRequestId();
+    const startedAt = Date.now();
+    let user: SessionUser | null = null;
+
+    const finish = (response: NextResponse, errorCode?: string): NextResponse => {
+      response.headers.set("x-request-id", requestId);
+      logApiRequest({
+        requestId,
+        method: req.method.toUpperCase(),
+        path: req.nextUrl.pathname,
+        status: response.status,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        authMode: opts.auth,
+        actorUserId: user?.id,
+        actorRole: user?.role,
+        institutionId: user?.institutionId,
+        errorCode,
+      });
+      return response;
+    };
+
     try {
       assertCsrfSafeRequest(req);
 
       let params: Record<string, string> = {};
       if (routeCtx?.params) params = await routeCtx.params;
-      let user: SessionUser | null = null;
       if (opts.auth !== "PUBLIC") {
         user = await getSessionUser(req);
         if (!user) throw new ApiError(CODES.UNAUTHENTICATED, "Please sign in to continue.", 401);
@@ -122,10 +142,12 @@ export function route(
         institutionId: user?.institutionId ?? "public",
         requestId,
       });
-      if (result instanceof NextResponse) return result;
-      return ok(result.data, result.meta, requestId);
+      if (result instanceof NextResponse) return finish(result);
+      return finish(ok(result.data, result.meta, requestId));
     } catch (error) {
-      return fail(error, requestId);
+      const response = fail(error, requestId);
+      const errorCode = error instanceof ApiError ? error.code : CODES.INTERNAL;
+      return finish(response, errorCode);
     }
   };
 }
