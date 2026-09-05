@@ -24,7 +24,18 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Apply Phase 22 patch
-        run: python3 scripts/phase22-task-lifecycle-patch.py
+        run: |
+          python3 scripts/phase22-task-lifecycle-patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/components/app/admin/tasks.tsx")
+          text = path.read_text()
+          old = '''      toast.success(\n        kind === "approve"\n          ? task.taskType === "MARKET_PURCHASE"\n            ? "Expense created and posted"\n            : "Normal task completion approved"\n          : "Submission rejected",\n        {\n          description: `${currentTask.residentName} · ${currentTask.description}`,\n        }\n      );'''
+          new = '''      toast.success(\n        kind === "approve"\n          ? currentTask.taskType === "MARKET_PURCHASE"\n            ? "Expense created and posted"\n            : "Normal task completion approved"\n          : "Submission rejected",\n        {\n          description: `${currentTask.residentName} · ${currentTask.description}`,\n        }\n      );'''
+          if old not in text:
+              raise SystemExit("expected nullable task toast transform not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Generate Prisma client
         run: bunx prisma generate
