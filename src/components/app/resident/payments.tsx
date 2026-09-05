@@ -47,7 +47,7 @@ import { DropletFilterChips } from "@/components/glass/DropletFilterChips";
 import { cn } from "@/lib/utils";
 
 import { SearchInput } from "./_shared/ui";
-import { useEnvelopeQuery } from "./_shared/api";
+import { apiJson, RESIDENT_KEYS, useEnvelopeQuery, useInvalidateResident } from "./_shared/api";
 import { formatDateTimeInTz, formatMinor, todayKeyInTz } from "./_shared/format";
 import { SubmitPaymentDialog, type PayableBill } from "./_shared/pay-dialog";
 import type { BillingData, PaymentDto, PaymentMethod, PaymentsMeta, RefundDto } from "./_shared/types";
@@ -149,10 +149,12 @@ function ProofImage({
 function PaymentDetailDialog({
   payment,
   onClose,
+  onWithdraw,
   tz,
 }: {
   payment: PaymentDto | null;
   onClose: () => void;
+  onWithdraw: (payment: PaymentDto) => void;
   tz: string;
 }) {
   if (!payment) return null;
@@ -196,7 +198,7 @@ function PaymentDetailDialog({
             <div className="rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning leading-relaxed">
               <p className="font-semibold">Under review</p>
               <p className="mt-0.5 text-muted-foreground">
-                Your payment was submitted and is awaiting admin verification. Once approved, the funds will be added to your mess balance.
+                Your payment was submitted and is awaiting admin verification. Once approved, the funds will be added to your mess balance. If this submission was a mistake, you can withdraw it before an admin reviews it.
               </p>
             </div>
           )}
@@ -254,7 +256,16 @@ function PaymentDetailDialog({
           )}
         </div>
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {payment.status === "PENDING" && (
+            <GlassButton
+              onClick={() => onWithdraw(payment)}
+              variant="destructive"
+              className="w-full sm:w-auto px-6"
+            >
+              Withdraw submission
+            </GlassButton>
+          )}
           <GlassButton onClick={onClose} variant="secondary" className="w-full sm:w-auto px-6">
             Close
           </GlassButton>
@@ -269,12 +280,16 @@ function PaymentDetailDialog({
 export default function ResidentPayments() {
   const { institution } = useSession();
   const tz = institution?.timezone ?? "Asia/Kolkata";
+  const invalidate = useInvalidateResident();
 
   const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
   const [filter, setFilter] = useState<string>("PENDING");
   const [search, setSearch] = useState("");
   const [payOpen, setPayOpen] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<PaymentDto | null>(null);
+  const [withdrawTarget, setWithdrawTarget] = useState<PaymentDto | null>(null);
+  const [withdrawBusy, setWithdrawBusy] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
   const clientToday = todayKeyInTz(tz);
   const thisMonthKey = clientToday.slice(0, 7);
@@ -348,6 +363,27 @@ export default function ResidentPayments() {
 
   const availableMinor =
     meta?.totalAvailableMinor ?? billingQuery.data?.creditsBreakdown?.availableMinor ?? 0;
+
+  async function withdrawPendingPayment() {
+    if (!withdrawTarget || withdrawBusy) return;
+    setWithdrawBusy(true);
+    setWithdrawError(null);
+    try {
+      await apiJson<PaymentDto>(`/api/v1/payments/${withdrawTarget.id}/cancel`, "POST", {});
+      setWithdrawTarget(null);
+      setSelectedPayment(null);
+      invalidate([
+        RESIDENT_KEYS.payments,
+        RESIDENT_KEYS.billing,
+        RESIDENT_KEYS.dashboard,
+        RESIDENT_KEYS.notifications,
+      ]);
+    } catch (error) {
+      setWithdrawError(error instanceof Error ? error.message : "Could not withdraw this payment. Refresh and try again.");
+    } finally {
+      setWithdrawBusy(false);
+    }
+  }
 
   return (
     <>
@@ -649,8 +685,67 @@ export default function ResidentPayments() {
       <PaymentDetailDialog
         payment={selectedPayment}
         onClose={() => setSelectedPayment(null)}
+        onWithdraw={(payment) => {
+          setWithdrawError(null);
+          setWithdrawTarget(payment);
+        }}
         tz={tz}
       />
+
+      <Dialog
+        open={Boolean(withdrawTarget)}
+        onOpenChange={(open) => {
+          if (!open && !withdrawBusy) {
+            setWithdrawTarget(null);
+            setWithdrawError(null);
+          }
+        }}
+      >
+        <DialogContent className="glass-panel border-border/60 max-w-md rounded-3xl p-5 sm:p-6 shadow-2xl">
+          <DialogTitle className="text-base sm:text-lg font-bold">Withdraw payment submission?</DialogTitle>
+          <DialogDescription className="text-sm leading-relaxed text-muted-foreground">
+            {withdrawTarget
+              ? `${withdrawTarget.displayNumber} (${formatMinor(withdrawTarget.amountMinor)}) is still waiting for Admin review. Withdrawing it removes it from the pending queue without touching your approved balance or any bill settlement.`
+              : "This pending payment can be withdrawn before Admin review."}
+          </DialogDescription>
+
+          <AnimatePresence initial={false}>
+            {withdrawError && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="rounded-xl border border-danger/30 bg-danger/10 p-3 text-xs text-danger"
+                role="alert"
+              >
+                {withdrawError}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="mt-2 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <GlassButton
+              variant="secondary"
+              disabled={withdrawBusy}
+              onClick={() => {
+                setWithdrawTarget(null);
+                setWithdrawError(null);
+              }}
+              className="w-full sm:w-auto"
+            >
+              Keep pending
+            </GlassButton>
+            <GlassButton
+              variant="destructive"
+              disabled={withdrawBusy}
+              onClick={() => void withdrawPendingPayment()}
+              className="w-full sm:w-auto"
+            >
+              {withdrawBusy ? "Withdrawing…" : "Withdraw submission"}
+            </GlassButton>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Submit payment dialog */}
       <SubmitPaymentDialog open={payOpen} onOpenChange={setPayOpen} bills={payableBills} />
