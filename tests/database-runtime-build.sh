@@ -41,14 +41,21 @@ if DATABASE_URL="postgres://boardops:test@db.example.test:5432/boardops" BUILD_D
     exit 1
 fi
 
-# Runtime startup must also fail closed without PostgreSQL. The script validates
+# Exercise runtime startup in an isolated package directory so no source-tree
+# platform helpers or mini-services can be discovered accidentally.
+RUNTIME_DIR="$TEST_ROOT/runtime"
+mkdir -p "$RUNTIME_DIR"
+cp "$SCRIPT_DIR/start.sh" "$RUNTIME_DIR/start.sh"
+chmod +x "$RUNTIME_DIR/start.sh"
+
+# Runtime startup must fail closed without PostgreSQL. The script validates
 # DATABASE_URL before attempting to launch Next.js or Caddy.
-if env -u DATABASE_URL sh "$SCRIPT_DIR/start.sh" >/dev/null 2>&1; then
+if env -u DATABASE_URL sh "$RUNTIME_DIR/start.sh" >/dev/null 2>&1; then
     echo "expected runtime without DATABASE_URL to fail" >&2
     exit 1
 fi
 
-if DATABASE_URL="file:/app/db/custom.db" sh "$SCRIPT_DIR/start.sh" >/dev/null 2>&1; then
+if DATABASE_URL="file:/app/db/custom.db" sh "$RUNTIME_DIR/start.sh" >/dev/null 2>&1; then
     echo "expected runtime SQLite DATABASE_URL to fail" >&2
     exit 1
 fi
@@ -63,6 +70,6 @@ exit 0
 EOF
 chmod +x "$FAKE_BIN/caddy"
 PATH="$FAKE_BIN:$PATH" DATABASE_URL="postgresql://boardops:test@db.example.test:5432/boardops" \
-    sh "$SCRIPT_DIR/start.sh" >/dev/null
+    sh "$RUNTIME_DIR/start.sh" >/dev/null
 
 echo "PostgreSQL deployment runtime guard tests passed"
