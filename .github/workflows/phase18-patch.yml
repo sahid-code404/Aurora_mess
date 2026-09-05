@@ -26,7 +26,7 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bun run db:generate
-          bun run typecheck
+          bunx tsc --noEmit
       - name: Commit patch
         run: |
           git config user.name "github-actions[bot]"
