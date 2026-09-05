@@ -20,7 +20,7 @@ env:
 
 jobs:
   verify:
-    name: Typecheck, lint, tests, migrate, build
+    name: Typecheck, lint, tests, migrate, build, smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -82,3 +82,6 @@ jobs:
         env:
           NODE_ENV: production
         run: bun run build
+
+      - name: Production standalone runtime smoke
+        run: bash tests/production-runtime-smoke.sh
