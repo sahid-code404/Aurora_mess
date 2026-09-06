@@ -22,6 +22,7 @@ import {
   requireInstitutionContext,
 } from "@/lib/domain/meal-engine";
 import { queueNotification, sweepOutboxSafe } from "@/lib/domain/notify";
+import { lockActiveResidentForMealMutation } from "@/lib/domain/resident-meal-mutation";
 
 const bodySchema = z.object({
   residentId: z.string().min(1),
@@ -36,21 +37,13 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const instanceId = ctx.params.instanceId;
 
   const result = await db.$transaction(async (tx) => {
+    const resident = await lockActiveResidentForMealMutation(tx, ctx.institutionId, body.residentId);
+
     const instance = await tx.mealInstance.findFirst({
       where: { id: instanceId, institutionId: ctx.institutionId },
       include: { definition: true, definitionVersion: true },
     });
     if (!instance) throw new ApiError(CODES.NOT_FOUND, "This meal could not be found.", 404);
-
-    const resident = await tx.user.findFirst({
-      where: { id: body.residentId, institutionId: ctx.institutionId, role: "RESIDENT" },
-    });
-    if (!resident) {
-      throw new ApiError(CODES.NOT_FOUND, "This resident could not be found.", 404);
-    }
-    if (resident.status !== "ACTIVE") {
-      throw new ApiError(CODES.VALIDATION_FAILED, "Only active residents can be overridden.", 409);
-    }
 
     // Materialize the resident's row for this date if missing (lazy engine).
     const dateKey = keyOfUtcDate(instance.serviceDate);
@@ -91,10 +84,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       client: tx,
     });
 
-    // Normal meal state is calculated first from default + resident choice + leave + restrictions + cutoff.
     const normal = calculateNormalMealState(evalCtx);
-
-    // If Admin changes it back to normal: clear override, final = normal state, no Admin Override badge.
     const isResetToNormal = body.state === normal.effectiveState;
     const targetAdminOverride = isResetToNormal ? null : body.state;
     const after = evaluateResidentMeal(
@@ -102,12 +92,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       { ...evalCtx, adminOverride: targetAdminOverride }
     );
 
-    // Past cutoff/locked meal → freeze/lock the row as part of the override (spec §32).
     const lockedAt = rm.lockedAt ?? (now.getTime() >= instance.cutoffAt.getTime() ? now : null);
 
-    // Atomic optimistic-concurrency write (spec §32 — concurrent admin
-    // overrides must not silently clobber each other; audit 9-b #3): the
-    // version read above is part of the WHERE clause.
     const guard = await tx.residentMeal.updateMany({
       where: { id: rm.id, version: rm.version },
       data: {
@@ -132,7 +118,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     const mealName = instance.definition?.name ?? "Meal";
     const serviceDate = keyOfUtcDate(instance.serviceDate);
 
-    // Override history is never deleted; only current override is cleared.
     await appendAudit(
       {
         institutionId: ctx.institutionId,
