@@ -4,14 +4,15 @@
  *        (newest first) and the latest version highlighted.
  * POST → publish { type, title, content }: creates a new ACTIVE Policy with
  *        version 1, or appends the next immutable PolicyVersion to an
- *        existing (institution, type, title) policy and refreshes its
- *        current content. Audited as POLICY_PUBLISHED. Acceptance history
- *        stays immutable — residents accepted specific versions.
+ *        existing policy. Existing publish/archive/reactivate mutations share
+ *        the Policy row mutex. Publishing an archived policy deliberately
+ *        reactivates it with a new immutable version.
  */
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { parseBody, route } from "@/lib/auth/guard";
 import { appendAudit } from "@/lib/audit";
+import { lockPolicyMutation } from "@/lib/domain/policy-lifecycle";
 
 const policyPublishSchema = z.object({
   type: z.enum(["TERMS_OF_SERVICE", "PRIVACY", "HOUSE_RULES", "MEAL_POLICY"]),
@@ -68,19 +69,18 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           title: body.title,
         },
       },
+      select: { id: true },
     });
 
     if (existing) {
-      const latest = await tx.policyVersion.findFirst({
-        where: { policyId: existing.id },
-        orderBy: { version: "desc" },
-      });
+      const policy = await lockPolicyMutation(tx, ctx.institutionId, existing.id);
+      const latest = policy.versions[0] ?? null;
       const nextVersion = (latest?.version ?? 0) + 1;
       const version = await tx.policyVersion.create({
-        data: { policyId: existing.id, version: nextVersion, content: body.content },
+        data: { policyId: policy.id, version: nextVersion, content: body.content },
       });
       await tx.policy.update({
-        where: { id: existing.id },
+        where: { id: policy.id },
         data: { content: body.content, status: "ACTIVE" },
       });
       await appendAudit(
@@ -90,15 +90,17 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           actorRole: "ADMIN",
           action: "POLICY_PUBLISHED",
           entityType: "POLICY",
-          entityId: existing.id,
+          entityId: policy.id,
           requestId: ctx.requestId,
-          afterSummary: JSON.stringify({ type: body.type, title: body.title, version: nextVersion }),
+          beforeSummary: JSON.stringify({ status: policy.status, version: latest?.version ?? null }),
+          afterSummary: JSON.stringify({ type: body.type, title: body.title, status: "ACTIVE", version: nextVersion }),
+          metadata: { reactivatedByPublish: policy.status === "ARCHIVED" },
           ip: ctx.req.headers.get("x-forwarded-for") ?? null,
           userAgent: ctx.req.headers.get("user-agent")?.slice(0, 250) ?? null,
         },
         tx
       );
-      return { policyId: existing.id, policyVersionId: version.id, version: nextVersion, created: false };
+      return { policyId: policy.id, policyVersionId: version.id, version: nextVersion, created: false };
     }
 
     const policy = await tx.policy.create({
@@ -122,7 +124,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         entityType: "POLICY",
         entityId: policy.id,
         requestId: ctx.requestId,
-        afterSummary: JSON.stringify({ type: body.type, title: body.title, version: 1 }),
+        afterSummary: JSON.stringify({ type: body.type, title: body.title, status: "ACTIVE", version: 1 }),
         ip: ctx.req.headers.get("x-forwarded-for") ?? null,
         userAgent: ctx.req.headers.get("user-agent")?.slice(0, 250) ?? null,
       },

@@ -623,14 +623,13 @@ model RuleDefinition {
   name          String
   description   String?
   policyType    String
-  status        String   @default("ACTIVE") // ACTIVE | ARCHIVED
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   versions RuleVersion[]
 
   @@unique([institutionId, key])
-  @@index([institutionId, policyType, status])
+  @@index([institutionId, policyType])
 }
 
 model RuleVersion {
