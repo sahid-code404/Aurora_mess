@@ -1,0 +1,44 @@
+name: Phase 48 temporal lifecycle patch
+
+on:
+  push:
+    branches:
+      - feat/phase48-meal-instance-temporal-lifecycle
+    paths:
+      - scripts/phase48_patch.py
+      - .github/workflows/phase48-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase48-meal-instance-temporal-lifecycle
+          fetch-depth: 0
+      - name: Apply assertion-guarded Phase 48 patch
+        run: python3 scripts/phase48_patch.py
+      - name: Commit production and regression changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            prisma/schema.prisma \
+            prisma/migrations/20260906_090000_meal_instance_temporal_lifecycle/migration.sql \
+            src/lib/domain/meal-engine.ts \
+            src/lib/domain/meal-definition-schema.ts \
+            src/lib/domain/guest-meal-lifecycle.ts \
+            'src/app/api/v1/admin/meals/[instanceId]/override/route.ts' \
+            'src/app/api/v1/admin/meals/[instanceId]/guest-override/route.ts' \
+            'src/app/api/v1/meals/[instanceId]/toggle/route.ts' \
+            src/app/api/v1/guest-meals/route.ts \
+            'src/app/api/v1/guest-meals/[id]/route.ts' \
+            'src/app/api/v1/guest-meals/[id]/cancel/route.ts' \
+            tests/unit/meal-state.test.ts \
+            tests/integration/meal-instance-temporal-lifecycle.test.ts \
+            tests/unit/meal-instance-temporal-lifecycle-source.test.ts
+          git commit -m "Phase 48: complete meal instance temporal lifecycle"
+          git push origin HEAD:feat/phase48-meal-instance-temporal-lifecycle
