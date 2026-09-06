@@ -29,6 +29,18 @@ describe("admin institution-time source contracts", () => {
     expect(tasks).not.toContain("const currentMonthKey = todayKey().slice(0, 7)");
   });
 
+  test("Audit month filters and displayed event times follow the institution timezone", () => {
+    const audit = source("src/components/app/admin/audit.tsx");
+
+    expect(audit).toContain('import { useSession } from "@/hooks/use-session";');
+    expect(audit).toContain('import { currentMonthKeyInTz } from "./_shared/business-date";');
+    expect(audit).toContain('const tz = institution?.timezone ?? "Asia/Kolkata";');
+    expect(audit).toContain("const currentMonthKey = currentMonthKeyInTz(tz);");
+    expect(audit).toContain("fmtDateTime(row.occurredAt, tz)");
+    expect(audit).not.toContain("const currentMonthKey = todayKey().slice(0, 7)");
+    expect(audit).not.toContain("fmtDateTime(row.occurredAt)}");
+  });
+
   test("Funds deficit copy describes actual deficit state rather than an unrelated minimum", () => {
     const funds = source("src/components/app/admin/funds.tsx");
     expect(funds).toContain('sub: `${deficitResidents.length} with deficit`');
