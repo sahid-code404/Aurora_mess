@@ -24,7 +24,7 @@ describe("persisted state contract hygiene", () => {
     expect(schema).toContain("// PENDING | APPROVED | REJECTED | VOIDED");
     expect(route).toContain('["PENDING", "APPROVED", "REJECTED", "VOIDED"]');
     expect(route).not.toContain('["DRAFT", "PENDING"');
-    expect(migration).toContain('WHERE "status" = 'DRAFT'');
+    expect(migration).toContain("WHERE \"status\" = 'DRAFT'");
   });
 
   test("Formula UI and persistence describe the effective-window lifecycle actually implemented", () => {
@@ -32,8 +32,8 @@ describe("persisted state contract hygiene", () => {
     const ui = source("src/components/app/admin/formulas.tsx");
     const versions = source("src/lib/domain/formula/versions.ts");
 
-    expect(schema).toContain('// ACTIVE | ARCHIVED');
-    expect(schema).toContain('// ACTIVE | HISTORICAL');
+    expect(schema).toContain("// ACTIVE | ARCHIVED");
+    expect(schema).toContain("// ACTIVE | HISTORICAL");
     expect(ui).not.toContain('formulaFilter === "DRAFT"');
     expect(ui).not.toContain('{ value: "DRAFT", label: "Draft" }');
     expect(versions).toContain('status: "ACTIVE"');
