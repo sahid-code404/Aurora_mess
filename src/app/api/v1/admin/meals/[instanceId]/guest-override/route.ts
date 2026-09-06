@@ -41,7 +41,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (instance.status === "CANCELLED") {
       throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
     }
-    if (now.getTime() < instance.lockAt.getTime()) {
+    const lockPassed = now.getTime() >= instance.lockAt.getTime();
+    if (!lockPassed) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
         `Admin guest override is only allowed after this meal locks (${formatTimeLabel(instance.lockAt, inst.timezone)}). Before then, residents manage their own guest meals.`,
