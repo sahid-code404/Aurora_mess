@@ -29,9 +29,10 @@ import { ApiClientError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { errMessage, useInvalidate } from "./_shared/api";
+import { currentMonthKeyInTz } from "./_shared/business-date";
 import { SelectField, TextAreaField, TextField } from "./_shared/fields";
 import { Chip, DetailDialog, KeyValue, KpiGrid, type KpiSpec } from "./_shared/chrome";
-import { fmtDateTime, todayKey } from "./_shared/format";
+import { fmtDateTime } from "./_shared/format";
 import type { AnnouncementRow } from "./_shared/types";
 
 const ANNOUNCEMENTS_PATH = "/api/v1/admin/announcements";
@@ -89,15 +90,16 @@ function typeMeta(type: string): { icon: LucideIcon; orb: string } {
 }
 
 export default function AdminAnnouncements() {
-  const currentMonthKey = todayKey().slice(0, 7);
-  const [monthKey, setMonthKey] = useState<string>(currentMonthKey);
+  const { institution } = useSession();
+  const tz = institution?.timezone ?? "Asia/Kolkata";
+  const currentMonthKey = currentMonthKeyInTz(tz);
+  const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
+  const monthKey = monthParam ?? currentMonthKey;
   const { data, isLoading, error, refetch } = useApiQuery<AnnouncementRow[]>(`${ANNOUNCEMENTS_PATH}?month=${monthKey}`);
   const [formOpen, setFormOpen] = useState(false);
   const [editingAnnouncement, setEditingAnnouncement] = useState<AnnouncementRow | null>(null);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<AnnouncementRow | null>(null);
   const invalidate = useInvalidate();
-  const { institution } = useSession();
-  const tz = institution?.timezone ?? "Asia/Kolkata";
 
   if (isLoading && !data) {
     return (
@@ -140,11 +142,11 @@ export default function AdminAnnouncements() {
       {/* Month navigation — centered picker capsule */}
       <StaggerItem>
       <PickerCapsule
-        onPrev={() => setMonthKey(shiftMonthKey(monthKey, -1))}
-        onNext={() => setMonthKey(shiftMonthKey(monthKey, 1))}
+        onPrev={() => setMonthParam(shiftMonthKey(monthKey, -1))}
+        onNext={() => setMonthParam(shiftMonthKey(monthKey, 1))}
         prevLabel="Previous month"
         nextLabel="Next month"
-        onPillClick={() => setMonthKey(currentMonthKey)}
+        onPillClick={() => setMonthParam(undefined)}
         pillAriaLabel="Reset to the current month"
         resettable={monthKey !== currentMonthKey}
       >
