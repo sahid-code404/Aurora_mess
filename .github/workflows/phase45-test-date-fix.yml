@@ -1,0 +1,30 @@
+name: Phase 45 test date fix
+
+on:
+  push:
+    branches:
+      - feat/phase45-refund-correction-lifecycle
+    paths:
+      - scripts/phase45_test_date_fix.py
+      - .github/workflows/phase45-test-date-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase45-refund-correction-lifecycle
+          fetch-depth: 0
+      - name: Apply stable due-date fixture fix
+        run: python3 scripts/phase45_test_date_fix.py
+      - name: Commit test fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/integration/refund-correction-lifecycle.test.ts
+          git commit -m "Phase 45: make refund correction due-date fixture stable"
+          git push origin HEAD:feat/phase45-refund-correction-lifecycle
