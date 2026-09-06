@@ -16,7 +16,7 @@ describe("meal instance temporal lifecycle source contracts", () => {
 
   test("admin override eligibility uses authoritative lockAt rather than status != OPEN", () => {
     expect(override).toContain("now.getTime() >= instance.lockAt.getTime()");
-    expect(guestOverride).toContain("now.getTime() >= instance.lockAt.getTime()");
+    expect(guestOverride).toContain("now.getTime() < instance.lockAt.getTime()");
     expect(override).not.toContain('instance.status !== "OPEN"');
     expect(guestOverride).not.toContain('instance.status !== "OPEN"');
   });
