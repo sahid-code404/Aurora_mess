@@ -74,6 +74,24 @@ export function scopedRowAffectsMeal(row: MealScopedRow, mealDefinitionId: strin
   return (row.selectedMeals ?? []).some((selected) => selected.mealDefinitionId === mealDefinitionId);
 }
 
+export type CalendarTemporalRow = MealScopedRow & {
+  createdAt: Date;
+  cancelledAt?: Date | null;
+};
+
+/**
+ * Was this calendar event an active fact at the exact meal freeze boundary?
+ * Creation is inclusive; cancellation is exclusive. Therefore a cancellation
+ * recorded exactly at lockAt wins and the event is not considered active.
+ */
+export function calendarEventActiveAtBoundary(row: CalendarTemporalRow, boundary: Date): boolean {
+  const boundaryMs = boundary.getTime();
+  return (
+    row.createdAt.getTime() <= boundaryMs &&
+    (row.cancelledAt == null || row.cancelledAt.getTime() > boundaryMs)
+  );
+}
+
 /** Prisma P2002 (unique violation) detector — used by create-skip loops. */
 export function isUniqueViolation(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: string }).code === "P2002";
@@ -265,6 +283,7 @@ export async function buildEvalContext(inputs: EvalInputs): Promise<MealEvalCont
       where: {
         institutionId: inputs.institutionId,
         disableMeals: true,
+        cancelledAt: null,
         startDate: { lte: dayEnd },
         endDate: { gte: dayStart },
       },
@@ -451,7 +470,13 @@ export async function ensureResidentMeals(
   const existingIds = new Set(existing.map((r) => r.mealInstanceId));
 
   const disableEvents = (await client.calendarEvent.findMany({
-    where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
+    where: {
+      institutionId,
+      disableMeals: true,
+      cancelledAt: null,
+      startDate: { lte: toMid },
+      endDate: { gte: fromMid },
+    },
     include: { selectedMeals: { select: { mealDefinitionId: true } } },
   })) as ({ startDate: Date; endDate: Date } & MealScopedRow)[];
   const approvedLeaves = (await client.leaveRequest.findMany({
@@ -523,14 +548,15 @@ export async function ensureResidentMeals(
 }
 
 /* ----------------------------------------------------------------------------
- * 3) refreshAndLock — freeze effective state at cutoff (spec §36)
+ * 3) refreshAndLock — freeze effective state at lockAt (spec §36)
  * ------------------------------------------------------------------------- */
 
 /**
- * For every instance in range whose cutoff has passed (cutoffAt <= now):
- * refresh instance status (LOCKED/COMPLETED) and lock every ResidentMeal that
- * is not locked yet — evaluating the final effective state at lock time and
- * writing lockedAt. Runs inside the caller's transaction when passed `client`.
+ * For every instance in range whose lockAt has passed:
+ * refresh instance status (LOCKED/SERVICE_ACTIVE/COMPLETED) and lock every
+ * ResidentMeal that is not locked yet — reconstructing calendar/leave facts as
+ * they existed at the actual lockAt boundary and writing lockedAt. Runs inside
+ * the caller's transaction when passed `client`.
  */
 export async function refreshAndLock(
   institutionId: string,
@@ -597,10 +623,12 @@ export async function refreshAndLock(
   })) as Record<string, any>[];
   const residentById = new Map(residents.map((r) => [r.id, r]));
 
+  // Include cancelled events here. Historical locking reconstructs whether each
+  // event was active at that instance's lockAt, not whether it is active now.
   const disableEvents = (await client.calendarEvent.findMany({
     where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
     include: { selectedMeals: { select: { mealDefinitionId: true } } },
-  })) as ({ startDate: Date; endDate: Date; createdAt: Date } & MealScopedRow)[];
+  })) as ({ startDate: Date; endDate: Date; createdAt: Date; cancelledAt: Date | null } & MealScopedRow)[];
   const leaves = (await client.leaveRequest.findMany({
     where: { residentId: { in: residentIds }, status: "APPROVED", startDate: { lte: toMid }, endDate: { gte: fromMid } },
     include: { selectedMeals: { select: { mealDefinitionId: true } } },
@@ -621,6 +649,7 @@ export async function refreshAndLock(
     const resident = residentById.get(rm.residentId);
     if (!instRow || !resident) continue;
     const dayStart = utcDayFloor(new Date(instRow.serviceDate));
+    const lockBoundary = new Date(instRow.lockAt);
     const from = resident.membershipEffectiveFrom ? new Date(resident.membershipEffectiveFrom) : null;
     const until = resident.membershipEffectiveUntil ? new Date(resident.membershipEffectiveUntil) : null;
     const snapshot = parseSnapshot(instRow.definitionVersion?.configSnapshotJson);
@@ -635,7 +664,7 @@ export async function refreshAndLock(
         (e) =>
           dayCoveredBy(dayStart, e) &&
           scopedRowAffectsMeal(e, instRow.mealDefinitionId) &&
-          e.createdAt.getTime() <= new Date(instRow.cutoffAt).getTime()
+          calendarEventActiveAtBoundary(e, lockBoundary)
       ),
       accountInactive: resident.status !== "ACTIVE",
       onLeave: leaves.some(
@@ -644,7 +673,7 @@ export async function refreshAndLock(
           dayCoveredBy(dayStart, l) &&
           scopedRowAffectsMeal(l, instRow.mealDefinitionId) &&
           l.reviewedAt != null &&
-          l.reviewedAt.getTime() <= new Date(instRow.cutoffAt).getTime()
+          l.reviewedAt.getTime() <= lockBoundary.getTime()
       ),
       restricted: restrictedByResident.get(rm.residentId) ?? false,
       adminOverride: rm.adminOverrideState ?? null,
@@ -713,7 +742,13 @@ export async function refreshUnlockedEffective(
   const residentById = new Map(residents.map((r) => [r.id, r]));
 
   const disableEvents = (await client.calendarEvent.findMany({
-    where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
+    where: {
+      institutionId,
+      disableMeals: true,
+      cancelledAt: null,
+      startDate: { lte: toMid },
+      endDate: { gte: fromMid },
+    },
     include: { selectedMeals: { select: { mealDefinitionId: true } } },
   })) as ({ startDate: Date; endDate: Date } & MealScopedRow)[];
   const leaves = (await client.leaveRequest.findMany({
