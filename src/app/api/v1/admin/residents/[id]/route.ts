@@ -15,8 +15,10 @@ import { hashPassword } from "@/lib/auth/password";
 import { appendAudit } from "@/lib/audit";
 import { formatMinor } from "@/lib/money";
 import { getInstitution } from "@/lib/institution";
-import { zonedTimeToUtc } from "@/lib/time";
 import { effectiveBillStatus } from "@/lib/domain/bill-status";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { lockResidentLifecycleMutation } from "@/lib/domain/resident-lifecycle";
+import { assertMembershipWindowPreservesBilledHistory } from "@/lib/domain/membership-window";
 
 const updateResidentSchema = z.object({
   fullName: z.string().trim().min(2, "Name must be at least 2 characters.").max(80).optional(),
@@ -191,85 +193,101 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
 export const PATCH = route({ auth: "ADMIN" }, async (ctx) => {
   const id = ctx.params.id;
-  const user = await db.user.findFirst({
-    where: { id, institutionId: ctx.institutionId, role: "RESIDENT" },
-    include: { profile: true },
-  });
-  if (!user) {
-    throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
-  }
-
   const body = await parseBody(ctx.req, updateResidentSchema);
+  const membershipChanging =
+    body.membershipEffectiveFrom !== undefined || body.membershipEffectiveUntil !== undefined;
 
-  // Validate membership dates if provided
-  let newFrom = user.membershipEffectiveFrom;
-  if (body.membershipEffectiveFrom !== undefined) {
-    newFrom = body.membershipEffectiveFrom === null ? null : parseIso(body.membershipEffectiveFrom, "membershipEffectiveFrom");
-  }
-
-  let newUntil = user.membershipEffectiveUntil;
-  if (body.membershipEffectiveUntil !== undefined) {
-    newUntil = body.membershipEffectiveUntil === null ? null : parseIso(body.membershipEffectiveUntil, "membershipEffectiveUntil");
-  }
-
-  if (newFrom && newUntil && newUntil < newFrom) {
-    throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, {
-      membershipEffectiveUntil: "The end date must be on or after the start date.",
-    });
-  }
-
-  // Guard against rewriting closed billing periods
-  const fromChanging = newFrom !== null && newFrom.getTime() !== user.membershipEffectiveFrom?.getTime();
-  if (fromChanging && newFrom) {
-    const institution = await getInstitution(ctx.institutionId);
-    const timezone = institution?.timezone ?? "UTC";
-    const billedPeriods = await db.billingPeriod.findMany({
-      where: { institutionId: ctx.institutionId, status: "BILLED" },
-      select: { year: true, month: true },
-    });
-    const billedStarts = billedPeriods.map((p) => zonedTimeToUtc(p.year, p.month, 1, 0, 0, timezone));
-    if (billedStarts.some((start) => newFrom < start)) {
-      throw new ApiError(
-        CODES.VALIDATION_FAILED,
-        "Changing membership into a closed billing period is restricted.",
-        409
-      );
-    }
-  }
-
-  let newPasswordHash: string | undefined = undefined;
+  // Password hashing is CPU work and does not need to extend the DB lock window.
+  let newPasswordHash: string | undefined;
   if (body.password && body.password.trim().length > 0) {
     newPasswordHash = await hashPassword(body.password.trim());
   }
 
-  const before = {
-    fullName: user.profile?.fullName,
-    phone: user.profile?.phone,
-    roomNumber: user.profile?.roomNumber,
-    emergencyContact: user.profile?.emergencyContact,
-    membershipEffectiveFrom: user.membershipEffectiveFrom,
-    membershipEffectiveUntil: user.membershipEffectiveUntil,
-    passwordChanged: false,
-  };
-
-  const after = {
-    fullName: body.fullName ?? user.profile?.fullName,
-    phone: body.phone !== undefined ? body.phone : user.profile?.phone,
-    roomNumber: body.roomNumber !== undefined ? body.roomNumber : user.profile?.roomNumber,
-    emergencyContact: body.emergencyContact !== undefined ? body.emergencyContact : user.profile?.emergencyContact,
-    membershipEffectiveFrom: newFrom,
-    membershipEffectiveUntil: newUntil,
-    passwordChanged: Boolean(newPasswordHash),
-  };
-
   await db.$transaction(async (tx) => {
-    // 1. Update user
+    // Membership is a financial input, so it must participate in the global
+    // Institution -> Resident lock order. Profile/password-only edits need only
+    // the Resident row and never acquire the Institution lock afterward.
+    if (membershipChanging) {
+      await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+    }
+    await lockResidentLifecycleMutation(tx, ctx.institutionId, id);
+
+    const user = await tx.user.findUnique({
+      where: { id },
+      include: { profile: true },
+    });
+    if (!user) {
+      throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
+    }
+
+    let newFrom = user.membershipEffectiveFrom;
+    if (body.membershipEffectiveFrom !== undefined) {
+      newFrom =
+        body.membershipEffectiveFrom === null
+          ? null
+          : parseIso(body.membershipEffectiveFrom, "membershipEffectiveFrom");
+    }
+
+    let newUntil = user.membershipEffectiveUntil;
+    if (body.membershipEffectiveUntil !== undefined) {
+      newUntil =
+        body.membershipEffectiveUntil === null
+          ? null
+          : parseIso(body.membershipEffectiveUntil, "membershipEffectiveUntil");
+    }
+
+    if (newFrom && newUntil && newUntil < newFrom) {
+      throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, {
+        membershipEffectiveUntil: "The end date must be on or after the start date.",
+      });
+    }
+
+    if (membershipChanging) {
+      const institution = await tx.institution.findUnique({
+        where: { id: ctx.institutionId },
+        select: { timezone: true },
+      });
+      if (!institution) {
+        throw new ApiError(CODES.NOT_FOUND, "Institution not found.", 404);
+      }
+      await assertMembershipWindowPreservesBilledHistory(
+        tx,
+        ctx.institutionId,
+        institution.timezone,
+        {
+          membershipEffectiveFrom: user.membershipEffectiveFrom,
+          membershipEffectiveUntil: user.membershipEffectiveUntil,
+        },
+        { membershipEffectiveFrom: newFrom, membershipEffectiveUntil: newUntil }
+      );
+    }
+
+    const before = {
+      fullName: user.profile?.fullName,
+      phone: user.profile?.phone,
+      roomNumber: user.profile?.roomNumber,
+      emergencyContact: user.profile?.emergencyContact,
+      membershipEffectiveFrom: user.membershipEffectiveFrom,
+      membershipEffectiveUntil: user.membershipEffectiveUntil,
+      passwordChanged: false,
+    };
+
+    const after = {
+      fullName: body.fullName ?? user.profile?.fullName,
+      phone: body.phone !== undefined ? body.phone : user.profile?.phone,
+      roomNumber: body.roomNumber !== undefined ? body.roomNumber : user.profile?.roomNumber,
+      emergencyContact:
+        body.emergencyContact !== undefined ? body.emergencyContact : user.profile?.emergencyContact,
+      membershipEffectiveFrom: newFrom,
+      membershipEffectiveUntil: newUntil,
+      passwordChanged: Boolean(newPasswordHash),
+    };
+
     const userUpdates: Record<string, unknown> = {};
     if (body.membershipEffectiveFrom !== undefined) userUpdates.membershipEffectiveFrom = newFrom;
     if (body.membershipEffectiveUntil !== undefined) userUpdates.membershipEffectiveUntil = newUntil;
     if (newPasswordHash) userUpdates.passwordHash = newPasswordHash;
 
-    // 2. Update profile
     const profileUpdates: Record<string, unknown> = {};
     if (body.fullName !== undefined) profileUpdates.fullName = body.fullName;
     if (body.phone !== undefined) profileUpdates.phone = body.phone;
@@ -297,17 +315,11 @@ export const PATCH = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     if (Object.keys(userUpdates).length > 0) {
-      await tx.user.update({
-        where: { id },
-        data: userUpdates,
-      });
+      await tx.user.update({ where: { id }, data: userUpdates });
     }
 
-    // Revoke active sessions if password changed
     if (newPasswordHash) {
-      await tx.session.deleteMany({
-        where: { userId: id },
-      });
+      await tx.session.deleteMany({ where: { userId: id } });
     }
 
     await appendAudit(
@@ -318,6 +330,7 @@ export const PATCH = route({ auth: "ADMIN" }, async (ctx) => {
         action: "RESIDENT_EDITED",
         entityType: "USER",
         entityId: id,
+        requestId: ctx.requestId,
         beforeSummary: JSON.stringify(before),
         afterSummary: JSON.stringify(after),
       },
