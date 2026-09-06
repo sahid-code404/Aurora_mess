@@ -128,6 +128,18 @@ export interface MealDefinitionRow {
   internalNotes: string | null;
   archivedAt: string | null;
   deleteRequestedAt: string | null;
+  deletionRequest: {
+    id: string;
+    status: "QUEUED" | "SCHEDULED" | "BLOCKED" | "COMPLETED" | "CANCELLED" | string;
+    requestedAt: string;
+    scheduledFor: string | null;
+    reason: string | null;
+    blockedReason: string | null;
+    completedAt: string | null;
+    cancelReason: string | null;
+    cancelledByUserId: string | null;
+    cancelledAt: string | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
   latestVersion?: { id: string; version: number; createdAt: string } | null;

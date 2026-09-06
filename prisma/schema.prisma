@@ -974,6 +974,11 @@ model DeletionRequest {
   status            String    @default("QUEUED") // QUEUED | SCHEDULED | BLOCKED | COMPLETED | CANCELLED
   blockedReason     String?
   completedAt       DateTime?
+  cancelReason      String?
+  cancelledByUserId String?
+  cancelledAt       DateTime?
+
+  @@index([institutionId, entityType, status, scheduledFor])
 }
 
 // ---------------------------------------------------------------------
