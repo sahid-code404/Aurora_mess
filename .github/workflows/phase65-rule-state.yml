@@ -1,0 +1,31 @@
+name: Phase 65 Rule State Integrity
+
+on:
+  push:
+    branches:
+      - feat/phase65-rule-version-state-integrity
+    paths:
+      - .github/workflows/phase65-rule-state.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase65-rule-version-state-integrity
+          fetch-depth: 0
+      - name: Apply Phase 65
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_phase65_apply.py
+          git diff --check
+          git config user.name "BoardOps Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add prisma src tests
+          git commit -m "fix: align rule version persisted states"
+          git push origin HEAD:feat/phase65-rule-version-state-integrity
