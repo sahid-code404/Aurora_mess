@@ -69,7 +69,11 @@ function parseNotificationPayload(event: { institutionId: string; payloadJson: s
   };
 }
 
-async function recordDeliveryFailure(eventId: string, error: unknown): Promise<void> {
+async function recordDeliveryFailure(
+  eventId: string,
+  expectedAttempts: number,
+  error: unknown
+): Promise<void> {
   const lastError = String(error).slice(0, 400);
   await db.$executeRaw(Prisma.sql`
     UPDATE "OutboxEvent"
@@ -83,6 +87,7 @@ async function recordDeliveryFailure(eventId: string, error: unknown): Promise<v
     WHERE "id" = ${eventId}
       AND "status" = 'PENDING'
       AND "type" = 'NOTIFICATION'
+      AND "attempts" = ${expectedAttempts}
   `);
 }
 
@@ -94,9 +99,10 @@ async function recordDeliveryFailure(eventId: string, error: unknown): Promise<v
  * therefore commit or roll back together, while concurrent request-triggered
  * sweepers cannot deliver the same event at the same time.
  *
- * Delivery failures are counted only after the delivery transaction rolls
- * back. A conditional SQL update prevents a late failure recorder from
- * overwriting an event another sweeper already processed.
+ * Candidate attempt generation is part of the claim. If a concurrent sweeper
+ * already records a failure, peers that observed the older generation cannot
+ * count or deliver the same retry again. A later sweep observes the incremented
+ * generation and performs the next legitimate retry.
  */
 export async function sweepOutbox(limit = 50): Promise<void> {
   const boundedLimit = Number.isFinite(limit)
@@ -108,7 +114,7 @@ export async function sweepOutbox(limit = 50): Promise<void> {
   // attempted at most once per sweep and cannot starve later pending events.
   const candidates = await db.outboxEvent.findMany({
     where: { status: "PENDING", type: "NOTIFICATION" },
-    select: { id: true },
+    select: { id: true, attempts: true },
     take: boundedLimit,
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
@@ -122,12 +128,20 @@ export async function sweepOutbox(limit = 50): Promise<void> {
           WHERE "id" = ${candidate.id}
             AND "status" = 'PENDING'
             AND "type" = 'NOTIFICATION'
+            AND "attempts" = ${candidate.attempts}
           FOR UPDATE SKIP LOCKED
         `);
         if (locked.length !== 1) return;
 
         const event = await tx.outboxEvent.findUnique({ where: { id: candidate.id } });
-        if (!event || event.status !== "PENDING" || event.type !== "NOTIFICATION") return;
+        if (
+          !event ||
+          event.status !== "PENDING" ||
+          event.type !== "NOTIFICATION" ||
+          event.attempts !== candidate.attempts
+        ) {
+          return;
+        }
 
         const payload = parseNotificationPayload(event);
         await tx.notification.create({
@@ -142,7 +156,12 @@ export async function sweepOutbox(limit = 50): Promise<void> {
         });
 
         const completed = await tx.outboxEvent.updateMany({
-          where: { id: event.id, status: "PENDING", type: "NOTIFICATION" },
+          where: {
+            id: event.id,
+            status: "PENDING",
+            type: "NOTIFICATION",
+            attempts: candidate.attempts,
+          },
           data: { status: "PROCESSED", processedAt: new Date(), lastError: null },
         });
         if (completed.count !== 1) {
@@ -150,7 +169,7 @@ export async function sweepOutbox(limit = 50): Promise<void> {
         }
       });
     } catch (error) {
-      await recordDeliveryFailure(candidate.id, error);
+      await recordDeliveryFailure(candidate.id, candidate.attempts, error);
     }
   }
 }
