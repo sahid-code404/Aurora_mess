@@ -17,6 +17,8 @@ describe("final state contract closure", () => {
 
     const migration = source("prisma/migrations/20260906_160000_final_state_contract_closure/migration.sql");
     expect(migration).toContain("FORMULA_DEFINITION_STATE_NORMALIZED");
+    expect(migration).toContain('"occurredAt"');
+    expect(migration).not.toContain('"createdAt"');
     expect(migration).toContain('DROP COLUMN IF EXISTS "status"');
     expect(migration).toContain('DROP COLUMN IF EXISTS "archivedAt"');
   });
