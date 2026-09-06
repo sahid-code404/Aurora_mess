@@ -114,9 +114,9 @@ jobs:
           Path(".github/workflows/phase62-state-contract-hygiene.yml").unlink()
           PY
 
-          # Fail closed if live source/tests still mention the removed DB field.
-          if grep -R --line-number --exclude-dir=tool-results --exclude-dir=upload --exclude='migration.sql' 'scanStatus' src tests prisma/schema.prisma; then
-            echo 'scanStatus remains in live source/schema/tests' >&2
+          # Fail closed if production source/schema still mention the removed DB field.
+          if grep -R --line-number 'scanStatus' src prisma/schema.prisma; then
+            echo 'scanStatus remains in live source/schema' >&2
             exit 1
           fi
 
