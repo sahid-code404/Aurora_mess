@@ -12,6 +12,7 @@
  * GET — own payments with status filter + cursor. Meta carries this month's
  *   approved deposits, pending payment count and pending refund count.
  */
+import { createHash } from "node:crypto";
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
@@ -23,6 +24,8 @@ import {
   actorScopedIdempotencyKey,
   claimIdempotencyKey,
   completeIdempotencyKey,
+  idempotencyRequestHash,
+  inspectIdempotencyRecord,
   sweepExpiredIdempotencyRecords,
 } from "@/lib/idempotency";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
@@ -38,7 +41,17 @@ import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 export const dynamic = "force-dynamic";
 
 const MAX_PAYMENT_MINOR = 100_000_000; // ₹10,00,000.00 — sanity ceiling, documented
+const MAX_PROOF_BYTES = 2 * 1024 * 1024;
 const PAYMENT_IDEMPOTENCY_SCOPE = "PAYMENT_SUBMIT";
+
+function idempotencyPayloadMismatch(): ApiError {
+  return new ApiError(
+    CODES.IDPOTENCY_CONFLICT,
+    "This idempotency key was already used for different payment details. Use a new key for a different payment.",
+    409,
+    { idempotencyKey: "Reuse this key only when retrying the exact same payment." }
+  );
+}
 
 // ---------------------------------------------------------------------------
 // POST — submit
@@ -70,6 +83,33 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, fields);
   }
 
+  // Bind an active idempotency window to every side-effecting request fact.
+  // Proof bytes are included, not just filename/size, so replacing a receipt
+  // with another same-sized file cannot silently replay the previous payment.
+  let requestHash: string | null = null;
+  if (idempotencyKey) {
+    if (proof && proof.size > MAX_PROOF_BYTES) {
+      throw new ApiError(CODES.FILE_TOO_LARGE, "Files must be 2 MB or smaller.", 413);
+    }
+    const proofSha256 = proof
+      ? createHash("sha256").update(Buffer.from(await proof.arrayBuffer())).digest("hex")
+      : null;
+    requestHash = idempotencyRequestHash({
+      amountMinor: amountMinor as number,
+      method: method.data!,
+      reference: reference ?? null,
+      notes: notes ?? null,
+      proof: proof
+        ? {
+            name: proof.name || null,
+            type: proof.type || null,
+            size: proof.size,
+            sha256: proofSha256,
+          }
+        : null,
+    });
+  }
+
   const storageIdempotencyKey = idempotencyKey
     ? actorScopedIdempotencyKey(ctx.user.id, idempotencyKey)
     : null;
@@ -77,9 +117,9 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
 
   // Completed idempotent retries are reads of an already-accepted business
   // action, not new submission attempts. Resolve them before consuming the
-  // payment-submit abuse budget. New records are resident-scoped; legacy raw-key
-  // records replay only after their payment ownership is verified.
-  if (idempotencyKey && storageIdempotencyKey) {
+  // payment-submit abuse budget. Phase-37 records must match the current request
+  // hash before replay; older raw payloads remain compatible until their expiry.
+  if (idempotencyKey && storageIdempotencyKey && requestHash) {
     const replayNow = new Date();
     const existing = await db.idempotencyRecord.findUnique({
       where: {
@@ -90,8 +130,12 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         },
       },
     });
-    if (existing?.responseJson && existing.expiresAt.getTime() > replayNow.getTime()) {
-      return { data: JSON.parse(existing.responseJson), meta: { idempotentReplay: true } };
+    if (existing && existing.expiresAt.getTime() > replayNow.getTime()) {
+      const inspected = inspectIdempotencyRecord(existing.responseJson, requestHash);
+      if (inspected.state === "MISMATCH") throw idempotencyPayloadMismatch();
+      if (inspected.state === "REPLAY") {
+        return { data: inspected.payload, meta: { idempotentReplay: true } };
+      }
     }
 
     const legacy = await db.idempotencyRecord.findUnique({
@@ -168,17 +212,19 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     // returned above and therefore never wait on this mutation lock.
     await lockResidentFinancialMutation(tx, ctx.institutionId, ctx.user.id);
 
-    if (storageIdempotencyKey) {
+    if (storageIdempotencyKey && requestHash) {
       const claim = await claimIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
         scope: PAYMENT_IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
+        requestHash,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       });
       if (claim.state === "REPLAY") {
         return { replay: true as const, payload: claim.payload };
       }
+      if (claim.state === "MISMATCH") throw idempotencyPayloadMismatch();
       if (claim.state === "IN_PROGRESS") {
         throw new ApiError(
           CODES.IDPOTENCY_CONFLICT,
@@ -213,12 +259,13 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
 
     const payload = serializePayment(payment);
 
-    if (storageIdempotencyKey) {
+    if (storageIdempotencyKey && requestHash) {
       await completeIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
         scope: PAYMENT_IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
+        requestHash,
         payload,
       });
     }
