@@ -90,12 +90,15 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     const selectedIds = leave.selectedMeals.map((selection) => selection.mealDefinitionId);
     const scopeWhere = mealInstanceScopeWhere(leave.mealScope, selectedIds);
 
+    // lockAt is the authoritative freeze boundary (min(cutoff, service start)).
+    // A leave approved after lockAt must never retroactively rewrite that meal,
+    // even when an unusual schedule has service start before the configured cutoff.
     const instances = await tx.mealInstance.findMany({
       where: {
         institutionId: ctx.institutionId,
         serviceDate: { gte: leave.startDate, lte: leave.endDate },
         ...scopeWhere,
-        cutoffAt: { gt: now },
+        lockAt: { gt: now },
       },
       include: { definition: true, definitionVersion: true },
     });
