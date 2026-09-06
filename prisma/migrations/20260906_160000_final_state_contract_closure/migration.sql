@@ -17,7 +17,7 @@ INSERT INTO "AuditEvent" (
   "afterSummary",
   "metadataJson",
   "requestId",
-  "createdAt"
+  "occurredAt"
 )
 SELECT
   'phase67_formula_' || md5(fd."id" || clock_timestamp()::text),
