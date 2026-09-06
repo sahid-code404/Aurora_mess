@@ -510,7 +510,7 @@ export async function generateBilling(
       if (current?.status === "BILLED") {
         throw new ApiError(CODES.BILLING_ALREADY_BILLED, "This period has already been billed.", 409);
       }
-      if (current?.generationState === "CLOSING" || current?.generationState === "GENERATING") {
+      if (current?.generationState === "CLOSING") {
         throw new ApiError(CODES.BILLING_PERIOD_CLOSED, "A billing run is already in progress for this period.", 409);
       }
       throw new ApiError(CODES.BILLING_PERIOD_CLOSED, "This period is not open for billing.", 409);
@@ -919,7 +919,6 @@ export async function generateBilling(
         guestPriceMinorSnapshot: guestPriceMinor,
         formulaVersionId: formulaVersion.id,
         generationState: "COMPLETED",
-        generationError: null,
       },
     });
 

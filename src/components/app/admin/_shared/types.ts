@@ -153,7 +153,7 @@ export interface BillingPeriodRow {
   year: number;
   month: number;
   monthLabel: string;
-  status: "OPEN" | "CLOSING" | "BILLED" | "REOPENED" | string;
+  status: "OPEN" | "BILLED" | "REOPENED" | string;
   generationState: string | null;
   billedAt: string | null;
   mealChargeMinorSnapshot: number | null;
