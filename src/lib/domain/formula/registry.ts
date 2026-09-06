@@ -36,6 +36,7 @@ import { resolveCustomVariables } from "./providers/custom";
 import { FormulaDag } from "./dag";
 import { evaluateFormula } from "./evaluator";
 import { FormulaAst } from "./ast";
+import { selectFormulaVersionAt } from "./effective-version";
 
 export interface ResolvedVariableItem {
   id?: string;
@@ -93,18 +94,26 @@ export async function gatherAllVariables(
     resolveFundsVariables(institutionId, client),
     resolveCustomVariables(institutionId, bounds, residentId, client),
     client.variableDefinition.findMany({
-      where: { institutionId, archivedAt: null },
+      where: {
+        institutionId,
+        OR: [{ archivedAt: null }, { archivedAt: { gt: bounds.startAt } }],
+      },
     }),
     client.formulaDefinition.findMany({
-      where: { institutionId, status: "ACTIVE", archivedAt: null },
+      where: { institutionId },
       include: {
         versions: {
-          where: { active: true },
+          orderBy: { version: "desc" },
           include: { dependencies: true },
         },
       },
     }),
   ]);
+
+  const formulaDefsForPeriod = formulaDefs.flatMap((def: any) => {
+    const periodVersion = selectFormulaVersionAt(def.versions, bounds.startAt);
+    return periodVersion ? [{ ...def, versions: [periodVersion] }] : [];
+  });
 
   const kitchenVars = resolveKitchenVariables(
     mealVars.total_resident_meals,
@@ -129,7 +138,7 @@ export async function gatherAllVariables(
   const dag = new FormulaDag();
   const formulaByOutput = new Map<string, { def: any; version: any }>();
 
-  for (const def of formulaDefs) {
+  for (const def of formulaDefsForPeriod) {
     const activeVersion = def.versions[0];
     if (activeVersion) {
       try {
@@ -197,7 +206,7 @@ export async function gatherAllVariables(
 
     const raw = valuesMap[sys.key] ?? 0;
     const isCustomOverride = customMap.get(sys.key);
-    const usedBy = formulaDefs
+    const usedBy = formulaDefsForPeriod
       .filter((fd: any) =>
         fd.versions[0]?.dependencies.some((d: any) => d.variableKey === sys.key)
       )
@@ -224,7 +233,7 @@ export async function gatherAllVariables(
   for (const c of customDefs) {
     if (c.category === "CUSTOM") {
       const raw = valuesMap[c.key] ?? 0;
-      const usedBy = formulaDefs
+      const usedBy = formulaDefsForPeriod
         .filter((fd: any) =>
           fd.versions[0]?.dependencies.some((d: any) => d.variableKey === c.key)
         )
@@ -250,7 +259,7 @@ export async function gatherAllVariables(
   }
 
   // Derived variables (from FormulaDefinitions)
-  for (const f of formulaDefs) {
+  for (const f of formulaDefsForPeriod) {
     const raw = valuesMap[f.outputVariableKey] ?? 0;
     const activeVersion = f.versions[0];
     const isCharge = f.outputVariableKey.includes("charge");
@@ -258,7 +267,7 @@ export async function gatherAllVariables(
       ? `${formatMinor(raw)} / meal`
       : formatMinor(raw);
 
-    const usedBy = formulaDefs
+    const usedBy = formulaDefsForPeriod
       .filter(
         (fd: any) =>
           fd.id !== f.id &&

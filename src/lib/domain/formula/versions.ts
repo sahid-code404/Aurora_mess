@@ -22,6 +22,9 @@ import { currentPeriodBounds, periodBounds } from "./period-variables";
 import { SYSTEM_VARIABLES_MAP } from "./variables";
 import { FormulaDag } from "./dag";
 import { gatherAllVariables } from "./registry";
+import { selectFormulaVersionAt } from "./effective-version";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertFormulaInputPeriodMutable } from "./period-mutation";
 
 export interface FormulaVersionRow {
   id: string;
@@ -70,7 +73,7 @@ export async function ensureFormulaDefinition(
   client: any = db
 ): Promise<any> {
   let definition = await client.formulaDefinition.findFirst({
-    where: { institutionId, outputVariableKey, archivedAt: null },
+    where: { institutionId, outputVariableKey },
   });
 
   if (!definition) {
@@ -81,7 +84,6 @@ export async function ensureFormulaDefinition(
         description: outputVariableKey === "meal_charge" ? "Calculates resident meal charge for billing period." : null,
         outputVariableKey,
         scope: "BILLING_PERIOD",
-        status: "ACTIVE",
       },
     });
   }
@@ -101,15 +103,7 @@ export async function resolveFormulaVersionForPeriod(
     orderBy: { version: "desc" },
   });
 
-  const farPast = new Date(-864e13);
-  const farFuture = new Date(864e13);
-  return (
-    versions.find(
-      (v: any) =>
-        (v.effectiveFrom ? new Date(v.effectiveFrom) : farPast) <= periodStart &&
-        (v.effectiveUntil ? new Date(v.effectiveUntil) : farFuture) >= periodStart
-    ) ?? null
-  );
+  return selectFormulaVersionAt(versions, periodStart);
 }
 
 export interface FormulaEstimate {
@@ -234,6 +228,44 @@ export async function parseFormulaSource(
   return { ast, formulaText: astToCanonical(ast), naturalSource: null };
 }
 
+async function buildFormulaDagForPeriod(
+  client: any,
+  institutionId: string,
+  outputKey: string,
+  targetPeriodStart: Date
+): Promise<FormulaDag> {
+  const allFormulaDefs = await client.formulaDefinition.findMany({
+    where: { institutionId },
+    include: {
+      versions: {
+        orderBy: { version: "desc" },
+        include: { dependencies: true },
+      },
+    },
+  });
+
+  const dag = new FormulaDag();
+  for (const def of allFormulaDefs) {
+    if (def.outputVariableKey === outputKey) continue;
+    const periodVersion: any = selectFormulaVersionAt(def.versions, targetPeriodStart);
+    if (!periodVersion) continue;
+    try {
+      const nodeAst = JSON.parse(periodVersion.compiledAstJson) as FormulaAst;
+      dag.addNode({
+        outputVariableKey: def.outputVariableKey,
+        formulaDefinitionId: def.id,
+        name: def.name,
+        ast: nodeAst,
+        dependsOn: periodVersion.dependencies.map((d: any) => d.variableKey),
+      });
+    } catch {
+      // Ignore malformed legacy rows here; normal activation/build validation
+      // remains fail-closed for newly persisted formula data.
+    }
+  }
+  return dag;
+}
+
 /** Create a new immutable formula version with DAG cycle detection. */
 export async function createFormulaVersion(input: CreateVersionInput): Promise<CreateVersionOutcome> {
   const inst = await getInstitution(input.institutionId);
@@ -243,34 +275,20 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
   const { ast, formulaText, naturalSource } = await parseFormulaSource(input.mode, input.source);
   const outputKey = (ast.type === "assignment" ? ast.target : input.outputVariableKey ?? "meal_charge").trim();
 
-  // 1. DAG cycle check (spec §44)
-  const allFormulaDefs = await db.formulaDefinition.findMany({
-    where: { institutionId: input.institutionId, status: "ACTIVE", archivedAt: null },
-    include: {
-      versions: {
-        where: { active: true },
-        include: { dependencies: true },
-      },
-    },
-  });
+  // 1. DAG cycle check (spec §44). Resolve every dependency formula for
+  // the same effective period as the candidate; the latest active pointer can
+  // point at NEXT_PERIOD and must never rewrite current/historical evaluation.
+  const nextYear = bounds.month === 12 ? bounds.year + 1 : bounds.year;
+  const nextMonth = bounds.month === 12 ? 1 : bounds.month + 1;
+  const nextMonthFirst = localDateMidnightUtc(`${nextYear}-${String(nextMonth).padStart(2, "0")}-01`);
+  const targetPeriodStart = input.effective === "CURRENT_OPEN" ? bounds.startAt : nextMonthFirst;
 
-  const dag = new FormulaDag();
-  for (const def of allFormulaDefs) {
-    if (def.outputVariableKey !== outputKey && def.versions[0]) {
-      try {
-        const nodeAst = JSON.parse(def.versions[0].compiledAstJson) as FormulaAst;
-        dag.addNode({
-          outputVariableKey: def.outputVariableKey,
-          formulaDefinitionId: def.id,
-          name: def.name,
-          ast: nodeAst,
-          dependsOn: def.versions[0].dependencies.map((d: any) => d.variableKey),
-        });
-      } catch {
-        // ignore
-      }
-    }
-  }
+  const dag = await buildFormulaDagForPeriod(
+    db,
+    input.institutionId,
+    outputKey,
+    targetPeriodStart
+  );
 
   // Validate no circular dependency
   dag.validateNoCycles(outputKey, ast);
@@ -301,12 +319,8 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
   }
 
   // 4. Compute effective window
-  const nextYear = bounds.month === 12 ? bounds.year + 1 : bounds.year;
-  const nextMonth = bounds.month === 12 ? 1 : bounds.month + 1;
-  const nextMonthFirst = localDateMidnightUtc(`${nextYear}-${String(nextMonth).padStart(2, "0")}-01`);
   const thisMonthEnd = new Date(nextMonthFirst.getTime() - 1);
-
-  const effectiveFrom = input.effective === "CURRENT_OPEN" ? bounds.startAt : nextMonthFirst;
+  const effectiveFrom = targetPeriodStart;
   const previousUntil = input.effective === "CURRENT_OPEN" ? new Date(bounds.startAt.getTime() - 1) : thisMonthEnd;
 
   const compiledAstJson = JSON.stringify(ast);
@@ -314,6 +328,22 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
   const referencedVars = extractVariableNames(ast);
 
   const version = await db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, input.institutionId);
+    const targetYear = input.effective === "CURRENT_OPEN" ? bounds.year : nextYear;
+    const targetMonth = input.effective === "CURRENT_OPEN" ? bounds.month : nextMonth;
+    await assertFormulaInputPeriodMutable(tx, input.institutionId, targetYear, targetMonth);
+
+    // Preview/cycle checks happen before confirmation for UX, but mutation must
+    // re-check under the shared Institution mutex so two concurrent formula
+    // writes cannot each validate against stale dependency graphs.
+    const lockedDag = await buildFormulaDagForPeriod(
+      tx,
+      input.institutionId,
+      outputKey,
+      targetPeriodStart
+    );
+    lockedDag.validateNoCycles(outputKey, ast);
+
     const definition = await ensureFormulaDefinition(input.institutionId, outputKey, tx);
 
     const maxAgg = await tx.formulaVersion.aggregate({

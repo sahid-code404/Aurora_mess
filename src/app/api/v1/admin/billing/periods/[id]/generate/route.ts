@@ -2,7 +2,7 @@
  * POST /api/v1/admin/billing/periods/[id]/generate — run billing (auth ADMIN).
  * Body: {a, b, answer} — the human confirmation echo of the readiness
  * challenge (answer must equal a + b). The domain transaction re-runs
- * readiness inside the OPEN→CLOSING guard; failures roll back cleanly.
+ * readiness inside the generationState claim; failures roll back cleanly.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
