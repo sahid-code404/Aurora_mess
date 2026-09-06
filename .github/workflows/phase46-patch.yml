@@ -1,0 +1,47 @@
+name: Phase 46 guarded patch
+
+on:
+  push:
+    branches:
+      - feat/phase46-meal-retirement-lifecycle
+    paths:
+      - scripts/phase46_patch.py
+      - .github/workflows/phase46-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase46-meal-retirement-lifecycle
+          fetch-depth: 0
+      - name: Apply assertion-guarded Phase 46 patch
+        run: python3 scripts/phase46_patch.py
+      - name: Commit production and regression changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            prisma/schema.prisma \
+            prisma/migrations/20260906_080000_meal_definition_retirement_lifecycle/migration.sql \
+            src/lib/domain/meal-retirement.ts \
+            src/lib/domain/meal-engine.ts \
+            src/app/api/v1/admin/meal-definitions/route.ts \
+            'src/app/api/v1/admin/meal-definitions/[id]/route.ts' \
+            'src/app/api/v1/admin/meal-definitions/[id]/request-deletion/route.ts' \
+            'src/app/api/v1/admin/meal-definitions/[id]/cancel-deletion/route.ts' \
+            'src/app/api/v1/admin/meal-definitions/[id]/restore/route.ts' \
+            src/components/app/admin/_shared/types.ts \
+            src/components/app/admin/meal-configuration.tsx \
+            tests/integration/meal-retirement-lifecycle.test.ts \
+            tests/unit/meal-retirement-lifecycle-source.test.ts
+          if git diff --cached --quiet; then
+            echo "No Phase 46 changes to commit"
+          else
+            git commit -m "Phase 46: complete meal retirement lifecycle"
+            git push origin HEAD:feat/phase46-meal-retirement-lifecycle
+          fi
