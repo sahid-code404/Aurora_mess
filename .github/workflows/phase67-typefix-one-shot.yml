@@ -1,0 +1,34 @@
+name: Phase 67 type fix
+
+on:
+  push:
+    branches:
+      - feat/phase67-final-state-contract-closure
+    paths:
+      - .github/workflows/phase67-typefix-one-shot.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase67-final-state-contract-closure
+          fetch-depth: 0
+      - name: Apply type fix
+        run: python3 scripts/phase67_type_fix.py
+      - name: Remove helpers
+        run: |
+          rm scripts/phase67_type_fix.py
+          rm .github/workflows/phase67-typefix-one-shot.yml
+      - name: Commit type fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: preserve formula version payload typing"
+          git push origin HEAD:feat/phase67-final-state-contract-closure
