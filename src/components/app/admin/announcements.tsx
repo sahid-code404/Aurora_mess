@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Archive, Calendar, CalendarDays, ChevronRight, Clock, Eye, Info, Megaphone, PartyPopper, Pencil, Pin, Plus, RotateCcw, Trash2, TriangleAlert, Wrench, type LucideIcon } from "lucide-react";
+import { Archive, Calendar, CalendarDays, ChevronRight, Clock, Eye, Info, Megaphone, PartyPopper, Pencil, Pin, Plus, RotateCcw, TriangleAlert, Wrench, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import GlassCard from "@/components/glass/GlassCard";
 import { PickerCapsule } from "@/components/glass/PickerCapsule";
@@ -23,7 +23,7 @@ import ConfirmDialog from "@/components/glass/ConfirmDialog";
 import GlassToggle from "@/components/glass/GlassToggle";
 import { GlassButton } from "@/components/glass/GlassButton";
 import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
-import { useApiQuery, postJson, patchJson, deleteJson } from "@/hooks/use-api-query";
+import { useApiQuery, postJson, patchJson } from "@/hooks/use-api-query";
 import { useSession } from "@/hooks/use-session";
 import { ApiClientError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -36,6 +36,14 @@ import { fmtDateTime } from "./_shared/format";
 import type { AnnouncementRow } from "./_shared/types";
 
 const ANNOUNCEMENTS_PATH = "/api/v1/admin/announcements";
+
+type LifecycleAnnouncementRow = AnnouncementRow & {
+  archived: boolean;
+  archivedAt: string | null;
+  archiveReason: string | null;
+  archivedByUserId: string | null;
+  lastTransitionAt: string | null;
+};
 
 function shiftMonthKey(key: string, delta: number): string {
   const [y, m] = key.split("-").map(Number);
@@ -95,16 +103,16 @@ export default function AdminAnnouncements() {
   const currentMonthKey = currentMonthKeyInTz(tz);
   const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
   const monthKey = monthParam ?? currentMonthKey;
-  const { data, isLoading, error, refetch } = useApiQuery<AnnouncementRow[]>(`${ANNOUNCEMENTS_PATH}?month=${monthKey}`);
+  const { data, isLoading, error, refetch } = useApiQuery<LifecycleAnnouncementRow[]>(`${ANNOUNCEMENTS_PATH}?month=${monthKey}`);
   const [formOpen, setFormOpen] = useState(false);
-  const [editingAnnouncement, setEditingAnnouncement] = useState<AnnouncementRow | null>(null);
-  const [selectedAnnouncement, setSelectedAnnouncement] = useState<AnnouncementRow | null>(null);
+  const [editingAnnouncement, setEditingAnnouncement] = useState<LifecycleAnnouncementRow | null>(null);
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<LifecycleAnnouncementRow | null>(null);
   const invalidate = useInvalidate();
 
   if (isLoading && !data) {
     return (
       <div className="space-y-4">
-        <KpiGridSkeleton count={3} />
+        <KpiGridSkeleton count={4} />
         <ListSkeleton rows={4} />
       </div>
     );
@@ -124,22 +132,23 @@ export default function AdminAnnouncements() {
 
   const announcements = data ?? [];
   const nowMs = Date.now();
-  const pinnedCount = announcements.filter((a) => a.pinned).length;
+  const pinnedCount = announcements.filter((a) => !a.archived && a.pinned).length;
+  const archivedCount = announcements.filter((a) => a.archived).length;
   const expiringCount = announcements.filter((a) => {
-    if (!a.expiresAt) return false;
+    if (a.archived || !a.expiresAt) return false;
     const exp = new Date(a.expiresAt).getTime();
     return exp > nowMs && exp < nowMs + 7 * 86_400_000;
   }).length;
 
   const kpis: KpiSpec[] = [
-    { label: "Total", value: String(announcements.length), sub: "Published", icon: <Megaphone />, tone: "primary", glow: "primary" },
-    { label: "Pinned", value: String(pinnedCount), sub: "Board", icon: <Pin />, tone: "primary", glow: "primary" },
+    { label: "Total", value: String(announcements.length), sub: "Records", icon: <Megaphone />, tone: "primary", glow: "primary" },
+    { label: "Pinned", value: String(pinnedCount), sub: "Active board", icon: <Pin />, tone: "primary", glow: "primary" },
     { label: "Expiring", value: String(expiringCount), sub: "Within 7d", icon: <Clock />, tone: "danger", glow: "danger" },
+    { label: "Archived", value: String(archivedCount), sub: "History kept", icon: <Archive />, tone: "neutral" },
   ];
 
   return (
     <StaggerGroup className="space-y-4">
-      {/* Month navigation — centered picker capsule */}
       <StaggerItem>
       <PickerCapsule
         onPrev={() => setMonthParam(shiftMonthKey(monthKey, -1))}
@@ -158,12 +167,10 @@ export default function AdminAnnouncements() {
       </PickerCapsule>
       </StaggerItem>
 
-      {/* KPIs — board overview (3-column layout like meals) */}
       <StaggerItem>
-      <KpiGrid kpis={kpis} className="grid grid-cols-3 gap-2 sm:gap-3" />
+      <KpiGrid kpis={kpis} className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3" />
       </StaggerItem>
 
-      {/* Primary action — Publish centered below KPIs */}
       <StaggerItem>
       <div className="flex items-center justify-center">
         <GlassButton
@@ -179,8 +186,6 @@ export default function AdminAnnouncements() {
       </div>
       </StaggerItem>
 
-      {/* ONE section card — meals-page anatomy: icon + title + count header,
-          symmetrical type-orb rows below matching payments. */}
       <StaggerItem>
       <GlassCard className="p-4">
         <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -205,11 +210,11 @@ export default function AdminAnnouncements() {
           <div className="no-scrollbar max-h-[28rem] space-y-2 overflow-y-auto pr-1">
             <AnimatePresence initial={false}>
               {announcements.map((a, i) => {
-                const expired = a.expiresAt && new Date(a.expiresAt).getTime() < Date.now();
+                const expired = !!a.expiresAt && new Date(a.expiresAt).getTime() < Date.now();
                 const scheduled = new Date(a.publishAt).getTime() > Date.now();
                 const meta = typeMeta(a.type);
-                const OrbIcon = a.pinned ? Pin : meta.icon;
-                const orbToken = a.pinned ? "frost" : meta.orb;
+                const OrbIcon = !a.archived && a.pinned ? Pin : meta.icon;
+                const orbToken = !a.archived && a.pinned ? "frost" : meta.orb;
                 return (
                   <motion.div
                     key={a.id}
@@ -219,66 +224,57 @@ export default function AdminAnnouncements() {
                     exit={{ opacity: 0, y: -4 }}
                     transition={{ duration: 0.2, ease: "easeOut", delay: Math.min(i * 0.04, 0.2) }}
                   >
-                    <GlassCard className={cn("overflow-hidden rounded-2xl", a.pinned && "ring-1 ring-primary/30")}>
+                    <GlassCard className={cn("overflow-hidden rounded-2xl", !a.archived && a.pinned && "ring-1 ring-primary/30", a.archived && "opacity-70")}>
                       <div
-                        className="p-3 sm:p-3.5 cursor-pointer transition-colors hover:bg-foreground/4 dark:hover:bg-white/5"
+                        className="cursor-pointer p-3 transition-colors hover:bg-foreground/4 dark:hover:bg-white/5 sm:p-3.5"
                         onClick={() => setSelectedAnnouncement(a)}
                       >
-                      {/* Top row: Identity & Time (Left), Status & Priority (Right) — fixed h-10 */}
                       <div className="flex h-10 items-center justify-between gap-3">
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex min-w-0 items-center gap-2.5">
                           <MealOrb icon={<OrbIcon />} colorToken={orbToken} size="sm" />
                           <div className="min-w-0">
-                            <h4 className="truncate text-sm font-semibold text-foreground tracking-tight" title={a.title}>
+                            <h4 className="truncate text-sm font-semibold tracking-tight text-foreground" title={a.title}>
                               {a.title}
                             </h4>
-                            <p className="kpi-num mt-0.5 text-xs text-muted-foreground flex items-center gap-1 truncate">
+                            <p className="kpi-num mt-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground">
                               <Clock className="size-3 shrink-0" aria-hidden />
                               {fmtDateTime(a.publishAt, tz)}
                             </p>
                           </div>
                         </div>
 
-                        <div className="text-right shrink-0">
-                          {expired ? (
-                            <Chip tone="danger" className="text-[10px] px-2 py-0.5 shrink-0">
-                              expired
-                            </Chip>
+                        <div className="shrink-0 text-right">
+                          {a.archived ? (
+                            <Chip tone="neutral" className="shrink-0 px-2 py-0.5 text-[10px]">archived</Chip>
+                          ) : expired ? (
+                            <Chip tone="danger" className="shrink-0 px-2 py-0.5 text-[10px]">expired</Chip>
                           ) : scheduled ? (
-                            <Chip tone="warning" className="text-[10px] px-2 py-0.5 shrink-0">
-                              scheduled
-                            </Chip>
+                            <Chip tone="warning" className="shrink-0 px-2 py-0.5 text-[10px]">scheduled</Chip>
                           ) : (
-                            <Chip tone={PRIORITY_TONES[a.priority] ?? "neutral"} className="text-[10px] px-2 py-0.5 shrink-0">
+                            <Chip tone={PRIORITY_TONES[a.priority] ?? "neutral"} className="shrink-0 px-2 py-0.5 text-[10px]">
                               {a.priority.toLowerCase()}
                             </Chip>
                           )}
                         </div>
                       </div>
 
-                      {/* Bottom row: Badges on left, Details in a pill on right — strictly 1 row fixed h-7 */}
                       <div className="mt-2.5 flex h-7 items-center justify-between gap-2 border-t border-border/15 pt-2">
                         <div className="no-scrollbar flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
-                          <Chip tone="neutral" className="text-[10px] px-2 py-0.5 shrink-0">
-                            {a.type.toLowerCase()}
-                          </Chip>
-                          {a.pinned && (
-                            <Chip tone="frost" className="text-[10px] px-2 py-0.5 shrink-0">
-                              pinned
-                            </Chip>
+                          <Chip tone="neutral" className="shrink-0 px-2 py-0.5 text-[10px]">{a.type.toLowerCase()}</Chip>
+                          {!a.archived && a.pinned && (
+                            <Chip tone="frost" className="shrink-0 px-2 py-0.5 text-[10px]">pinned</Chip>
                           )}
-                          <Chip tone="frost" className="text-[10px] px-2 py-0.5 shrink-0">
+                          <Chip tone="frost" className="shrink-0 px-2 py-0.5 text-[10px]">
                             {a.target === "EVERYONE" ? "everyone" : a.target === "RESIDENTS" ? "residents" : "admins"}
                           </Chip>
                           {a.expiresAt && (
-                            <span className="kpi-num text-[11px] text-muted-foreground truncate shrink-0">
+                            <span className="kpi-num shrink-0 truncate text-[11px] text-muted-foreground">
                               until {fmtDateTime(a.expiresAt, tz)}
                             </span>
                           )}
                         </div>
 
-                        {/* Actions in tactile glass pills */}
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="flex shrink-0 items-center gap-1.5">
                           <motion.button
                             type="button"
                             whileTap={{ scale: 0.94 }}
@@ -287,11 +283,11 @@ export default function AdminAnnouncements() {
                               setEditingAnnouncement(a);
                               setFormOpen(true);
                             }}
-                            aria-label={`Edit ${a.title}`}
+                            aria-label={`${a.archived ? "Republish" : "Edit"} ${a.title}`}
                             className="glass-inset hover:glass-soft flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-semibold text-foreground transition-all hover:text-primary hover:ring-1 hover:ring-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                           >
-                            <Pencil className="size-3" aria-hidden />
-                            <span>Edit</span>
+                            {a.archived ? <RotateCcw className="size-3" aria-hidden /> : <Pencil className="size-3" aria-hidden />}
+                            <span>{a.archived ? "Republish" : "Edit"}</span>
                           </motion.button>
                           <motion.button
                             type="button"
@@ -324,8 +320,13 @@ export default function AdminAnnouncements() {
           announcement={selectedAnnouncement}
           tz={tz}
           onClose={() => setSelectedAnnouncement(null)}
+          onRepublish={(announcement) => {
+            setSelectedAnnouncement(null);
+            setEditingAnnouncement(announcement);
+            setFormOpen(true);
+          }}
           onActionDone={() => {
-            invalidate([ANNOUNCEMENTS_PATH, "/api/v1/notifications"]);
+            invalidate([ANNOUNCEMENTS_PATH, "/api/v1/announcements", "/api/v1/me/dashboard"]);
             void refetch();
           }}
         />
@@ -340,7 +341,7 @@ export default function AdminAnnouncements() {
             if (!open) setEditingAnnouncement(null);
           }}
           onSaved={() => {
-            invalidate([ANNOUNCEMENTS_PATH, "/api/v1/notifications"]);
+            invalidate([ANNOUNCEMENTS_PATH, "/api/v1/announcements", "/api/v1/me/dashboard"]);
             void refetch();
           }}
         />
@@ -355,42 +356,44 @@ function AnnouncementDetailDialog({
   announcement,
   tz,
   onClose,
+  onRepublish,
   onActionDone,
 }: {
-  announcement: AnnouncementRow | null;
+  announcement: LifecycleAnnouncementRow | null;
   tz: string;
   onClose: () => void;
+  onRepublish: (announcement: LifecycleAnnouncementRow) => void;
   onActionDone: () => void;
 }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const [acting, setActing] = useState(false);
 
   if (!announcement) return null;
-  const expired = announcement.expiresAt && new Date(announcement.expiresAt).getTime() < Date.now();
+  const expired = !!announcement.expiresAt && new Date(announcement.expiresAt).getTime() < Date.now();
   const scheduled = new Date(announcement.publishAt).getTime() > Date.now();
 
-  async function handleDelete() {
-    if (!announcement) return;
+  async function handleArchive(reason?: string) {
+    if (!announcement || !reason) return;
     setActing(true);
     try {
-      await deleteJson(`${ANNOUNCEMENTS_PATH}/${announcement.id}`);
-      toast.success("Announcement deleted");
+      await patchJson(`${ANNOUNCEMENTS_PATH}/${announcement.id}`, { action: "ARCHIVE", reason });
+      toast.success("Announcement archived", { description: "Residents no longer see it; publication history is retained." });
       onActionDone();
       onClose();
     } catch (err) {
       toast.error(errMessage(err));
     } finally {
       setActing(false);
-      setConfirmDelete(false);
+      setConfirmArchive(false);
     }
   }
 
-  async function handleArchive() {
+  async function handleRestore() {
     if (!announcement) return;
     setActing(true);
     try {
-      await patchJson(`${ANNOUNCEMENTS_PATH}/${announcement.id}`, { action: "ARCHIVE" });
-      toast.success("Announcement archived");
+      await patchJson(`${ANNOUNCEMENTS_PATH}/${announcement.id}`, { action: "UNARCHIVE", reason: "Restored from announcement history" });
+      toast.success("Announcement restored");
       onActionDone();
       onClose();
     } catch (err) {
@@ -411,38 +414,48 @@ function AnnouncementDetailDialog({
         footer={
           <div className="flex w-full flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
-              <GlassButton
-                variant="destructive"
-                size="sm"
-                icon={<Trash2 className="size-4" />}
-                loading={acting}
-                onClick={() => setConfirmDelete(true)}
-              >
-                Delete
-              </GlassButton>
-              {!expired && (
+              {announcement.archived ? (
+                expired ? (
+                  <GlassButton
+                    variant="primary"
+                    size="sm"
+                    icon={<RotateCcw className="size-4" />}
+                    onClick={() => onRepublish(announcement)}
+                  >
+                    Republish
+                  </GlassButton>
+                ) : (
+                  <GlassButton
+                    variant="secondary"
+                    size="sm"
+                    icon={<RotateCcw className="size-4" />}
+                    loading={acting}
+                    onClick={() => void handleRestore()}
+                  >
+                    Restore
+                  </GlassButton>
+                )
+              ) : (
                 <GlassButton
                   variant="secondary"
                   size="sm"
                   icon={<Archive className="size-4" />}
                   loading={acting}
-                  onClick={() => void handleArchive()}
+                  onClick={() => setConfirmArchive(true)}
                 >
                   Archive
                 </GlassButton>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <GlassButton variant="ghost" size="sm" onClick={onClose}>
-                Close
-              </GlassButton>
+              <GlassButton variant="ghost" size="sm" onClick={onClose}>Close</GlassButton>
             </div>
           </div>
         }
       >
         <div className="space-y-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Details</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Details</p>
             <div className="space-y-0.5">
               <KeyValue
                 label="Priority"
@@ -455,34 +468,44 @@ function AnnouncementDetailDialog({
               />
               <KeyValue label="Pinned to board" value={announcement.pinned ? "Yes" : "No"} />
               <KeyValue label="Publish date" value={fmtDateTime(announcement.publishAt, tz)} />
-              <KeyValue
-                label="Expires at"
-                value={announcement.expiresAt ? fmtDateTime(announcement.expiresAt, tz) : "No expiry"}
-              />
-              {scheduled && <KeyValue label="Status" value={<Chip tone="warning">Scheduled</Chip>} />}
-              {expired && <KeyValue label="Status" value={<Chip tone="danger">Expired</Chip>} />}
+              <KeyValue label="Expires at" value={announcement.expiresAt ? fmtDateTime(announcement.expiresAt, tz) : "No expiry"} />
+              {announcement.archived ? (
+                <>
+                  <KeyValue label="Status" value={<Chip tone="neutral">Archived</Chip>} />
+                  <KeyValue label="Archived at" value={announcement.archivedAt ? fmtDateTime(announcement.archivedAt, tz) : "Recorded in audit history"} />
+                  {announcement.archiveReason && <KeyValue label="Archive reason" value={announcement.archiveReason} />}
+                </>
+              ) : scheduled ? (
+                <KeyValue label="Status" value={<Chip tone="warning">Scheduled</Chip>} />
+              ) : expired ? (
+                <KeyValue label="Status" value={<Chip tone="danger">Expired</Chip>} />
+              ) : (
+                <KeyValue label="Status" value={<Chip tone="frost">Published</Chip>} />
+              )}
             </div>
           </div>
 
           <div className="border-t border-border/20 pt-3">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Message</p>
-            <div className="glass-inset rounded-xl p-3.5 text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Message</p>
+            <div className="glass-inset whitespace-pre-wrap rounded-xl p-3.5 text-sm leading-relaxed text-foreground">
               {announcement.message}
             </div>
           </div>
         </div>
       </DetailDialog>
 
-      {confirmDelete && (
+      {confirmArchive && (
         <ConfirmDialog
           open
-          onOpenChange={(open) => !open && setConfirmDelete(false)}
-          title="Delete announcement"
-          description="Are you sure you want to delete this announcement? It will be permanently removed from all resident boards."
-          confirmLabel="Delete announcement"
+          onOpenChange={(open) => !open && setConfirmArchive(false)}
+          title="Archive announcement"
+          description="Archive this announcement? Residents will stop seeing it immediately, while its message, original expiry, and audit history remain intact."
+          confirmLabel="Archive announcement"
           tone="destructive"
+          requireReason
+          reasonPlaceholder="Why is this announcement being archived?"
           loading={acting}
-          onConfirm={() => void handleDelete()}
+          onConfirm={(reason) => void handleArchive(reason)}
         />
       )}
     </>
@@ -497,6 +520,11 @@ function toIsoOrNull(value: string): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
+function editableExpiry(announcement: LifecycleAnnouncementRow | null): string {
+  if (!announcement?.expiresAt) return "";
+  return new Date(announcement.expiresAt).getTime() > Date.now() ? announcement.expiresAt.slice(0, 10) : "";
+}
+
 function AnnouncementFormDialog({
   open,
   onOpenChange,
@@ -505,7 +533,7 @@ function AnnouncementFormDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  editing: AnnouncementRow | null;
+  editing: LifecycleAnnouncementRow | null;
   onSaved: () => void;
 }) {
   const [title, setTitle] = useState(editing?.title ?? "");
@@ -514,7 +542,7 @@ function AnnouncementFormDialog({
   const [priority, setPriority] = useState(editing?.priority ?? "NORMAL");
   const [target, setTarget] = useState(editing?.target ?? "EVERYONE");
   const [publishAt, setPublishAt] = useState(editing?.publishAt ? editing.publishAt.slice(0, 10) : "");
-  const [expiresAt, setExpiresAt] = useState(editing?.expiresAt ? editing.expiresAt.slice(0, 10) : "");
+  const [expiresAt, setExpiresAt] = useState(editableExpiry(editing));
   const [pinned, setPinned] = useState(editing?.pinned ?? false);
   const [saving, setSaving] = useState(false);
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -528,7 +556,7 @@ function AnnouncementFormDialog({
       setPriority(editing.priority);
       setTarget(editing.target);
       setPublishAt(editing.publishAt ? editing.publishAt.slice(0, 10) : "");
-      setExpiresAt(editing.expiresAt ? editing.expiresAt.slice(0, 10) : "");
+      setExpiresAt(editableExpiry(editing));
       setPinned(editing.pinned);
     } else {
       setTitle("");
@@ -579,7 +607,6 @@ function AnnouncementFormDialog({
     setFields({});
     try {
       if (isHighStakes && !awaitingConfirm && !editing) {
-        // Preview first — nothing is written until the explicit confirmation.
         await postJson(ANNOUNCEMENTS_PATH, body(true));
         setAwaitingConfirm(true);
         setSaving(false);
@@ -589,8 +616,9 @@ function AnnouncementFormDialog({
         await patchJson(`${ANNOUNCEMENTS_PATH}/${editing.id}`, {
           ...body(false),
           action: "REPUBLISH",
+          reason: editing.archived ? "Republished from announcement history" : "Announcement edited and republished",
         });
-        toast.success("Announcement saved & republished", {
+        toast.success(editing.archived ? "Announcement republished" : "Announcement saved & republished", {
           description: `${title.trim()} · published`,
         });
       } else {
@@ -616,14 +644,16 @@ function AnnouncementFormDialog({
         <div className="flex max-h-[85vh] flex-col">
           <div className="px-5 pt-5 sm:px-6 sm:pt-6">
             <DialogTitle className="text-left text-lg font-semibold tracking-tight">
-              {awaitingConfirm ? "Review before publishing" : editing ? "Edit announcement" : "Publish announcement"}
+              {awaitingConfirm ? "Review before publishing" : editing?.archived ? "Republish announcement" : editing ? "Edit announcement" : "Publish announcement"}
             </DialogTitle>
             <DialogDescription className="mt-1.5 text-left text-[13px] leading-relaxed text-muted-foreground">
               {awaitingConfirm
                 ? "You're publishing at a high priority. Read it once more — this is exactly what residents will see."
+                : editing?.archived
+                ? "This creates a new active publication state while preserving the archived lifecycle and prior content in audit history."
                 : editing
-                ? "Update details, priority or schedule. Changes will be saved and republished."
-                : "Notices render as plain text and are delivered to the notification feed."}
+                ? "Update details, priority or schedule. The previous content snapshot remains in audit history when this is republished."
+                : "Notices render as plain text and are delivered to the announcement feed."}
             </DialogDescription>
           </div>
 
@@ -662,7 +692,7 @@ function AnnouncementFormDialog({
                 <div className="glass-inset flex items-center justify-between gap-3 rounded-md px-3.5 py-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">Pin to top</p>
-                    <p className="text-[11px] text-muted-foreground">Pinned notices stay first on the board.</p>
+                    <p className="text-[11px] text-muted-foreground">Pinned notices stay first on the active board.</p>
                   </div>
                   <GlassToggle checked={pinned} onChange={(next) => setPinned(next)} label="Pin to top" />
                 </div>
@@ -673,18 +703,12 @@ function AnnouncementFormDialog({
           <div className="safe-b flex flex-wrap items-center justify-end gap-2 border-t border-border/50 px-5 py-4 sm:px-6">
             {awaitingConfirm ? (
               <>
-                <GlassButton variant="ghost" onClick={() => setAwaitingConfirm(false)} disabled={saving}>
-                  Keep editing
-                </GlassButton>
-                <GlassButton variant="destructive" icon={<Eye />} loading={saving} onClick={() => void submit()}>
-                  Publish now
-                </GlassButton>
+                <GlassButton variant="ghost" onClick={() => setAwaitingConfirm(false)} disabled={saving}>Keep editing</GlassButton>
+                <GlassButton variant="destructive" icon={<Eye />} loading={saving} onClick={() => void submit()}>Publish now</GlassButton>
               </>
             ) : (
               <>
-                <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
-                  Cancel
-                </GlassButton>
+                <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</GlassButton>
                 <GlassButton
                   variant={isHighStakes && !editing ? "secondary" : "primary"}
                   icon={isHighStakes && !editing ? <Eye /> : editing ? <RotateCcw /> : <Megaphone />}
@@ -692,7 +716,7 @@ function AnnouncementFormDialog({
                   disabled={!valid}
                   onClick={() => void submit()}
                 >
-                  {isHighStakes && !editing ? "Preview first" : editing ? "Save & republish" : "Publish"}
+                  {isHighStakes && !editing ? "Preview first" : editing?.archived ? "Republish" : editing ? "Save & republish" : "Publish"}
                 </GlassButton>
               </>
             )}
