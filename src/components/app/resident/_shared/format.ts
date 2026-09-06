@@ -183,6 +183,7 @@ export const NOTIFICATION_ICONS: Record<string, LucideIcon> = {
   TASK_SUBMITTED: ListChecks,
   TASK_ACCEPTED: ListChecks,
   TASK_REJECTED: TriangleAlert,
+  TASK_CANCELLED: TriangleAlert,
   PAYMENT_APPROVED: CheckCircle2,
   PAYMENT_SUBMITTED: Landmark,
   PAYMENT_REJECTED: TriangleAlert,
