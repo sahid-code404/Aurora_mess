@@ -10,6 +10,12 @@ import { ApiError, CODES } from "@/lib/errors";
 import { appendAudit } from "@/lib/audit";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { sweepOutboxSafe } from "@/lib/domain/notify";
+import { getInstitution } from "@/lib/institution";
+import { periodBounds } from "@/lib/domain/formula/period-variables";
+import {
+  announcementAuditSnapshot,
+  decorateAnnouncementLifecycle,
+} from "@/lib/domain/announcement-lifecycle";
 
 const createSchema = z.object({
   title: z.string().trim().min(3, "Give the announcement a title.").max(140),
@@ -22,9 +28,6 @@ const createSchema = z.object({
   pinned: z.boolean().default(false),
   previewOnly: z.boolean().default(false),
 });
-
-import { getInstitution } from "@/lib/institution";
-import { periodBounds } from "@/lib/domain/formula/period-variables";
 
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const month = ctx.req.nextUrl.searchParams.get("month") ?? undefined;
@@ -51,7 +54,8 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     orderBy: [{ pinned: "desc" }, { publishAt: "desc" }],
     take: 100,
   });
-  return { data: rows, meta: { total: rows.length } };
+  const decorated = await decorateAnnouncementLifecycle(db, ctx.institutionId, rows);
+  return { data: decorated, meta: { total: decorated.length } };
 });
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
@@ -74,30 +78,37 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     });
   }
 
-  const created = await db.announcement.create({
-    data: {
-      institutionId: ctx.institutionId,
-      title: body.title,
-      message: body.message,
-      type: body.type,
-      priority: body.priority,
-      target: body.target,
-      publishAt,
-      expiresAt,
-      pinned: body.pinned,
-      createdByUserId: ctx.user.id,
-    },
-  });
+  const created = await db.$transaction(async (tx) => {
+    const row = await tx.announcement.create({
+      data: {
+        institutionId: ctx.institutionId,
+        title: body.title,
+        message: body.message,
+        type: body.type,
+        priority: body.priority,
+        target: body.target,
+        publishAt,
+        expiresAt,
+        pinned: body.pinned,
+        createdByUserId: ctx.user.id,
+      },
+    });
 
-  await appendAudit({
-    institutionId: ctx.institutionId,
-    actorUserId: ctx.user.id,
-    actorRole: "ADMIN",
-    action: "ANNOUNCEMENT_PUBLISHED",
-    entityType: "ANNOUNCEMENT",
-    entityId: created.id,
-    requestId: ctx.requestId,
-    afterSummary: JSON.stringify({ title: body.title, type: body.type, priority: body.priority, target: body.target, pinned: body.pinned }),
+    await appendAudit(
+      {
+        institutionId: ctx.institutionId,
+        actorUserId: ctx.user.id,
+        actorRole: "ADMIN",
+        action: "ANNOUNCEMENT_PUBLISHED",
+        entityType: "ANNOUNCEMENT",
+        entityId: row.id,
+        requestId: ctx.requestId,
+        afterSummary: JSON.stringify(announcementAuditSnapshot(row)),
+      },
+      tx
+    );
+
+    return row;
   });
 
   await sweepOutboxSafe();

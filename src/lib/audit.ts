@@ -16,6 +16,7 @@ export type AuditInput = {
   entityType: string;
   entityId?: string | null;
   requestId?: string | null;
+  occurredAt?: Date | null;
   reason?: string | null;
   beforeSummary?: string | null;
   afterSummary?: string | null;
@@ -35,6 +36,7 @@ export async function appendAudit(input: AuditInput, client: any = db): Promise<
       entityType: input.entityType,
       entityId: input.entityId ?? null,
       requestId: input.requestId ?? null,
+      ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
       reason: input.reason ?? null,
       beforeSummary: input.beforeSummary ?? null,
       afterSummary: input.afterSummary ?? null,
