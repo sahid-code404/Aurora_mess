@@ -25,11 +25,11 @@ describe("resident lifecycle source guards", () => {
       const reread = route.indexOf("await tx.user.findUnique", lock);
       const statusUpdate = route.indexOf("await tx.user.update", reread);
 
-      expect(transaction, path).toBeGreaterThan(-1);
-      expect(lock, path).toBeGreaterThan(transaction);
-      expect(reread, path).toBeGreaterThan(lock);
-      expect(statusUpdate, path).toBeGreaterThan(reread);
-      expect(route, path).not.toContain("await db.user.findFirst");
+      expect(transaction).toBeGreaterThan(-1);
+      expect(lock).toBeGreaterThan(transaction);
+      expect(reread).toBeGreaterThan(lock);
+      expect(statusUpdate).toBeGreaterThan(reread);
+      expect(route).not.toContain("await db.user.findFirst");
     }
   });
 
@@ -66,8 +66,8 @@ describe("resident lifecycle source guards", () => {
       const route = source(path);
       const transaction = route.indexOf("await db.$transaction");
       const revoke = route.indexOf("await revokeAllUserSessions(id)");
-      expect(transaction, path).toBeGreaterThan(-1);
-      expect(revoke, path).toBeGreaterThan(transaction);
+      expect(transaction).toBeGreaterThan(-1);
+      expect(revoke).toBeGreaterThan(transaction);
     }
   });
 });
