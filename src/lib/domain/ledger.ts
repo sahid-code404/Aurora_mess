@@ -190,8 +190,8 @@ function linkedJournalMatches(
  *
  * Historical refund journals created before Phase 10 may point at paymentId
  * instead of refundId. Those remain a non-blocking provenance warning when the
- * exact journal row still exists, is POSTED, belongs to the institution, and is
- * typed REFUND. New refunds are always linked by refundId.
+ * exact journal row still exists, has the lifecycle-appropriate journal status,
+ * belongs to the institution, and is typed REFUND. New refunds are always linked by refundId.
  */
 export async function reconcileInstitution(
   institutionId: string,
@@ -349,7 +349,7 @@ export async function reconcileInstitution(
   const billIds = new Set((bills as any[]).map((bill) => bill.id));
   const billJournalCounts = new Map<string, number>();
   for (const journal of journals) {
-    if (journal.refType === "BILL" && journal.refId && billIds.has(journal.refId)) {
+    if (journal.status === "POSTED" && journal.refType === "BILL" && journal.refId && billIds.has(journal.refId)) {
       billJournalCounts.set(journal.refId, (billJournalCounts.get(journal.refId) ?? 0) + 1);
     }
   }

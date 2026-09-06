@@ -52,6 +52,13 @@ export async function voidRefund(input: VoidRefundInput) {
     if (refund.status !== "COMPLETED") {
       throw new ApiError(CODES.REFUND_INVALID_STATE, "Only completed refunds can be voided.", 409);
     }
+    if (refund.reversalJournalId || refund.voidReason || refund.voidedByUserId || refund.voidedAt) {
+      throw new ApiError(
+        CODES.RESOURCE_CHANGED,
+        "This completed refund already carries correction metadata and cannot be voided safely.",
+        409
+      );
+    }
 
     let reversalJournalId: string | null = null;
     if (refund.mode === "ISSUE_REFUND") {
@@ -133,7 +140,7 @@ export async function voidRefund(input: VoidRefundInput) {
         throw new ApiError(CODES.RESOURCE_CHANGED, "This refund journal was already reversed.", 409);
       }
     } else if (refund.mode === "CARRY_FORWARD") {
-      if (refund.journalId) {
+      if (refund.journalId || refund.reversalJournalId) {
         throw new ApiError(
           CODES.RESOURCE_CHANGED,
           "This carry-forward unexpectedly has a journal and cannot be voided safely.",

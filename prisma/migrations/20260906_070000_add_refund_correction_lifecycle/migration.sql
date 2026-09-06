@@ -2,6 +2,7 @@
 -- never deleted or edited back into an active state; voiding records who/when/
 -- why and, for cash payouts, links the compensating reversal journal.
 ALTER TABLE "Refund"
+  ALTER COLUMN "status" DROP DEFAULT,
   ADD COLUMN "reversalJournalId" TEXT,
   ADD COLUMN "voidReason" TEXT,
   ADD COLUMN "voidedByUserId" TEXT,

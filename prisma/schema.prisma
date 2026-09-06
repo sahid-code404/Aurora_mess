@@ -445,7 +445,7 @@ model Refund {
   mode            String // CARRY_FORWARD | ISSUE_REFUND
   reason          String
   destination     String?
-  status            String    @default("PENDING") // COMPLETED | VOIDED; PROCESSING is transaction-internal, legacy PENDING/FAILED are invalid
+  status            String // COMPLETED | VOIDED; PROCESSING is transaction-internal, legacy PENDING/FAILED are invalid
   journalId         String?
   reversalJournalId String?
   createdByUserId   String

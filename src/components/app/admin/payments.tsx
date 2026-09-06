@@ -489,7 +489,7 @@ export default function AdminPayments() {
                             className="text-base sm:text-lg font-bold text-foreground block leading-tight"
                           />
                           <span className="kpi-num text-[11px] font-medium text-muted-foreground block mt-0.5">
-                            {ref.mode === "ISSUE_REFUND" ? "payout" : "carried forward"}
+                            {ref.status === "VOIDED" ? "corrected" : ref.mode === "ISSUE_REFUND" ? "payout" : "carried forward"}
                           </span>
                         </div>
                       </div>
@@ -501,8 +501,11 @@ export default function AdminPayments() {
                           <Chip tone={ref.mode === "ISSUE_REFUND" ? "warning" : "frost"} className="text-[10px] px-2 py-0.5 shrink-0">
                             {ref.mode === "ISSUE_REFUND" ? "Payout" : "Carry forward"}
                           </Chip>
-                          <span className="kpi-num text-[11px] text-muted-foreground truncate max-w-[200px]" title={ref.reason}>
-                            {ref.reason}
+                          <span
+                            className="kpi-num text-[11px] text-muted-foreground truncate max-w-[200px]"
+                            title={ref.status === "VOIDED" ? ref.voidReason ?? ref.reason : ref.reason}
+                          >
+                            {ref.status === "VOIDED" ? `Corrected: ${ref.voidReason ?? "Administrative correction"}` : ref.reason}
                           </span>
                           {ref.destination && (
                             <span className="kpi-num text-[11px] text-muted-foreground truncate max-w-[140px]" title={ref.destination}>
