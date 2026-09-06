@@ -1,0 +1,34 @@
+name: Phase 67 concurrency hardening
+
+on:
+  push:
+    branches:
+      - feat/phase67-final-state-contract-closure
+    paths:
+      - .github/workflows/phase67-harden-one-shot.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase67-final-state-contract-closure
+          fetch-depth: 0
+      - name: Apply Phase 67 hardening
+        run: python3 scripts/phase67_harden.py
+      - name: Remove one-shot helpers
+        run: |
+          rm scripts/phase67_harden.py
+          rm .github/workflows/phase67-harden-one-shot.yml
+      - name: Commit hardened patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: serialize formula configuration with billing inputs"
+          git push origin HEAD:feat/phase67-final-state-contract-closure
