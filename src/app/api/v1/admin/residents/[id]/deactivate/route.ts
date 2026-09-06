@@ -2,7 +2,7 @@
  * POST /api/v1/admin/residents/[id]/deactivate { reason }
  * ACTIVE → INACTIVE. MANDATORY revocation of every session (spec §133),
  * status history, audit (RESIDENT_DEACTIVATED) and a notification with the
- * reason.
+ * reason. Deactivation cannot strand unfinished resident-owned work.
  */
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -13,6 +13,7 @@ import { appendOutbox, sweepOutbox } from "@/lib/outbox";
 import { revokeAllUserSessions } from "@/lib/auth/session";
 import { reasonSchema } from "@/lib/validation";
 import { lockResidentLifecycleMutation } from "@/lib/domain/resident-lifecycle";
+import { assertNoUnfinishedResidentTasks } from "@/lib/domain/resident-operational-work";
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const id = ctx.params.id;
@@ -33,6 +34,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         409
       );
     }
+
+    // The Resident mutex also serializes task assignment. If assignment won
+    // first, this check sees the new unfinished task and refuses to strand it.
+    await assertNoUnfinishedResidentTasks(tx, ctx.institutionId, id);
 
     await tx.user.update({ where: { id }, data: { status: "INACTIVE" } });
     await tx.userStatusHistory.create({
