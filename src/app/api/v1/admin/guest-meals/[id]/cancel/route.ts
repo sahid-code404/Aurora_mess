@@ -1,7 +1,9 @@
 /**
  * POST /api/v1/admin/guest-meals/[id]/cancel — admin cancel with mandatory
  * reason + audit. Allowed while the request is still active (REQUESTED /
- * CONFIRMED / LOCKED); CONSUMED rows cannot be cancelled.
+ * CONFIRMED / LOCKED); CONSUMED rows cannot be cancelled. The host Resident
+ * row is the mutation mutex so cancellation serializes with overrides, booking
+ * and account lifecycle changes without requiring the host to remain ACTIVE.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -10,6 +12,7 @@ import { ApiError, CODES } from "@/lib/errors";
 import { reasonSchema } from "@/lib/validation";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
+import { lockResidentLifecycleMutation } from "@/lib/domain/resident-lifecycle";
 
 const bodySchema = z.object({ reason: reasonSchema });
 
@@ -17,7 +20,17 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   await requireInstitutionContext(ctx.institutionId);
   const body = await parseBody(ctx.req, bodySchema);
 
+  // Read only the immutable mutex key before the transaction. All lifecycle
+  // state is re-read after the Resident lock is acquired.
+  const target = await db.guestMealRequest.findFirst({
+    where: { id: ctx.params.id, institutionId: ctx.institutionId },
+    select: { hostResidentId: true },
+  });
+  if (!target) throw new ApiError(CODES.NOT_FOUND, "This guest meal could not be found.", 404);
+
   const result = await db.$transaction(async (tx) => {
+    await lockResidentLifecycleMutation(tx, ctx.institutionId, target.hostResidentId);
+
     const guest = await tx.guestMealRequest.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
     });
@@ -30,10 +43,17 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     const now = new Date();
-    const updated = await tx.guestMealRequest.update({
-      where: { id: guest.id },
+    const guard = await tx.guestMealRequest.updateMany({
+      where: { id: guest.id, status: guest.status },
       data: { status: "CANCELLED", lockedAt: now },
     });
+    if (guard.count !== 1) {
+      throw new ApiError(
+        CODES.RESOURCE_CHANGED,
+        "This guest meal was just changed. Refresh before trying again.",
+        409
+      );
+    }
 
     await appendAudit(
       {
@@ -52,7 +72,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       tx
     );
 
-    return updated;
+    return { ...guest, status: "CANCELLED", lockedAt: now };
   });
 
   return {
