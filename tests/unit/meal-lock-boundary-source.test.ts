@@ -51,7 +51,7 @@ describe("meal lock boundary source guards", () => {
   test("admin guest override cannot rewrite consumed history and creates locked rows at the true boundary", () => {
     const route = source("src/app/api/v1/admin/meals/[instanceId]/guest-override/route.ts");
 
-    expect(route).toContain("now.getTime() < instance.lockAt.getTime()");
+    expect(route).toContain("const lockPassed = now.getTime() >= instance.lockAt.getTime()");
     expect(route).toContain("now.getTime() >= instance.serviceEndAt.getTime()");
     expect(route).toContain('request.status === "CONSUMED"');
     expect(route).toContain('status: "LOCKED"');
