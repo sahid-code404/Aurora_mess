@@ -7,10 +7,11 @@
  * default `uploads-storage/` path is intended for single-host/local deployments.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
+import { readVerifiedStoredFileBytes } from "@/lib/storage-integrity";
 
 export const STORAGE_DIR = process.env.UPLOAD_STORAGE_DIR
   ? path.resolve(process.env.UPLOAD_STORAGE_DIR)
@@ -135,7 +136,11 @@ export async function cleanupUnreferencedStoredFile(
   return deleted.count === 1;
 }
 
-/** Authenticated read of stored bytes. */
+/**
+ * Authenticated read of immutable stored proof bytes. Runtime consumers get
+ * bytes only when the filesystem object still matches its authoritative DB
+ * size/checksum metadata and remains a regular file inside the storage root.
+ */
 export async function readStoredFile(
   fileId: string,
   institutionId: string
@@ -144,10 +149,13 @@ export async function readStoredFile(
     where: { id: fileId, institutionId },
   });
   if (!record) return null;
+
   try {
-    const buffer = await readFile(path.join(STORAGE_DIR, record.objectKey));
-    return { buffer, mimeType: record.mimeType, fileName: record.fileName };
+    const verified = await readVerifiedStoredFileBytes(STORAGE_DIR, record);
+    if (!verified.buffer || verified.issue) return null;
+    return { buffer: verified.buffer, mimeType: record.mimeType, fileName: record.fileName };
   } catch {
+    // Runtime proof reads fail closed on unexpected filesystem errors too.
     return null;
   }
 }
