@@ -30,6 +30,15 @@ export type AnnouncementLifecycleState = {
   archivedAt: Date | null;
   archiveReason: string | null;
   archivedByUserId: string | null;
+  lastTransitionAt: Date | null;
+};
+
+const ACTIVE_STATE: AnnouncementLifecycleState = {
+  archived: false,
+  archivedAt: null,
+  archiveReason: null,
+  archivedByUserId: null,
+  lastTransitionAt: null,
 };
 
 /** Serialize every mutation of one Announcement row. */
@@ -104,6 +113,7 @@ export async function announcementLifecycleStates(
       archivedAt: archived ? event.occurredAt : null,
       archiveReason: archived ? event.reason ?? null : null,
       archivedByUserId: archived ? event.actorUserId ?? null : null,
+      lastTransitionAt: event.occurredAt,
     });
   }
 
@@ -116,12 +126,16 @@ export async function announcementLifecycleState(
   announcementId: string
 ): Promise<AnnouncementLifecycleState> {
   const states = await announcementLifecycleStates(client, institutionId, [announcementId]);
-  return states.get(announcementId) ?? {
-    archived: false,
-    archivedAt: null,
-    archiveReason: null,
-    archivedByUserId: null,
-  };
+  return states.get(announcementId) ?? { ...ACTIVE_STATE };
+}
+
+/**
+ * Allocate an ordering timestamp only after the Announcement row mutex is held.
+ * This avoids PostgreSQL transaction-start timestamps reordering waiters.
+ */
+export function nextAnnouncementTransitionAt(state: AnnouncementLifecycleState, now = new Date()): Date {
+  const prior = state.lastTransitionAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+  return new Date(Math.max(now.getTime(), prior + 1));
 }
 
 /** Add lifecycle metadata without mutating the publication record. */
@@ -133,12 +147,7 @@ export async function decorateAnnouncementLifecycle<T extends { id: string }>(
   const states = await announcementLifecycleStates(client, institutionId, rows.map((row) => row.id));
   return rows.map((row) => ({
     ...row,
-    ...(states.get(row.id) ?? {
-      archived: false,
-      archivedAt: null,
-      archiveReason: null,
-      archivedByUserId: null,
-    }),
+    ...(states.get(row.id) ?? { ...ACTIVE_STATE }),
   }));
 }
 
