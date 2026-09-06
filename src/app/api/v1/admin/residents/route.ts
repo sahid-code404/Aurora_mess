@@ -1,10 +1,9 @@
 /**
  * GET /api/v1/admin/residents — resident roster (spec §131-134).
  * ?q= (name/email contains) &status= &cursor= &limit=25 (max 100).
- * Rows include profile, status, membership dates and the derived funds
- * summary (computed in parallel for the page; only for billable statuses).
- * KPI meta: { total, active, pending } — "total" counts RESIDENT users with
- * status ACTIVE | INACTIVE | CHANGES_REQUESTED (excludes PENDING/REJECTED).
+ * Rows include profile, status, membership dates, deletion lifecycle metadata
+ * and the derived funds summary. Due deletion requests are advanced before
+ * reads so the Admin queue reflects authoritative server time.
  */
 import { z } from "zod";
 import type { NextRequest } from "next/server";
@@ -13,6 +12,10 @@ import { db } from "@/lib/db";
 import { route } from "@/lib/auth/guard";
 import { ApiError, CODES } from "@/lib/errors";
 import { residentFundsSummary } from "@/lib/domain/funds";
+import {
+  refreshDueResidentRetirements,
+  serializeResidentDeletionRequest,
+} from "@/lib/domain/resident-retirement";
 
 const listQuerySchema = z.object({
   q: z.string().trim().max(60, "Search text is too long.").optional(),
@@ -65,6 +68,7 @@ function decodeCursor(cursor: string): { at: Date; id: string } | null {
 
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const query = parseQuery(listQuerySchema, ctx.req);
+  await refreshDueResidentRetirements(ctx.institutionId);
   const cursorInfo = query.cursor ? decodeCursor(query.cursor) : null;
 
   const conditions: Prisma.UserWhereInput[] = [
@@ -103,12 +107,32 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const last = page[page.length - 1];
   const nextCursor = hasMore && last ? `${last.createdAt.toISOString()}~${last.id}` : null;
 
-  // Funds summaries in parallel, only for billable states (spec §42).
-  const billable = page.filter((u) => u.status === "ACTIVE" || u.status === "INACTIVE");
+  const pageIds = page.map((u) => u.id);
+  const deletionRequests =
+    pageIds.length === 0
+      ? []
+      : await db.deletionRequest.findMany({
+          where: {
+            institutionId: ctx.institutionId,
+            entityType: "USER",
+            entityId: { in: pageIds },
+          },
+          orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+        });
+  const deletionByUser = new Map<string, (typeof deletionRequests)[number]>();
+  for (const request of deletionRequests) {
+    if (!deletionByUser.has(request.entityId)) deletionByUser.set(request.entityId, request);
+  }
+
+  // PENDING_DELETION residents retain financial obligations/credit while their
+  // account is non-loginable, so the roster must still expose funds context.
+  const billable = page.filter((u) =>
+    u.status === "ACTIVE" || u.status === "INACTIVE" || u.status === "PENDING_DELETION"
+  );
   const summaries = await Promise.all(billable.map((u) => residentFundsSummary(u.id)));
   const fundsByUser = new Map(summaries.map((s) => [s.residentId, s]));
 
-  const [total, active, pending] = await Promise.all([
+  const [total, active, pending, deletion] = await Promise.all([
     db.user.count({
       where: {
         institutionId: ctx.institutionId,
@@ -121,6 +145,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     }),
     db.user.count({
       where: { institutionId: ctx.institutionId, role: "RESIDENT", status: "PENDING_APPROVAL" },
+    }),
+    db.user.count({
+      where: { institutionId: ctx.institutionId, role: "RESIDENT", status: "PENDING_DELETION" },
     }),
   ]);
 
@@ -139,12 +166,16 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         }
       : null,
     funds: fundsByUser.get(u.id) ?? null,
+    deletionRequest:
+      u.status === "PENDING_DELETION"
+        ? serializeResidentDeletionRequest(deletionByUser.get(u.id) ?? null)
+        : null,
   }));
 
   const sortedData = [...data].sort((a, b) => {
     const getRank = (st: string) => {
-      if (st === "PENDING_APPROVAL") return 0; // Needs admin approval
-      if (st === "CHANGES_REQUESTED" || st === "PENDING_DELETION") return 1; // Needs review/attention
+      if (st === "PENDING_APPROVAL") return 0;
+      if (st === "CHANGES_REQUESTED" || st === "PENDING_DELETION") return 1;
       if (st === "ACTIVE") return 2;
       return 3;
     };
@@ -154,5 +185,5 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
 
-  return { data: sortedData, meta: { total, active, pending, nextCursor } };
+  return { data: sortedData, meta: { total, active, pending, deletion, nextCursor } };
 });
