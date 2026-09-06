@@ -28,6 +28,6 @@ describe("rule version persistence contract", () => {
     expect(migration).toContain("RULE_VERSION_STATE_NORMALIZED");
     expect(migration).toContain("status=SCHEDULED");
     expect(migration).toContain("status=DRAFT");
-    expect(migration).toContain("WHERE "status" = 'SCHEDULED'");
+    expect(migration).toContain('WHERE rv."status" = \'SCHEDULED\'');
   });
 });
