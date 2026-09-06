@@ -352,7 +352,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 25) || 25));
 
-  if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"].includes(status)) {
+  if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED"].includes(status)) {
     throw new ApiError(CODES.VALIDATION_FAILED, "Unknown payment status filter.", 400);
   }
 
@@ -380,18 +380,17 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const rows = await db.payment.findMany({ where, orderBy: [{ submittedAt: "desc" }, { id: "desc" }], take });
   const page = finishPage(rows, limit, (row) => row.submittedAt);
 
-  const [depositsAgg, pendingCount, refundPendingCount, refundsThisMonthAgg, funds] = await Promise.all([
+  const [depositsAgg, pendingCount, refundsThisMonthAgg, funds] = await Promise.all([
     db.payment.aggregate({
       _sum: { amountMinor: true },
       where: {
         residentId: ctx.user.id,
         institutionId: ctx.institutionId,
-        status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: "APPROVED",
         submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
     db.payment.count({ where: { residentId: ctx.user.id, institutionId: ctx.institutionId, status: "PENDING" } }),
-    db.refund.count({ where: { residentId: ctx.user.id, status: { in: ["PENDING", "PROCESSING"] } } }),
     db.refund.aggregate({
       _sum: { amountMinor: true },
       where: {
@@ -417,7 +416,6 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
       totalAvailableFormatted: formatMinor(funds.availableMinor),
       policyState: funds.policyState,
       pendingCount,
-      refundPendingCount,
       refundsThisMonth: refundsThisMonthAgg._sum.amountMinor ?? 0,
       refundsThisMonthFormatted: formatMinor(refundsThisMonthAgg._sum.amountMinor ?? 0),
     },

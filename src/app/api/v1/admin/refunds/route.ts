@@ -31,7 +31,6 @@ const bodySchema = z.object({
   amount: z.string().min(1, "Enter a refund amount."),
   mode: z.enum(["CARRY_FORWARD", "ISSUE_REFUND"]),
   reason: reasonSchema,
-  paymentId: z.string().optional(),
   destination: z.string().max(120, "Keep the destination under 120 characters.").optional(),
 });
 
@@ -56,7 +55,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     amountMinor,
     mode: body.mode,
     reason: body.reason,
-    paymentId: body.paymentId ?? null,
     destination: body.destination ?? null,
     actorUserId: ctx.user.id,
     requestId: ctx.requestId,

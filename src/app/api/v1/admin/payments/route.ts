@@ -15,7 +15,7 @@ import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-v
 
 export const dynamic = "force-dynamic";
 
-const STATUSES = ["PENDING", "APPROVED", "REJECTED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"];
+const STATUSES = ["PENDING", "APPROVED", "REJECTED", "VOIDED"];
 
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const url = new URL(ctx.req.url);
@@ -86,7 +86,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       _sum: { amountMinor: true },
       where: {
         institutionId: ctx.institutionId,
-        status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: "APPROVED",
         submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),

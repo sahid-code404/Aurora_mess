@@ -196,7 +196,7 @@ export async function reconcileInstitution(
     client.payment.findMany({
       where: {
         institutionId,
-        status: { in: ["APPROVED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: { in: ["APPROVED", "VOIDED"] },
       },
       select: { id: true, status: true, approvedJournalId: true, voidJournalId: true },
     }),

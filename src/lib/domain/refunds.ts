@@ -16,7 +16,6 @@ export type CreateRefundInput = {
   amountMinor: number;
   mode: RefundMode;
   reason: string;
-  paymentId?: string | null;
   destination?: string | null;
   actorUserId: string;
   requestId: string;
@@ -49,8 +48,9 @@ export type RefundEligibility = {
  * Determine whether a resident has an excess credit that may be resolved now.
  *
  * Refund lifecycle invariant:
- *   approved payment -> generated bill(s) -> bill settlement -> excess credit
- *   -> ISSUE_REFUND or CARRY_FORWARD.
+ *   approved resident payment pool -> generated bill(s) -> bill settlement ->
+ *   resident-level excess credit -> ISSUE_REFUND or CARRY_FORWARD.
+ * Refunds are intentionally not attributed to one arbitrary payment.
  *
  * A positive advance before the first generated bill is intentionally NOT
  * refundable. CARRY_FORWARD resolves the whole remaining excess for the latest
@@ -180,22 +180,6 @@ export async function createRefund(input: CreateRefundInput) {
     });
     if (!resident) throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
 
-    if (input.paymentId) {
-      const payment = await tx.payment.findFirst({
-        where: {
-          id: input.paymentId,
-          institutionId: input.institutionId,
-          residentId: resident.id,
-        },
-        select: { id: true },
-      });
-      if (!payment) {
-        throw new ApiError(CODES.VALIDATION_FAILED, "The linked payment does not belong to this resident.", 400, {
-          paymentId: "The linked payment does not belong to this resident.",
-        });
-      }
-    }
-
     const eligibility = await refundEligibilityForResident(resident.id, tx);
     if (!eligibility.eligible) {
       const message =
@@ -228,7 +212,7 @@ export async function createRefund(input: CreateRefundInput) {
       data: {
         institutionId: input.institutionId,
         residentId: resident.id,
-        paymentId: input.paymentId ?? null,
+        paymentId: null,
         amountMinor: input.amountMinor,
         mode: input.mode,
         reason: input.reason,
@@ -280,7 +264,6 @@ export async function createRefund(input: CreateRefundInput) {
           amountMinor: input.amountMinor,
           mode: input.mode,
           residentId: resident.id,
-          paymentId: input.paymentId ?? null,
           journalId,
           journalRefId: input.mode === "ISSUE_REFUND" ? created.id : null,
           billingPeriodId: eligibility.latestBill?.billingPeriodId ?? null,

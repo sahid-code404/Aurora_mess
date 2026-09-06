@@ -46,7 +46,6 @@ const STATUS_TONES: Record<string, Tone> = {
   RESTRICTED: "danger",
   OVERDUE: "danger",
   VOIDED: "danger",
-  REFUNDED: "frost",
   // Tasks
   ACCEPTED: "success",
   ASSIGNED: "frost",
@@ -84,7 +83,6 @@ const STATUS_LABELS: Record<string, string> = {
   RESTRICTED: "Restricted",
   OVERDUE: "Overdue",
   VOIDED: "Voided",
-  REFUNDED: "Refunded",
   ACCEPTED: "Accepted",
   ASSIGNED: "Assigned",
   IN_PROGRESS: "In progress",
