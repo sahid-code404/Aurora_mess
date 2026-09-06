@@ -59,6 +59,7 @@ interface MealInstanceEntry {
     serviceDate: string;
     serviceWindow: { startAt: string; endAt: string };
     cutoffAt: string;
+    lockAt: string;
     status: "OPEN" | "LOCKED" | string;
   };
   definition: { name: string; icon: string | null; colorToken: string | null; mealType: string };
@@ -109,6 +110,7 @@ interface GuestOverrideTarget {
   meal: ResidentMealEntry["today"][number];
   currentQuantity: number;
   targetQuantity: number;
+  serviceEnded: boolean;
 }
 
 /* ------------------------------- helpers -------------------------------- */
@@ -657,7 +659,10 @@ export default function AdminMeals() {
                             {r.today.map((meal) => {
                               const instance = data.instances.find((i) => i.instance.id === meal.mealInstanceId);
                               const cutoffPassed = instance
-                                ? new Date(instance.instance.cutoffAt).getTime() <= Date.now() || instance.instance.status !== "OPEN"
+                                ? new Date(instance.instance.lockAt).getTime() <= Date.now() || instance.instance.status !== "OPEN"
+                                : false;
+                              const serviceEnded = instance
+                                ? new Date(instance.instance.serviceWindow.endAt).getTime() <= Date.now()
                                 : false;
                               const lockedNow = meal.locked || cutoffPassed;
                               const canAdminOverride = lockedNow;
@@ -756,6 +761,7 @@ export default function AdminMeals() {
                                                 meal,
                                                 currentQuantity: mealGuestCount,
                                                 targetQuantity: mealGuestCount - 1,
+                                                serviceEnded,
                                               });
                                             }}
                                             aria-label={`Remove one guest from ${meal.name}`}
@@ -792,6 +798,7 @@ export default function AdminMeals() {
                                                 meal,
                                                 currentQuantity: mealGuestCount,
                                                 targetQuantity: mealGuestCount + 1,
+                                                serviceEnded,
                                               });
                                             }}
                                             aria-label={`Add one guest to ${meal.name}`}
@@ -820,6 +827,7 @@ export default function AdminMeals() {
                                               meal,
                                               currentQuantity: 0,
                                               targetQuantity: 1,
+                                              serviceEnded,
                                             });
                                           }}
                                           aria-label={`Add guest to ${meal.name}`}
@@ -899,18 +907,28 @@ export default function AdminMeals() {
         <ConfirmDialog
           open
           onOpenChange={(open) => !open && setGuestOverride(null)}
-          title={`${guestOverride.targetQuantity > guestOverride.currentQuantity ? "Add guest meal" : "Remove guest meal"} — ${guestOverride.meal.name}`}
+          title={`${guestOverride.serviceEnded ? "Correct guest meal" : guestOverride.targetQuantity > guestOverride.currentQuantity ? "Add guest meal" : "Remove guest meal"} — ${guestOverride.meal.name}`}
           description={
             <>
-              {guestOverride.meal.locked
-                ? "This meal is already locked for residents. Your admin override applies after the cutoff and is recorded in the audit trail with your reason."
-                : "The resident's guest meal count is modified by your decision. Residents are notified and the change is audited."}
+              {guestOverride.serviceEnded
+                ? "This service has ended. You are making an audited post-service correction. The corrected guest quantity will update meal counts, guest income, Formula Engine variables and future billing while this billing month is still open. Once billing is in progress or finalized, this source correction is locked and bill/refund correction must be used instead."
+                : guestOverride.meal.locked
+                  ? "This meal is already locked for residents. Your admin override applies after the lock boundary and is recorded in the audit trail with your reason."
+                  : "The resident's guest meal count is modified by your decision. Residents are notified and the change is audited."}
               <span className="mt-2 block font-medium">
                 {guestOverride.resident.fullName} · {guestOverride.meal.name} → {guestOverride.currentQuantity} to {guestOverride.targetQuantity} {guestOverride.targetQuantity === 1 ? "guest" : "guests"}
               </span>
             </>
           }
-          confirmLabel={guestOverride.targetQuantity === 0 ? "Remove guests" : `Set to ${guestOverride.targetQuantity} guest${guestOverride.targetQuantity === 1 ? "" : "s"}`}
+          confirmLabel={
+            guestOverride.serviceEnded
+              ? guestOverride.targetQuantity === 0
+                ? "Correct to 0 guests"
+                : `Correct to ${guestOverride.targetQuantity} guest${guestOverride.targetQuantity === 1 ? "" : "s"}`
+              : guestOverride.targetQuantity === 0
+                ? "Remove guests"
+                : `Set to ${guestOverride.targetQuantity} guest${guestOverride.targetQuantity === 1 ? "" : "s"}`
+          }
           tone={guestOverride.targetQuantity === 0 ? "destructive" : "primary"}
           requireReason
           reasonPlaceholder="Reason (required for the audit trail)"
