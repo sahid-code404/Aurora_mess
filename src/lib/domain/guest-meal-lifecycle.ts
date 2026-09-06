@@ -26,11 +26,12 @@ export function deriveGuestMealLifecycleStatus(
  *
  * Status-qualified updateMany calls make concurrent refreshes idempotent.
  *
- * Billing calls this function first during its interactive transaction, without
- * a hostResidentId. In that exact transaction-scoped form we also acquire every
- * resident financial mutex before any lifecycle/readiness query. This turns the
- * existing billing lifecycle boundary into a coherent financial snapshot
- * boundary without making ordinary guest-history GET refreshes hold locks.
+ * Billing calls this function first during its transaction, without a
+ * hostResidentId and with an explicit transaction client. In that exact
+ * transaction-scoped form we also acquire every resident financial mutex before
+ * any lifecycle/readiness query. Ordinary guest-history refreshes use the
+ * global client (or a host scope) and therefore do not hold institution-wide
+ * financial locks.
  */
 export async function refreshGuestMealLifecycle(options: {
   institutionId: string;
@@ -43,11 +44,10 @@ export async function refreshGuestMealLifecycle(options: {
   const client = options.client ?? db;
   const now = options.now ?? new Date();
 
-  // Prisma interactive transaction clients intentionally do not expose
-  // `$transaction`. Billing passes one explicitly and has no host scope. The
-  // global db client (ordinary GET refreshes) keeps its normal non-locking path.
-  const isInteractiveTransaction = Boolean(options.client) && typeof options.client.$transaction !== "function";
-  if (isInteractiveTransaction && !options.hostResidentId) {
+  // Do not infer Prisma runtime shape here. An explicitly supplied client with
+  // no host scope is the billing transaction contract and therefore owns the
+  // institution-wide resident financial boundary.
+  if (options.client && !options.hostResidentId) {
     await lockInstitutionResidentFinancialMutations(client, options.institutionId);
   }
 
