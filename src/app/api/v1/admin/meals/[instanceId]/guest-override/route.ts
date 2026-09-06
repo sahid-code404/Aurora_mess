@@ -2,7 +2,8 @@
  * POST /api/v1/admin/meals/[instanceId]/guest-override — admin override for guest meals.
  * Allows administrators to add, step (+/-), or remove guest meals for any active
  * resident even AFTER cutoff (admin authority). Records reason in audit trail
- * and notifies the resident.
+ * and notifies the resident. Resident-row serialization prevents concurrent
+ * access-removal and guest mutations from validating different account states.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -13,6 +14,7 @@ import { formatDateLabel, formatTimeLabel } from "@/lib/time";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { queueNotification, sweepOutboxSafe } from "@/lib/domain/notify";
+import { lockActiveResidentForMealMutation } from "@/lib/domain/resident-meal-mutation";
 
 const bodySchema = z.object({
   residentId: z.string().min(1),
@@ -26,20 +28,13 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const instanceId = ctx.params.instanceId;
 
   const result = await db.$transaction(async (tx) => {
+    const resident = await lockActiveResidentForMealMutation(tx, ctx.institutionId, body.residentId);
+
     const instance = await tx.mealInstance.findFirst({
       where: { id: instanceId, institutionId: ctx.institutionId },
       include: { definition: true },
     });
     if (!instance) throw new ApiError(CODES.NOT_FOUND, "This meal could not be found.", 404);
-
-    const resident = await tx.user.findFirst({
-      where: { id: body.residentId, institutionId: ctx.institutionId, role: "RESIDENT" },
-      include: { profile: true },
-    });
-    if (!resident) throw new ApiError(CODES.NOT_FOUND, "This resident could not be found.", 404);
-    if (resident.status !== "ACTIVE") {
-      throw new ApiError(CODES.VALIDATION_FAILED, "Only active residents can be overridden.", 409);
-    }
 
     const now = new Date();
     if (instance.status === "CANCELLED") {
@@ -54,7 +49,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       );
     }
 
-    // Active (non-cancelled) guest requests for this resident and instance
     const existing = await tx.guestMealRequest.findMany({
       where: {
         institutionId: ctx.institutionId,
@@ -67,9 +61,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
 
     const currentTotal = existing.reduce((s, g) => s + g.quantity, 0);
 
-    // Determine the original user-requested baseline quantity.
-    // If already admin-overridden, parse "Admin override|orig:X" from note.
-    // Otherwise the current total IS the user's original baseline.
     let originalBaseline = currentTotal;
     for (const req of existing) {
       const match = req.note?.match(/Admin override\|orig:(\d+)/);
@@ -89,7 +80,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     let targetRecordId: string | null = null;
 
     if (body.quantity === 0) {
-      // Cancel all existing guest requests for this meal instance with override marker
       for (const req of existing) {
         await tx.guestMealRequest.update({
           where: { id: req.id },
@@ -113,7 +103,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         targetRecordId = created.id;
       }
     } else if (existing.length > 0) {
-      // Update primary request to the target quantity
       const primary = existing[0];
       targetRecordId = primary.id;
       await tx.guestMealRequest.update({
@@ -126,7 +115,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         },
       });
 
-      // Cancel any secondary duplicate active requests
       for (let i = 1; i < existing.length; i++) {
         await tx.guestMealRequest.update({
           where: { id: existing[i].id },
@@ -134,7 +122,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         });
       }
     } else {
-      // Create new request with target quantity
       const created = await tx.guestMealRequest.create({
         data: {
           institutionId: ctx.institutionId,
