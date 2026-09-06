@@ -27,6 +27,8 @@ import { finishPage, formFile, formText, keysetWhere, parseJsonField, readFormDa
 import { serializeExpense } from "@/lib/domain/serialize";
 import { getAccountBalances } from "@/lib/domain/ledger";
 import { periodBounds } from "@/lib/domain/formula/period-variables";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertExpensePeriodMutable } from "@/lib/domain/expense-period";
 
 export const dynamic = "force-dynamic";
 
@@ -111,12 +113,12 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
 
   const expenseDate = new Date(`${dateKey.data!}T00:00:00.000Z`);
 
-  // Closed-period guard runs BEFORE staging proof bytes. A request that is
-  // deterministically invalid must not create storage that then needs recovery.
+  // Best-effort deterministic preflight before staging proof bytes. The exact
+  // authoritative check is repeated after taking the institution mutex below.
   const inst = await getInstitution(ctx.institutionId);
   const tz = inst?.timezone ?? "UTC";
   const billedPeriods = await db.billingPeriod.findMany({
-    where: { institutionId: ctx.institutionId, status: "BILLED" },
+    where: { institutionId: ctx.institutionId, status: { in: ["BILLED", "REOPENED"] } },
     select: { year: true, month: true },
   });
   for (const p of billedPeriods) {
@@ -124,22 +126,25 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (expenseDate >= bounds.startAt && expenseDate < bounds.endExclusiveAt) {
       throw new ApiError(
         CODES.BILLING_PERIOD_CLOSED,
-        `The billing period for ${p.year}-${String(p.month).padStart(2, "0")} is already billed — expenses can no longer be dated inside it.`,
+        `The billing period for ${p.year}-${String(p.month).padStart(2, "0")} is already frozen — expenses can no longer be dated inside it.`,
         409,
-        { date: "This date falls inside an already-billed period." }
+        { date: "This date falls inside an already-frozen period." }
       );
     }
   }
 
-  // Proof + display number are staged only after all deterministic guards.
-  // A display-number gap is harmless; a failed domain transaction explicitly
-  // removes an unreferenced proof below.
+  // Proof + display number are staged only after deterministic guards. If the
+  // authoritative transaction check later loses a race to billing, the proof is
+  // removed by the catch path below.
   const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null;
   const displayNumber = await nextExpenseNumber();
 
   const expense = await (async () => {
     try {
       return await db.$transaction(async (tx) => {
+        await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+        await assertExpensePeriodMutable(tx, ctx.institutionId, dateKey.data!);
+
         const created = await tx.expense.create({
           data: {
             institutionId: ctx.institutionId,

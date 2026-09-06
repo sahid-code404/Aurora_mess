@@ -1,8 +1,8 @@
 /**
  * POST /api/v1/admin/expenses/[id]/void — void an APPROVED expense (auth ADMIN).
- * Transaction: status guard → REVERSAL journal (Dr CASH / Cr MESS_EXPENSE — the
- * mirror of the approval entry) → reversalJournalId → audit. Approved expenses
- * are never deleted or edited (spec §41).
+ * Transaction: institution billing mutex → period guard → status guard →
+ * REVERSAL journal (Dr CASH / Cr MESS_EXPENSE — the mirror of approval) → audit.
+ * Approved expenses are never deleted or edited (spec §41).
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -13,6 +13,8 @@ import { sweepOutbox } from "@/lib/outbox";
 import { reasonSchema } from "@/lib/validation";
 import { postJournal } from "@/lib/domain/ledger";
 import { serializeExpense } from "@/lib/domain/serialize";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertExpensePeriodMutable } from "@/lib/domain/expense-period";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const body = await parseBody(ctx.req, bodySchema);
 
   const payload = await db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+
     const expense = await tx.expense.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
       include: { category: { select: { id: true, name: true } }, _count: { select: { items: true } } },
@@ -33,6 +37,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (expense.status !== "APPROVED") {
       throw new ApiError(CODES.EXPENSE_INVALID_STATE, "Only approved expenses can be voided.", 409);
     }
+
+    await assertExpensePeriodMutable(tx, ctx.institutionId, expense.date.toISOString().slice(0, 10));
 
     const guard = await tx.expense.updateMany({
       where: { id: expense.id, status: "APPROVED" },

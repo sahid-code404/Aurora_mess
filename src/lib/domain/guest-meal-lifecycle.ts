@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { lockInstitutionResidentFinancialMutations } from "@/lib/domain/financial-lock";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
 
 export type GuestMealLifecycleStatus = "REQUESTED" | "CONFIRMED" | "LOCKED" | "CANCELLED" | "CONSUMED";
 
@@ -28,10 +29,11 @@ export function deriveGuestMealLifecycleStatus(
  *
  * Billing calls this function first during its transaction, without a
  * hostResidentId and with an explicit transaction client. In that exact
- * transaction-scoped form we also acquire every resident financial mutex before
- * any lifecycle/readiness query. Ordinary guest-history refreshes use the
- * global client (or a host scope) and therefore do not hold institution-wide
- * financial locks.
+ * transaction-scoped form we acquire the institution billing mutex first and
+ * then every resident settlement mutex before any lifecycle/readiness query.
+ * This is the global financial lock order: Institution -> resident User rows.
+ * Ordinary guest-history refreshes use the global client (or a host scope) and
+ * therefore do not hold transaction-wide billing locks.
  */
 export async function refreshGuestMealLifecycle(options: {
   institutionId: string;
@@ -44,10 +46,11 @@ export async function refreshGuestMealLifecycle(options: {
   const client = options.client ?? db;
   const now = options.now ?? new Date();
 
-  // Do not infer Prisma runtime shape here. An explicitly supplied client with
-  // no host scope is the billing transaction contract and therefore owns the
-  // institution-wide resident financial boundary.
+  // An explicitly supplied client with no host scope is the billing-readiness
+  // contract. In an actual Prisma transaction these FOR UPDATE locks persist to
+  // commit; with the global client they are harmless statement-scoped guards.
   if (options.client && !options.hostResidentId) {
+    await lockInstitutionFinancialMutation(client, options.institutionId);
     await lockInstitutionResidentFinancialMutations(client, options.institutionId);
   }
 

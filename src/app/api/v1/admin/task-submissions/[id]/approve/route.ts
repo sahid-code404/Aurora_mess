@@ -2,7 +2,8 @@
  * POST /api/v1/admin/task-submissions/[id]/approve — verify submitted task work.
  *
  * MARKET_PURCHASE: recompute item totals server-side, create exactly one official
- * Expense, post Dr MESS_EXPENSE / Cr CASH, then approve the submission/task.
+ * Expense dated to the submission's institution-local business date, post
+ * Dr MESS_EXPENSE / Cr CASH, then approve the submission/task.
  *
  * GENERAL: approve the completion with NO Expense and NO journal. Any purchase
  * lines or non-zero claimed total on a Normal Task fail closed as inconsistent
@@ -19,6 +20,8 @@ import { nextExpenseNumber } from "@/lib/ids";
 import { postJournal, ACCOUNT_CODES } from "@/lib/domain/ledger";
 import { isUniqueViolation, requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { queueNotification, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertExpensePeriodMutable } from "@/lib/domain/expense-period";
 
 const bodySchema = z.object({ reason: z.string().trim().max(500).optional() });
 
@@ -28,6 +31,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const body = await parseBody(ctx.req, bodySchema);
 
   const result = await db.$transaction(async (tx) => {
+    // SUBMITTED is a billing-readiness blocker. Hold the same institution mutex
+    // as bill generation before resolving that blocker or creating its expense.
+    await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+
     const submission = await tx.taskSubmission.findUnique({
       where: { id: ctx.params.id },
       include: { items: true, task: true },
@@ -78,7 +85,11 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     const now = new Date();
-    const expenseDate = localDateMidnightUtc(dateKeyInTz(now, tz));
+    // Freeze the financial business date to when the resident submitted the
+    // purchase, not when an Admin happened to review it. This prevents an
+    // August purchase approved in September from silently moving to September.
+    const expenseDateKey = dateKeyInTz(submission.submittedAt, tz);
+    const expenseDate = localDateMidnightUtc(expenseDateKey);
     const description = `Market purchase — ${submission.task.description}`;
 
     let expenseId: string | null = null;
@@ -86,9 +97,13 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     let displayNumber: string | null = null;
 
     if (!isGeneralTask) {
-      // Number allocation participates in this exact transaction so it sees any
-      // uncommitted expense rows created earlier in the same approval workflow.
-      displayNumber = await nextExpenseNumber(tx, now);
+      // A submitted purchase cannot mutate a month whose bill snapshot is
+      // already frozen. The institution mutex makes this check race-safe.
+      await assertExpensePeriodMutable(tx, ctx.institutionId, expenseDateKey);
+
+      // Numbering follows the purchase business month too; allocation remains
+      // inside this exact transaction and therefore rolls back on failure.
+      displayNumber = await nextExpenseNumber(tx, expenseDate);
       try {
         const expense = await tx.expense.create({
           data: {
@@ -185,6 +200,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           itemCount: lines.length,
           claimedTotalMinor: submission.claimedTotalMinor,
           approvedTotalMinor: totalMinor,
+          expenseDate: isGeneralTask ? null : expenseDateKey,
         },
       },
       tx
@@ -208,6 +224,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
             totalMinor,
             journalId,
             sourceTaskSubmissionId: submission.id,
+            date: expenseDateKey,
           }),
           metadata: { source: "TASK", taskId: submission.taskId, submissionId: submission.id },
         },
@@ -250,6 +267,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       displayNumber,
       journalId,
       itemCount: lines.length,
+      expenseDate: isGeneralTask ? null : expenseDateKey,
     };
   });
 
