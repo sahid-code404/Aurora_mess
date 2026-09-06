@@ -641,7 +641,7 @@ model RuleVersion {
   checksum         String
   effectiveFrom    DateTime?
   effectiveUntil   DateTime?
-  status           String    @default("DRAFT") // DRAFT | ACTIVE | SCHEDULED | HISTORICAL
+  status           String    @default("DRAFT") // DRAFT | ACTIVE | HISTORICAL
   createdByUserId  String?
   reason           String?
   createdAt        DateTime  @default(now())
