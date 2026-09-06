@@ -629,7 +629,7 @@ model RuleDefinition {
   versions RuleVersion[]
 
   @@unique([institutionId, key])
-  @@index([institutionId, policyType, status])
+  @@index([institutionId, policyType])
 }
 
 model RuleVersion {
