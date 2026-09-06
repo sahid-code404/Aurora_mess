@@ -7,9 +7,17 @@ const source = readFileSync(
 );
 
 describe("payment idempotency and rate-limit ordering", () => {
-  test("completed replays happen before quota consumption while in-progress requests remain limited", () => {
+  test("completed replays and fingerprint mismatches happen before quota consumption while in-progress requests remain limited", () => {
+    const scopedFingerprintCheck = source.indexOf(
+      "const replay = parseIdempotencyReplay(existing.responseJson, requestFingerprint)"
+    );
+    const scopedMismatch = source.indexOf(
+      'if (replay.state === "MISMATCH") throw paymentIdempotencyMismatch();',
+      scopedFingerprintCheck
+    );
     const scopedReplay = source.indexOf(
-      "return { data: JSON.parse(existing.responseJson), meta: { idempotentReplay: true } }"
+      "return { data: replay.payload, meta: { idempotentReplay: true } }",
+      scopedFingerprintCheck
     );
     const legacyReplay = source.indexOf(
       "return { data: payload, meta: { idempotentReplay: true } }"
@@ -25,7 +33,9 @@ describe("payment idempotency and rate-limit ordering", () => {
       "const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null"
     );
 
-    expect(scopedReplay).toBeGreaterThan(-1);
+    expect(scopedFingerprintCheck).toBeGreaterThan(-1);
+    expect(scopedMismatch).toBeGreaterThan(scopedFingerprintCheck);
+    expect(scopedReplay).toBeGreaterThan(scopedMismatch);
     expect(legacyReplay).toBeGreaterThan(-1);
     expect(legacyInProgressDetected).toBeGreaterThan(-1);
     expect(limiter).toBeGreaterThan(scopedReplay);
