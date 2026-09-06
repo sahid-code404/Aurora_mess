@@ -26,6 +26,7 @@ import {
 import { keyOfUtcDate, requireInstitutionContext, dayCountBetween } from "@/lib/domain/meal-engine";
 import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
+import { lockActiveResidentForMealMutation } from "@/lib/domain/resident-meal-mutation";
 
 const IDEMPOTENCY_SCOPE = "GUEST_MEAL_ADD";
 
@@ -69,10 +70,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     ? actorScopedIdempotencyKey(ctx.user.id, body.idempotencyKey)
     : null;
 
-  // Transitional compatibility for unexpired pre-Phase-31 raw-key records.
-  // A completed legacy payload is returned only if its guest booking belongs to
-  // the authenticated resident. Its original request fingerprint is unknowable,
-  // so compatibility lasts only until the existing 24-hour expiry.
   if (body.idempotencyKey) {
     const replayNow = new Date();
     const legacy = await db.idempotencyRecord.findUnique({
@@ -134,6 +131,8 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       }
     }
 
+    const resident = await lockActiveResidentForMealMutation(tx, ctx.institutionId, ctx.user.id);
+
     const instance = await tx.mealInstance.findFirst({
       where: { id: body.mealInstanceId, institutionId: ctx.institutionId },
       include: { definition: true },
@@ -167,7 +166,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         unitPriceMinor,
         totalPriceMinor,
         note: body.note ?? null,
-        status: "CONFIRMED", // v1 auto-confirm (documented)
+        status: "CONFIRMED",
       },
     });
 
@@ -194,11 +193,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       tx
     );
 
-    const resident = await tx.user.findUnique({
-      where: { id: ctx.user.id },
-      include: { profile: true },
-    });
-    const residentName = resident?.profile?.fullName || ctx.user.email;
+    const residentName = resident.profile?.fullName || ctx.user.email;
 
     await notifyAdmins(
       ctx.institutionId,
@@ -224,9 +219,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       createdAt: guest.createdAt.toISOString(),
     };
 
-    // Persist the fingerprint and replay payload before commit. A concurrent
-    // duplicate blocks on the actor-scoped claim row and can replay only if its
-    // normalized booking details have the exact same request hash.
     if (storageIdempotencyKey && requestHash) {
       await completeIdempotencyKey({
         client: tx,
@@ -246,7 +238,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   }
 
   await sweepOutboxSafe();
-  // Opportunistic retention must not affect the committed guest booking.
   await sweepExpiredIdempotencyRecords({ institutionId: ctx.institutionId }).catch(() => 0);
   return { data: result.payload };
 });
@@ -301,7 +292,6 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
     note: g.note,
     status: g.status,
     createdAt: g.createdAt.toISOString(),
-    /** Instance cutoff instant — the client renders the "under cutoff" state. */
     cutoffAt: g.mealInstance.cutoffAt.toISOString(),
   }));
 
