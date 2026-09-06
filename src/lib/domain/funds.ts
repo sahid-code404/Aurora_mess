@@ -248,14 +248,16 @@ function deriveBillStatus(
 
 /**
  * Recompute the resident's ENTIRE bill settlement from first principles:
- * pool = Σ APPROVED payments (voided/pending excluded), allocated FIFO to the
- * resident's live bills (oldest due first, each capped at subtotal+adjustments).
+ * pool = Σ APPROVED payments − Σ COMPLETED ISSUE_REFUND cash payouts,
+ * allocated FIFO to live bills (oldest due first, each capped at
+ * subtotal+adjustments). Pending/voided payments and voided refunds are excluded;
+ * carry-forward never removes cash and therefore does not reduce this pool.
  * Excess pool stays unapplied (= the resident's available credit).
  *
- * Why a full recompute instead of incremental apply/un-apply: a payment's
- * exact attribution to bills isn't stored, and approve/void/refund can each
- * change the pool — recomputing is idempotent, race-safe to re-run, and can
- * never drift (no per-event arithmetic to get wrong).
+ * Why a full recompute instead of incremental apply/un-apply: exact payment
+ * attribution isn't stored, and approve/void/refund/refund-correction can each
+ * change spendable resident funds. Recomputing is idempotent, race-safe to
+ * re-run, and cannot drift through per-event arithmetic.
  * Read-model only — money journals live on the ledger. Must run inside the
  * caller's transaction.
  */
@@ -272,11 +274,19 @@ export async function recomputeBillSettlement(
   const timeZone = institution?.timezone ?? "UTC";
   const statusNow = new Date();
 
-  const poolAgg = await client.payment.aggregate({
-    where: { residentId, status: "APPROVED" },
-    _sum: { amountMinor: true },
-  });
-  const poolMinor = poolAgg._sum.amountMinor ?? 0;
+  const [approvedAgg, completedCashRefundAgg] = await Promise.all([
+    client.payment.aggregate({
+      where: { residentId, status: "APPROVED" },
+      _sum: { amountMinor: true },
+    }),
+    client.refund.aggregate({
+      where: { residentId, status: "COMPLETED", mode: "ISSUE_REFUND" },
+      _sum: { amountMinor: true },
+    }),
+  ]);
+  const approvedMinor = approvedAgg._sum.amountMinor ?? 0;
+  const completedCashRefundMinor = completedCashRefundAgg._sum.amountMinor ?? 0;
+  const poolMinor = Math.max(0, approvedMinor - completedCashRefundMinor);
 
   const bills = await client.bill.findMany({
     where: { residentId, status: { not: "VOIDED" } },
