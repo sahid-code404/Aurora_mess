@@ -23,128 +23,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace(path: str, old: str, new: str, count: int = 1):
-              p = Path(path)
-              text = p.read_text()
-              actual = text.count(old)
-              if actual != count:
-                  raise SystemExit(f"{path}: expected {count} occurrences, found {actual}: {old!r}")
-              p.write_text(text.replace(old, new, count))
-
-          replace(
-              "prisma/schema.prisma",
-              '  startsAt         DateTime  @default(now())\n  expiresAt        DateTime?\n  approvedByUserId String\n',
-              '  startsAt         DateTime  @default(now())\n  expiresAt        DateTime\n  approvedByUserId String\n',
-          )
-
-          replace(
-              "src/lib/domain/policy-exemption.ts",
-              '    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],\n',
-              '    expiresAt: { gt: now },\n',
-          )
-          replace(
-              "src/lib/domain/policy-exemption.ts",
-              '      (exemption.expiresAt === null || exemption.expiresAt.getTime() > now.getTime());\n',
-              '      exemption.expiresAt.getTime() > now.getTime();\n',
-          )
-          replace(
-              "src/lib/domain/policy-exemption.ts",
-              '        beforeSummary: exemption.expiresAt ? `until ${exemption.expiresAt.toISOString()}` : "legacy open-ended exemption",\n',
-              '        beforeSummary: `until ${exemption.expiresAt.toISOString()}`,\n',
-          )
-          replace(
-              "src/lib/domain/policy-exemption.ts",
-              '        afterSummary: `until ${created.expiresAt!.toISOString()}`,\n',
-              '        afterSummary: `until ${created.expiresAt.toISOString()}`,\n',
-          )
-          replace(
-              "src/lib/domain/policy-exemption.ts",
-              '          expiresAt: created.expiresAt!.toISOString(),\n',
-              '          expiresAt: created.expiresAt.toISOString(),\n',
-          )
-
-          replace(
-              "src/lib/domain/funds.ts",
-              '        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],\n',
-              '        expiresAt: { gt: new Date() },\n',
-          )
-          replace(
-              "src/lib/domain/funds.ts",
-              '    graceUntilIso = activeExemption.expiresAt?.toISOString() ?? null;\n',
-              '    graceUntilIso = activeExemption.expiresAt.toISOString();\n',
-          )
-
-          replace(
-              "src/app/api/v1/admin/funds/route.ts",
-              '        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],\n',
-              '        expiresAt: { gt: new Date() },\n',
-          )
-          replace(
-              "src/app/api/v1/admin/funds/route.ts",
-              '        expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,\n',
-              '        expiresAt: e.expiresAt.toISOString(),\n',
-          )
-
-          route = Path("src/app/api/v1/admin/policy-exemptions/route.ts")
-          text = route.read_text()
-          old_block = '''      startsAt: { lte: now },\n      // Legacy null-expiry rows remain visible so Admin can explicitly cancel\n      // them; all new writes are finite through the POST contract below.\n      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],\n'''
-          new_block = '''      startsAt: { lte: now },\n      expiresAt: { gt: now },\n'''
-          if text.count(old_block) != 1:
-              raise SystemExit("policy exemption GET legacy block not found exactly once")
-          text = text.replace(old_block, new_block, 1)
-          text = text.replace('      expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,\n      legacyOpenEnded: e.expiresAt === null,\n', '      expiresAt: e.expiresAt.toISOString(),\n', 1)
-          text = text.replace('      expiresAt: exemption.expiresAt!.toISOString(),\n      legacyOpenEnded: false,\n', '      expiresAt: exemption.expiresAt.toISOString(),\n', 1)
-          route.write_text(text)
-
-          replace(
-              "src/lib/domain/billing.ts",
-              '        expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,\n',
-              '        expiresAt: e.expiresAt.toISOString(),\n',
-          )
-          replace(
-              "src/components/app/admin/_shared/types.ts",
-              '  expiresAt: string | null;\n  approvedByUserId: string;\n  createdAt: string;\n}\n',
-              '  expiresAt: string;\n  approvedByUserId: string;\n  createdAt: string;\n}\n',
-          )
-          replace(
-              "src/components/app/admin/funds.tsx",
-              '                    {ex.expiresAt ? `Until ${fmtDate(ex.expiresAt)}` : "Until cancelled"} · granted {fmtDate(ex.createdAt)}\n',
-              '                    Until {fmtDate(ex.expiresAt)} · granted {fmtDate(ex.createdAt)}\n',
-          )
-
-          migration = Path("prisma/migrations/20260906_120000_finite_policy_exemptions/migration.sql")
-          migration.parent.mkdir(parents=True, exist_ok=False)
-          migration.write_text('''-- Phase 63 — enforce the finite deficit-policy exemption contract.\n-- Legacy open-ended exemptions are retained as history, audited, and ended\n-- at migration time before the persistence column becomes NOT NULL.\n\nINSERT INTO "AuditEvent" (\n  "id", "institutionId", "actorRole", "action", "entityType", "entityId",\n  "occurredAt", "reason", "beforeSummary", "afterSummary"\n)\nSELECT\n  'phase63-finite-' || "id",\n  "institutionId",\n  'SYSTEM',\n  'POLICY_EXEMPTION_LEGACY_ENDED',\n  'POLICY_EXEMPTION',\n  "id",\n  CURRENT_TIMESTAMP,\n  'Legacy open-ended exemptions are invalid under the finite exemption lifecycle.',\n  'legacy open-ended exemption',\n  'ended during finite exemption migration'\nFROM "PolicyExemption"\nWHERE "expiresAt" IS NULL\nON CONFLICT ("id") DO NOTHING;\n\nUPDATE "PolicyExemption"\nSET "expiresAt" = CURRENT_TIMESTAMP\nWHERE "expiresAt" IS NULL;\n\nALTER TABLE "PolicyExemption" ALTER COLUMN "expiresAt" SET NOT NULL;\n''')
-
-          source_test = Path("tests/unit/policy-exemption-finite-source.test.ts")
-          source_test.write_text('''import { describe, expect, test } from "bun:test";\nimport { readFileSync } from "node:fs";\n\nfunction source(path: string): string {\n  return readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");\n}\n\ndescribe("finite policy exemption persistence", () => {\n  test("schema and migration cannot preserve permanent exemptions", () => {\n    const schema = source("prisma/schema.prisma");\n    const migration = source("prisma/migrations/20260906_120000_finite_policy_exemptions/migration.sql");\n    const model = schema.slice(schema.indexOf("model PolicyExemption {"), schema.indexOf("model PasswordResetToken"));\n\n    expect(model).toContain("expiresAt        DateTime");\n    expect(model).not.toContain("expiresAt        DateTime?");\n    expect(migration).toContain('WHERE "expiresAt" IS NULL');\n    expect(migration).toContain('POLICY_EXEMPTION_LEGACY_ENDED');\n    expect(migration).toContain('ALTER TABLE "PolicyExemption" ALTER COLUMN "expiresAt" SET NOT NULL');\n  });\n\n  test("all authoritative active readers require a future expiry", () => {\n    const domain = source("src/lib/domain/policy-exemption.ts");\n    const funds = source("src/lib/domain/funds.ts");\n    const adminFunds = source("src/app/api/v1/admin/funds/route.ts");\n    const api = source("src/app/api/v1/admin/policy-exemptions/route.ts");\n\n    for (const text of [domain, funds, adminFunds, api]) {\n      expect(text).not.toContain("expiresAt: null");\n      expect(text).not.toContain("legacyOpenEnded");\n    }\n    expect(domain).toContain("expiresAt: { gt: now }");\n    expect(funds).toContain("expiresAt: { gt: new Date() }");\n    expect(adminFunds).toContain("expiresAt: { gt: new Date() }");\n    expect(api).toContain("expiresAt: { gt: now }");\n  });\n\n  test("admin surfaces no longer advertise an until-cancelled exemption", () => {\n    const fundsUi = source("src/components/app/admin/funds.tsx");\n    const types = source("src/components/app/admin/_shared/types.ts");\n    expect(fundsUi).not.toContain("Until cancelled");\n    expect(types).toContain("expiresAt: string;");\n  });\n});\n''')
-
-          integration = Path("tests/integration/policy-exemption-finite-persistence.test.ts")
-          integration.write_text('''import { afterAll, describe, expect, test } from "bun:test";\nimport { db } from "@/lib/db";\n\nconst prefix = "phase63-finite-";\n\nafterAll(async () => {\n  await db.policyExemption.deleteMany({ where: { institutionId: { startsWith: prefix } } });\n  await db.auditEvent.deleteMany({ where: { institutionId: { startsWith: prefix } } });\n  await db.$disconnect();\n});\n\ndescribe("finite policy exemption database contract", () => {\n  test("PostgreSQL rejects an open-ended exemption even if a caller bypasses Prisma validation", async () => {\n    const id = `${prefix}${crypto.randomUUID()}`;\n    const institutionId = `${prefix}${crypto.randomUUID()}`;\n    let rejected = false;\n    try {\n      await db.$executeRawUnsafe(\n        `INSERT INTO "PolicyExemption" ("id", "institutionId", "residentId", "policyType", "reason", "startsAt", "expiresAt", "approvedByUserId", "createdAt") VALUES ($1, $2, $3, 'DEFICIT_RESTRICTION', 'invalid open ended test', NOW(), NULL, $4, NOW())`,\n        id,\n        institutionId,\n        `${prefix}resident`,\n        `${prefix}admin`\n      );\n    } catch {\n      rejected = true;\n    }\n    expect(rejected).toBe(true);\n    expect(await db.policyExemption.findUnique({ where: { id } })).toBeNull();\n  });\n});\n''')
-
-          Path(".github/workflows/phase63-finite-policy-exemptions.yml").unlink()
-          PY
-
-          if grep -R --line-number --exclude-dir=tool-results --exclude-dir=upload 'OR: \[{ expiresAt: null }' src; then
-            echo 'open-ended exemption reader remains in live source' >&2
-            exit 1
-          fi
-          if grep -R --line-number --exclude-dir=tool-results --exclude-dir=upload 'Until cancelled\|legacyOpenEnded' src; then
-            echo 'open-ended exemption UI/API contract remains' >&2
-            exit 1
-          fi
+          python3 scripts/audit_phase63_apply.py
           git diff --check
           git status --short
 
-      - name: Commit Phase 63
+      - name: Commit Phase 63 product changes
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "BoardOps Audit Bot"
           git config user.email "actions@users.noreply.github.com"
-          git add -A
+          git add prisma src tests
           git commit -m "fix: enforce finite policy exemptions"
           git push origin HEAD:feat/phase63-finite-policy-exemptions
