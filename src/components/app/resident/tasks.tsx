@@ -115,6 +115,8 @@ function taskOrbColor(status: string): "emerald" | "rose" | "amber" | "frost" {
     case "REJECTED":
     case "REJECTED_BY_ADMIN":
       return "rose";
+    case "CANCELLED":
+      return "frost";
     case "SUBMITTED":
     case "IN_PROGRESS":
       return "amber";
@@ -132,7 +134,9 @@ const STATUS_CHIPS = [
   { value: "IN_PROGRESS", label: "In Progress" },
   { value: "SUBMITTED", label: "Submitted" },
   { value: "APPROVED", label: "Completed" },
-  { value: "REJECTED", label: "Rejected" },
+  { value: "REJECTED", label: "Declined" },
+  { value: "REJECTED_BY_ADMIN", label: "Admin Rejected" },
+  { value: "CANCELLED", label: "Cancelled" },
 ];
 
 /* --------------------------------- proof preview --------------------------- */
@@ -632,6 +636,8 @@ function TaskDetailDialog({
     Boolean(task.dueDate) &&
     task.status !== "APPROVED" &&
     task.status !== "REJECTED" &&
+    task.status !== "REJECTED_BY_ADMIN" &&
+    task.status !== "CANCELLED" &&
     task.dueDate! < todayKey;
   const isDueToday = Boolean(task.dueDate) && task.dueDate === todayKey;
 
@@ -665,7 +671,7 @@ function TaskDetailDialog({
         {/* Scrollable Body */}
         <div className="space-y-4 px-5 py-4 sm:px-6 max-h-[66vh] overflow-y-auto no-scrollbar">
           {/* Visual lifecycle stepper */}
-          <TaskProgressStepper status={task.status} />
+          {task.status !== "CANCELLED" && <TaskProgressStepper status={task.status} />}
 
           {/* Due date deadline hero card */}
           {task.dueDate && (
@@ -819,17 +825,21 @@ function TaskDetailDialog({
             </div>
           )}
 
-          {(task.status === "REJECTED" || task.status === "REJECTED_BY_ADMIN") && (
+          {(task.status === "REJECTED" || task.status === "REJECTED_BY_ADMIN" || task.status === "CANCELLED") && (
             <div className="rounded-2xl border border-danger/30 bg-danger/10 p-3.5 text-xs text-danger leading-relaxed flex items-start gap-2.5">
               <TriangleAlert className="size-4 shrink-0 mt-0.5" />
               <div>
                 <p className="font-semibold">
-                  {task.status === "REJECTED" ? "You Declined This Task" : "Submission Rejected by Admin"}
+                  {task.status === "REJECTED"
+                    ? "You Declined This Task"
+                    : task.status === "CANCELLED"
+                      ? "Task Cancelled by Admin"
+                      : "Submission Rejected by Admin"}
                 </p>
                 <p className="mt-0.5 text-foreground/80">
                   {task.status === "REJECTED"
                     ? task.rejectionReason ?? "No reason provided."
-                    : task.adminReviewReason ?? "No review reason provided."}
+                    : task.adminReviewReason ?? (task.status === "CANCELLED" ? "No cancellation reason provided." : "No review reason provided.")}
                 </p>
               </div>
             </div>
@@ -1014,7 +1024,8 @@ export default function ResidentTasks() {
   const invalidate = useInvalidateResident();
 
   const currentMonthKey = todayKeyInTz(tz).slice(0, 7);
-  const [monthKey, setMonthKey] = useState<string>(currentMonthKey);
+  const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
+  const monthKey = monthParam ?? currentMonthKey;
   const [status, setStatus] = useState<string>("ASSIGNED");
   const [search, setSearch] = useState("");
 
@@ -1060,7 +1071,10 @@ export default function ResidentTasks() {
       if (t.status === "ASSIGNED" || t.status === "ACCEPTED" || t.status === "IN_PROGRESS") open += 1;
       else if (t.status === "APPROVED") done += 1;
       const finished =
-        t.status === "APPROVED" || t.status === "REJECTED" || t.status === "REJECTED_BY_ADMIN";
+        t.status === "APPROVED" ||
+        t.status === "REJECTED" ||
+        t.status === "REJECTED_BY_ADMIN" ||
+        t.status === "CANCELLED";
       if (!finished && t.dueDate && t.dueDate < todayKey) overdue += 1;
     }
     return { open, done, overdue };
@@ -1181,11 +1195,11 @@ export default function ResidentTasks() {
           {/* Month navigation — centered picker capsule */}
           <StaggerItem>
             <PickerCapsule
-              onPrev={() => setMonthKey(shiftMonthKey(monthKey, -1))}
-              onNext={() => setMonthKey(shiftMonthKey(monthKey, 1))}
+              onPrev={() => setMonthParam(shiftMonthKey(monthKey, -1))}
+              onNext={() => setMonthParam(shiftMonthKey(monthKey, 1))}
               prevLabel="Previous month"
               nextLabel="Next month"
-              onPillClick={() => setMonthKey(currentMonthKey)}
+              onPillClick={() => setMonthParam(undefined)}
               pillAriaLabel="Reset to the current month"
               resettable={monthKey !== currentMonthKey}
             >

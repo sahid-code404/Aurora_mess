@@ -12,7 +12,8 @@
  *   creating any Expense or journal.
  *
  * Both task kinds share the same authoritative lifecycle:
- * ASSIGNED → ACCEPTED → IN_PROGRESS → SUBMITTED → APPROVED/REJECTED_BY_ADMIN.
+ * ASSIGNED → ACCEPTED → IN_PROGRESS → SUBMITTED → APPROVED/REJECTED_BY_ADMIN,
+ * with Admin cancellation allowed from active pre-submission states.
  */
 import { z } from "zod";
 import { route } from "@/lib/auth/guard";
@@ -24,6 +25,7 @@ import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { notifyAdmins, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
 import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { lockTaskLifecycleMutation } from "@/lib/domain/task-lifecycle";
 
 const itemSchema = z.object({
   itemName: z.string().trim().min(1, "Item name is required.").max(120),
@@ -148,6 +150,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         // SUBMITTED is a billing-readiness blocker. Serialize its creation with
         // bill generation so readiness cannot cross this state transition.
         await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+        await lockTaskLifecycleMutation(tx, ctx.institutionId, ctx.params.id);
 
         const task = await tx.task.findFirst({
           where: { id: ctx.params.id, institutionId: ctx.institutionId, assignedResidentId: ctx.user.id },

@@ -7,12 +7,15 @@ import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
+import { lockTaskLifecycleMutation } from "@/lib/domain/task-lifecycle";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
 
 export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   await requireInstitutionContext(ctx.institutionId);
 
   const result = await db.$transaction(async (tx) => {
+    await lockTaskLifecycleMutation(tx, ctx.institutionId, ctx.params.id);
+
     const task = await tx.task.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId, assignedResidentId: ctx.user.id },
     });

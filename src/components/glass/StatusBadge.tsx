@@ -53,6 +53,7 @@ const STATUS_TONES: Record<string, Tone> = {
   IN_PROGRESS: "frost",
   SUBMITTED: "warning",
   REJECTED_BY_ADMIN: "danger",
+  CANCELLED: "neutral",
   COMPLETED: "success",
   // Billing lifecycle
   OPEN: "frost",
@@ -89,6 +90,7 @@ const STATUS_LABELS: Record<string, string> = {
   IN_PROGRESS: "In progress",
   SUBMITTED: "Submitted",
   REJECTED_BY_ADMIN: "Rejected by admin",
+  CANCELLED: "Cancelled",
   COMPLETED: "Completed",
   OPEN: "Open",
   CLOSING: "Closing",
