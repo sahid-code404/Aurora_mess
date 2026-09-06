@@ -1,8 +1,9 @@
 /**
  * POST /api/v1/admin/leave-requests/[id]/approve — spec §35, §43:
- * Transaction: mark APPROVED (+audit +notification), then re-evaluate only the
- * resident's UNLOCKED meals covered by the leave's ALL/SELECTED meal scope.
- * Already-locked meals remain frozen (§36).
+ * Transaction: Resident mutex + authoritative ACTIVE/leave reads → APPROVED
+ * (+audit +notification) → re-evaluate only the resident's UNLOCKED meals
+ * covered by the leave's ALL/SELECTED meal scope. Already-locked meals remain
+ * frozen (§36). A stale pending leave cannot be approved after access removal.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -18,6 +19,10 @@ import {
 } from "@/lib/domain/meal-engine";
 import { mealInstanceScopeWhere, serializeSelectedMeals } from "@/lib/domain/meal-scope";
 import { queueNotification, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
+import {
+  lockResidentLifecycleMutation,
+  requireActiveResidentAfterLock,
+} from "@/lib/domain/resident-lifecycle";
 
 const bodySchema = z.object({ reason: z.string().trim().max(500).optional() });
 
@@ -25,9 +30,20 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   await requireInstitutionContext(ctx.institutionId);
   const body = await parseBody(ctx.req, bodySchema);
 
+  // residentId is immutable ownership metadata. Use it only to locate the User
+  // mutex; all leave lifecycle state is re-read after that mutex is acquired.
+  const target = await db.leaveRequest.findFirst({
+    where: { id: ctx.params.id, institutionId: ctx.institutionId },
+    select: { residentId: true },
+  });
+  if (!target) throw new ApiError(CODES.NOT_FOUND, "This leave request could not be found.", 404);
+
   const result = await db.$transaction(async (tx) => {
+    await lockResidentLifecycleMutation(tx, ctx.institutionId, target.residentId);
+    const resident = await requireActiveResidentAfterLock(tx, ctx.institutionId, target.residentId);
+
     const leave = await tx.leaveRequest.findFirst({
-      where: { id: ctx.params.id, institutionId: ctx.institutionId },
+      where: { id: ctx.params.id, institutionId: ctx.institutionId, residentId: target.residentId },
       include: {
         selectedMeals: {
           include: { mealDefinition: { select: { id: true, name: true } } },
@@ -52,6 +68,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       where: {
         id: leave.id,
         institutionId: ctx.institutionId,
+        residentId: resident.id,
         status: "PENDING",
       },
       data: {
@@ -73,7 +90,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     const selectedIds = leave.selectedMeals.map((selection) => selection.mealDefinitionId);
     const scopeWhere = mealInstanceScopeWhere(leave.mealScope, selectedIds);
 
-    // Re-evaluate ONLY unlocked instances covered by the requested meal scope.
     const instances = await tx.mealInstance.findMany({
       where: {
         institutionId: ctx.institutionId,
@@ -90,14 +106,13 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         })
       : [];
 
-    const resident = await tx.user.findUnique({ where: { id: leave.residentId } });
     const instById = new Map(instances.map((i) => [i.id, i]));
 
     let updatedMeals = 0;
     let mealsOnLeave = 0;
     for (const rm of rms) {
       const instance = instById.get(rm.mealInstanceId);
-      if (!instance || !resident) continue;
+      if (!instance) continue;
       const evalCtx = await buildEvalContext({
         resident: resident as never,
         institutionId: ctx.institutionId,
