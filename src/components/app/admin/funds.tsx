@@ -26,13 +26,15 @@ import { GlassButton } from "@/components/glass/GlassButton";
 import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
 import { useApiQuery, postJson } from "@/hooks/use-api-query";
 import { navigateTo } from "@/hooks/use-hash-route";
+import { useSession } from "@/hooks/use-session";
 import { ApiClientError } from "@/lib/api";
 import { gradientForName, initialsOf } from "@/lib/gradients";
 import { cn } from "@/lib/utils";
 import { errMessage, useInvalidate } from "./_shared/api";
+import { currentMonthKeyInTz } from "./_shared/business-date";
 import { SearchField } from "./_shared/fields";
 import { Chip, FilterChips, KpiGrid } from "./_shared/chrome";
-import { fmtDate, monthLabel, todayKey } from "./_shared/format";
+import { fmtDate, monthLabel } from "./_shared/format";
 import type { FundsSummary, PolicyExemptionRow } from "./_shared/types";
 
 const FUNDS_PATH = "/api/v1/admin/funds";
@@ -101,8 +103,10 @@ export default function AdminFunds() {
   const [cancelTarget, setCancelTarget] = useState<PolicyExemptionRow | null>(null);
   const [acting, setActing] = useState(false);
   const invalidate = useInvalidate();
+  const { institution } = useSession();
+  const tz = institution?.timezone ?? "Asia/Kolkata";
 
-  const thisMonthKey = todayKey().slice(0, 7);
+  const thisMonthKey = currentMonthKeyInTz(tz);
   const activeMonthKey = data?.kpis?.month ?? monthParam ?? thisMonthKey;
   const isThisMonth = activeMonthKey === thisMonthKey;
 
@@ -223,7 +227,7 @@ export default function AdminFunds() {
             label: "Deficit",
             value: data.kpis.totalDeficitFormatted,
             icon: <TrendingDown />,
-            sub: `${deficitResidents.length} below min`,
+            sub: `${deficitResidents.length} with deficit`,
             tone: "warning",
             glow: "warning",
           },
@@ -251,7 +255,7 @@ export default function AdminFunds() {
           <EmptyState
             icon={Wallet}
             title={search ? "No residents match" : "No residents with deficit"}
-            description={search ? "Try a different name, room or email." : "Nobody is below their balance threshold right now."}
+            description={search ? "Try a different name, room or email." : "Nobody has an unresolved deficit right now."}
           />
         ) : (
           <div className="no-scrollbar max-h-[28rem] space-y-2 overflow-y-auto pr-1">
