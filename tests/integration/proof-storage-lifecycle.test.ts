@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
-import { cleanupUnreferencedStoredFile, STORAGE_DIR } from "@/lib/storage";
+import { cleanupUnreferencedStoredFile, readStoredFile, STORAGE_DIR } from "@/lib/storage";
 
 const prefix = "phase38-proof-";
 const objectKeys = new Set<string>();
@@ -24,12 +25,12 @@ async function createStoredFile(institutionId: string) {
       fileName: "proof.pdf",
       mimeType: "application/pdf",
       sizeBytes: bytes.length,
-      sha256: "0".repeat(64),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
       scanStatus: "CLEAN",
     },
   });
 
-  return { id, objectKey };
+  return { id, objectKey, bytes };
 }
 
 async function objectExists(objectKey: string): Promise<boolean> {
@@ -98,5 +99,35 @@ describe("stored proof lifecycle", () => {
     await unlink(path.join(STORAGE_DIR, stored.objectKey));
     expect(await cleanupUnreferencedStoredFile(stored.id, institutionId)).toBe(true);
     expect(await db.storedFile.findUnique({ where: { id: stored.id } })).toBeNull();
+  });
+
+  test("returns the exact bytes only while runtime proof integrity still matches", async () => {
+    const institutionId = `${prefix}${crypto.randomUUID()}`;
+    const stored = await createStoredFile(institutionId);
+
+    const read = await readStoredFile(stored.id, institutionId);
+    expect(read?.buffer.equals(stored.bytes)).toBe(true);
+    expect(read?.mimeType).toBe("application/pdf");
+  });
+
+  test("fails closed when proof bytes are replaced without changing their length", async () => {
+    const institutionId = `${prefix}${crypto.randomUUID()}`;
+    const stored = await createStoredFile(institutionId);
+    const tampered = Buffer.from(stored.bytes);
+    tampered[tampered.length - 1] ^= 1;
+    expect(tampered.length).toBe(stored.bytes.length);
+
+    await writeFile(path.join(STORAGE_DIR, stored.objectKey), tampered);
+
+    expect(await readStoredFile(stored.id, institutionId)).toBeNull();
+  });
+
+  test("fails closed when proof size no longer matches immutable metadata", async () => {
+    const institutionId = `${prefix}${crypto.randomUUID()}`;
+    const stored = await createStoredFile(institutionId);
+
+    await writeFile(path.join(STORAGE_DIR, stored.objectKey), Buffer.concat([stored.bytes, Buffer.from("x")]));
+
+    expect(await readStoredFile(stored.id, institutionId)).toBeNull();
   });
 });

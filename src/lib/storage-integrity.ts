@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 
 export type StoredFileIntegrityRecord = {
@@ -25,6 +25,10 @@ export type StorageIntegrityReport = {
   issues: StorageIntegrityIssue[];
 };
 
+type IntegrityCandidate =
+  | { filePath: string; issue: null }
+  | { filePath: null; issue: StorageIntegrityIssue };
+
 /** Resolve a DB object key without permitting traversal or nested paths. */
 export function resolveSafeObjectPath(storageDir: string, objectKey: string): string | null {
   if (!objectKey || objectKey.includes("\0")) return null;
@@ -34,6 +38,35 @@ export function resolveSafeObjectPath(storageDir: string, objectKey: string): st
   const candidate = path.resolve(root, objectKey);
   if (path.dirname(candidate) !== root) return null;
   return candidate;
+}
+
+async function resolveIntegrityCandidate(
+  storageDir: string,
+  record: StoredFileIntegrityRecord
+): Promise<IntegrityCandidate> {
+  const filePath = resolveSafeObjectPath(storageDir, record.objectKey);
+  if (!filePath) {
+    return { filePath: null, issue: { id: record.id, type: "UNSAFE_OBJECT_KEY" } };
+  }
+
+  let info;
+  try {
+    info = await lstat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { filePath: null, issue: { id: record.id, type: "MISSING_FILE" } };
+    }
+    throw error;
+  }
+
+  if (!info.isFile() || info.isSymbolicLink()) {
+    return { filePath: null, issue: { id: record.id, type: "NOT_REGULAR_FILE" } };
+  }
+  if (info.size !== record.sizeBytes) {
+    return { filePath: null, issue: { id: record.id, type: "SIZE_MISMATCH" } };
+  }
+
+  return { filePath, issue: null };
 }
 
 async function sha256File(filePath: string): Promise<string> {
@@ -56,32 +89,53 @@ export async function verifyStoredFileIntegrity(
   storageDir: string,
   record: StoredFileIntegrityRecord
 ): Promise<StorageIntegrityIssue | null> {
-  const filePath = resolveSafeObjectPath(storageDir, record.objectKey);
-  if (!filePath) return { id: record.id, type: "UNSAFE_OBJECT_KEY" };
+  const candidate = await resolveIntegrityCandidate(storageDir, record);
+  if (candidate.issue) return candidate.issue;
 
-  let info;
-  try {
-    info = await lstat(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return { id: record.id, type: "MISSING_FILE" };
-    }
-    throw error;
-  }
-
-  if (!info.isFile() || info.isSymbolicLink()) {
-    return { id: record.id, type: "NOT_REGULAR_FILE" };
-  }
-  if (info.size !== record.sizeBytes) {
-    return { id: record.id, type: "SIZE_MISMATCH" };
-  }
-
-  const actualSha256 = await sha256File(filePath);
+  const actualSha256 = await sha256File(candidate.filePath);
   if (actualSha256.toLowerCase() !== record.sha256.toLowerCase()) {
     return { id: record.id, type: "CHECKSUM_MISMATCH" };
   }
 
   return null;
+}
+
+/**
+ * Read proof bytes through the same integrity boundary used by backup checks.
+ * The checksum is calculated from the exact Buffer returned to the caller, so
+ * a runtime download/AI preview never trusts an unchecked second filesystem
+ * read after validation.
+ */
+export async function readVerifiedStoredFileBytes(
+  storageDir: string,
+  record: StoredFileIntegrityRecord
+): Promise<{ buffer: Buffer | null; issue: StorageIntegrityIssue | null }> {
+  const candidate = await resolveIntegrityCandidate(storageDir, record);
+  if (candidate.issue) return { buffer: null, issue: candidate.issue };
+
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(candidate.filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { buffer: null, issue: { id: record.id, type: "MISSING_FILE" } };
+    }
+    throw error;
+  }
+
+  // Re-check size from the exact bytes read. This catches a file changing
+  // between lstat() and readFile() rather than serving a partially replaced
+  // object after its pre-read metadata happened to match.
+  if (buffer.length !== record.sizeBytes) {
+    return { buffer: null, issue: { id: record.id, type: "SIZE_MISMATCH" } };
+  }
+
+  const actualSha256 = createHash("sha256").update(buffer).digest("hex");
+  if (actualSha256.toLowerCase() !== record.sha256.toLowerCase()) {
+    return { buffer: null, issue: { id: record.id, type: "CHECKSUM_MISMATCH" } };
+  }
+
+  return { buffer, issue: null };
 }
 
 export async function verifyStorageIntegrityRecords(
