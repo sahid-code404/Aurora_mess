@@ -161,7 +161,6 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         voidReason: r.voidReason,
         voidedByUserId: r.voidedByUserId,
         voidedAt: r.voidedAt?.toISOString() ?? null,
-        voidedAt: r.voidedAt?.toISOString() ?? null,
         createdAt: r.createdAt.toISOString(),
         completedAt: r.completedAt?.toISOString() ?? null,
       })),
