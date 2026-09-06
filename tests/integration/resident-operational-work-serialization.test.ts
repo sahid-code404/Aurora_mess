@@ -129,13 +129,14 @@ describe("resident operational work serialization", () => {
       await assertNoUnfinishedResidentTasks(tx, institution.id, resident.id);
       await tx.user.update({ where: { id: resident.id }, data: { status: "INACTIVE" } });
     });
+    const deactivationResult = deactivation.then(() => null).catch((value: unknown) => value);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(deactivationLocked).toBe(false);
 
     releaseAssignment.resolve();
     await assignment;
-    const error = await deactivation.then(() => null).catch((value: unknown) => value);
+    const error = await deactivationResult;
     expect(error).toMatchObject({ code: CODES.VALIDATION_FAILED, status: 409 });
     expect((await db.user.findUniqueOrThrow({ where: { id: resident.id } })).status).toBe("ACTIVE");
   });
@@ -160,13 +161,14 @@ describe("resident operational work serialization", () => {
       assignmentLocked = true;
       return authoritative;
     });
+    const assignmentResult = assignment.then(() => null).catch((value: unknown) => value);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(assignmentLocked).toBe(false);
 
     releaseLifecycle.resolve();
     await lifecycle;
-    const error = await assignment.then(() => null).catch((value: unknown) => value);
+    const error = await assignmentResult;
     expect(error).toMatchObject({ code: CODES.VALIDATION_FAILED, status: 400 });
   });
 });
