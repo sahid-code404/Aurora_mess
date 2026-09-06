@@ -8,6 +8,7 @@ const domain = await Bun.file("src/lib/domain/meal-retirement.ts").text();
 const engine = await Bun.file("src/lib/domain/meal-engine.ts").text();
 const listRoute = await Bun.file("src/app/api/v1/admin/meal-definitions/route.ts").text();
 const detailRoute = await Bun.file("src/app/api/v1/admin/meal-definitions/[id]/route.ts").text();
+const archiveRoute = await Bun.file("src/app/api/v1/admin/meal-definitions/[id]/archive/route.ts").text();
 const scheduleRoute = await Bun.file(
   "src/app/api/v1/admin/meal-definitions/[id]/request-deletion/route.ts"
 ).text();
@@ -23,18 +24,17 @@ describe("meal-definition retirement source contracts", () => {
     expect(schema).toContain("cancelledByUserId String?");
     expect(schema).toContain("cancelledAt       DateTime?");
     expect(schema).toContain("@@index([institutionId, entityType, status, scheduledFor])");
-    expect(migration).toContain("SET "status" = 'SCHEDULED'");
-    expect(migration).toContain(""archivedAt" = COALESCE");
-    expect(migration).toContain(""active" = FALSE");
+    expect(migration).toContain('SET "status" = \'SCHEDULED\'');
+    expect(migration).toContain('"archivedAt" = COALESCE');
+    expect(migration).toContain('"active" = FALSE');
   });
 
   test("all lifecycle mutations share the MealDefinition row mutex", () => {
     expect(domain).toContain('FROM "MealDefinition"');
     expect(domain).toContain("FOR UPDATE");
-    expect(domain.match(/lockMealDefinitionMutation\(tx/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(domain.split("lockMealDefinitionMutation(tx").length - 1).toBeGreaterThanOrEqual(4);
     expect(detailRoute).toContain("await lockMealDefinitionMutation(tx, ctx.institutionId, ctx.params.id)");
-    const archive = Bun.file("src/app/api/v1/admin/meal-definitions/[id]/archive/route.ts");
-    expect(archive.size).toBeGreaterThan(0);
+    expect(archiveRoute).toContain("await lockMealDefinitionMutation(tx, ctx.institutionId, ctx.params.id)");
   });
 
   test("scheduling archives immediately and persists SCHEDULED instead of dead QUEUED copy", () => {
