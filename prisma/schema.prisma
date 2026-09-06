@@ -662,9 +662,7 @@ model FormulaDefinition {
   description       String?
   outputVariableKey String    @default("meal_charge")
   scope             String    @default("BILLING_PERIOD") // GLOBAL | BILLING_PERIOD | RESIDENT | MEAL
-  status            String    @default("ACTIVE") // ACTIVE | ARCHIVED
   activeVersionId   String?
-  archivedAt        DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @default(now()) @updatedAt
 

@@ -14,6 +14,7 @@ import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-v
 import { gatherAllVariables } from "@/lib/domain/formula/registry";
 import { generateFormulaExplanation } from "@/lib/domain/formula/explanation";
 import { FormulaDag } from "@/lib/domain/formula/dag";
+import { selectFormulaVersionAt } from "@/lib/domain/formula/effective-version";
 import { db } from "@/lib/db";
 import { formatMinor } from "@/lib/money";
 
@@ -85,22 +86,24 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
 
   // 6. Check downstream impact
   const allDefs = await db.formulaDefinition.findMany({
-    where: { institutionId: ctx.institutionId, status: "ACTIVE", archivedAt: null },
-    include: { versions: { where: { active: true }, include: { dependencies: true } } },
+    where: { institutionId: ctx.institutionId },
+    include: {
+      versions: { orderBy: { version: "desc" }, include: { dependencies: true } },
+    },
   });
   const dag = new FormulaDag();
   for (const d of allDefs) {
-    if (d.versions[0]) {
-      try {
-        dag.addNode({
-          outputVariableKey: d.outputVariableKey,
-          name: d.name,
-          ast: JSON.parse(d.versions[0].compiledAstJson),
-          dependsOn: d.versions[0].dependencies.map((dep) => dep.variableKey),
-        });
-      } catch {
-        // ignore
-      }
+    const periodVersion = selectFormulaVersionAt(d.versions, bounds.startAt);
+    if (!periodVersion) continue;
+    try {
+      dag.addNode({
+        outputVariableKey: d.outputVariableKey,
+        name: d.name,
+        ast: JSON.parse(periodVersion.compiledAstJson),
+        dependsOn: periodVersion.dependencies.map((dep) => dep.variableKey),
+      });
+    } catch {
+      // ignore
     }
   }
   const downstream = dag.getDownstreamImpact(outputKey);

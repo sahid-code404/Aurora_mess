@@ -39,7 +39,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   // Fetch all active formula definitions
   const allDefinitions = await db.formulaDefinition.findMany({
-    where: { institutionId: ctx.institutionId, archivedAt: null },
+    where: { institutionId: ctx.institutionId },
     include: {
       versions: {
         orderBy: { version: "desc" },
@@ -83,7 +83,6 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         description: d.description,
         outputVariableKey: d.outputVariableKey,
         scope: d.scope,
-        status: d.status,
         activeVersion: d.versions.find((v) => v.active) ? serializeFormulaVersion(d.versions.find((v) => v.active)) : null,
         versionsCount: d.versions.length,
       })),
@@ -128,7 +127,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   }
 
   const existing = await db.formulaDefinition.findFirst({
-    where: { institutionId: ctx.institutionId, outputVariableKey: key, archivedAt: null },
+    where: { institutionId: ctx.institutionId, outputVariableKey: key },
   });
 
   if (existing) {
@@ -146,7 +145,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       outputVariableKey: key,
       description: body.description?.trim() ?? null,
       scope: body.scope,
-      status: "ACTIVE",
     },
   });
 

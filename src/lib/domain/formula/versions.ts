@@ -22,6 +22,7 @@ import { currentPeriodBounds, periodBounds } from "./period-variables";
 import { SYSTEM_VARIABLES_MAP } from "./variables";
 import { FormulaDag } from "./dag";
 import { gatherAllVariables } from "./registry";
+import { selectFormulaVersionAt } from "./effective-version";
 
 export interface FormulaVersionRow {
   id: string;
@@ -70,7 +71,7 @@ export async function ensureFormulaDefinition(
   client: any = db
 ): Promise<any> {
   let definition = await client.formulaDefinition.findFirst({
-    where: { institutionId, outputVariableKey, archivedAt: null },
+    where: { institutionId, outputVariableKey },
   });
 
   if (!definition) {
@@ -81,7 +82,6 @@ export async function ensureFormulaDefinition(
         description: outputVariableKey === "meal_charge" ? "Calculates resident meal charge for billing period." : null,
         outputVariableKey,
         scope: "BILLING_PERIOD",
-        status: "ACTIVE",
       },
     });
   }
@@ -101,15 +101,7 @@ export async function resolveFormulaVersionForPeriod(
     orderBy: { version: "desc" },
   });
 
-  const farPast = new Date(-864e13);
-  const farFuture = new Date(864e13);
-  return (
-    versions.find(
-      (v: any) =>
-        (v.effectiveFrom ? new Date(v.effectiveFrom) : farPast) <= periodStart &&
-        (v.effectiveUntil ? new Date(v.effectiveUntil) : farFuture) >= periodStart
-    ) ?? null
-  );
+  return selectFormulaVersionAt(versions, periodStart);
 }
 
 export interface FormulaEstimate {
@@ -243,12 +235,19 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
   const { ast, formulaText, naturalSource } = await parseFormulaSource(input.mode, input.source);
   const outputKey = (ast.type === "assignment" ? ast.target : input.outputVariableKey ?? "meal_charge").trim();
 
-  // 1. DAG cycle check (spec §44)
+  // 1. DAG cycle check (spec §44). Resolve every dependency formula for
+  // the same effective period as the candidate; the latest active pointer can
+  // point at NEXT_PERIOD and must never rewrite current/historical evaluation.
+  const nextYear = bounds.month === 12 ? bounds.year + 1 : bounds.year;
+  const nextMonth = bounds.month === 12 ? 1 : bounds.month + 1;
+  const nextMonthFirst = localDateMidnightUtc(`${nextYear}-${String(nextMonth).padStart(2, "0")}-01`);
+  const targetPeriodStart = input.effective === "CURRENT_OPEN" ? bounds.startAt : nextMonthFirst;
+
   const allFormulaDefs = await db.formulaDefinition.findMany({
-    where: { institutionId: input.institutionId, status: "ACTIVE", archivedAt: null },
+    where: { institutionId: input.institutionId },
     include: {
       versions: {
-        where: { active: true },
+        orderBy: { version: "desc" },
         include: { dependencies: true },
       },
     },
@@ -256,19 +255,20 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
 
   const dag = new FormulaDag();
   for (const def of allFormulaDefs) {
-    if (def.outputVariableKey !== outputKey && def.versions[0]) {
-      try {
-        const nodeAst = JSON.parse(def.versions[0].compiledAstJson) as FormulaAst;
-        dag.addNode({
-          outputVariableKey: def.outputVariableKey,
-          formulaDefinitionId: def.id,
-          name: def.name,
-          ast: nodeAst,
-          dependsOn: def.versions[0].dependencies.map((d: any) => d.variableKey),
-        });
-      } catch {
-        // ignore
-      }
+    if (def.outputVariableKey === outputKey) continue;
+    const periodVersion = selectFormulaVersionAt(def.versions, targetPeriodStart);
+    if (!periodVersion) continue;
+    try {
+      const nodeAst = JSON.parse(periodVersion.compiledAstJson) as FormulaAst;
+      dag.addNode({
+        outputVariableKey: def.outputVariableKey,
+        formulaDefinitionId: def.id,
+        name: def.name,
+        ast: nodeAst,
+        dependsOn: periodVersion.dependencies.map((d: any) => d.variableKey),
+      });
+    } catch {
+      // ignore malformed legacy formula rows here; activation/build gates handle them
     }
   }
 
@@ -301,12 +301,8 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
   }
 
   // 4. Compute effective window
-  const nextYear = bounds.month === 12 ? bounds.year + 1 : bounds.year;
-  const nextMonth = bounds.month === 12 ? 1 : bounds.month + 1;
-  const nextMonthFirst = localDateMidnightUtc(`${nextYear}-${String(nextMonth).padStart(2, "0")}-01`);
   const thisMonthEnd = new Date(nextMonthFirst.getTime() - 1);
-
-  const effectiveFrom = input.effective === "CURRENT_OPEN" ? bounds.startAt : nextMonthFirst;
+  const effectiveFrom = targetPeriodStart;
   const previousUntil = input.effective === "CURRENT_OPEN" ? new Date(bounds.startAt.getTime() - 1) : thisMonthEnd;
 
   const compiledAstJson = JSON.stringify(ast);

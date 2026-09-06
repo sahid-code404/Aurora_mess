@@ -5,11 +5,10 @@
  * INVARIANTS:
  *  - Billing periods are unique per (institution, year, month); only the CURRENT
  *    month may ever be created (no future months — §52).
- *  - Generation is serialized through a status guard (OPEN → CLOSING) inside a
- *    single transaction: concurrent or repeated generation fails cleanly with
- *    BILLING_ALREADY_BILLED / BILLING_PERIOD_CLOSED.
+ *  - Generation is serialized through generationState (null → CLOSING → COMPLETED)
+ *    while BillingPeriod.status remains OPEN until the BILLED commit.
  *  - Readiness is re-run INSIDE the transaction — anything unready rolls the
- *    period back to OPEN (no half-closed states).
+ *    generation claim back to null (no half-closed states).
  *  - ALL inputs are frozen into BillingSnapshot (payload + sha256 checksum).
  *    BILLED periods are never recalculated; corrections happen via bill
  *    adjustments only (§59).
@@ -75,7 +74,7 @@ export function confirmedResidentMealFilter(
     OR: [
       { lockedAt: { not: null } },
       { adminOverrideState: "ON" },
-      { mealInstance: { cutoffAt: { lte: now } } },
+      { mealInstance: { lockAt: { lte: now } } },
       { mealInstance: { status: { in: ["LOCKED", "SERVICE_ACTIVE", "COMPLETED"] } } },
     ],
   };
@@ -194,11 +193,9 @@ export async function computeReadiness(periodId: string, client: any = db): Prom
     detail:
       period.status === "BILLED"
         ? "This period has already been billed."
-        : period.status === "CLOSING"
-          ? "A billing run is currently in progress."
-          : period.status === "REOPENED"
-            ? "This period was reopened after billing — bills remain authoritative."
-            : undefined,
+        : period.status === "REOPENED"
+          ? "This period was reopened after billing — bills remain authoritative."
+          : undefined,
   });
 
   // 2. Month must have ended (billing lifecycle rule: bills can ONLY be generated after month end).

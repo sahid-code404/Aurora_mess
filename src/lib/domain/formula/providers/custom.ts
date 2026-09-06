@@ -16,7 +16,7 @@ export async function resolveCustomVariables(
     where: {
       institutionId,
       category: "CUSTOM",
-      archivedAt: null,
+      OR: [{ archivedAt: null }, { archivedAt: { gt: bounds.startAt } }],
     },
     include: {
       customValues: {

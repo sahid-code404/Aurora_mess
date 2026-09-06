@@ -11,6 +11,8 @@ import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { appendAudit } from "@/lib/audit";
 import { localDateMidnightUtc } from "@/lib/time";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertFormulaInputPeriodMutable } from "./period-mutation";
 import {
   generateKeyFromName,
   isValidVariableKey,
@@ -88,6 +90,17 @@ export async function createCustomVariable(input: CreateCustomVariableInput) {
   const isMoney = input.valueType === "MONEY";
 
   return await db.$transaction(async (tx) => {
+    if (input.effectivePeriod) {
+      const match = /^(\d{4})-(\d{2})$/.exec(input.effectivePeriod);
+      if (!match) throw new ApiError(CODES.VALIDATION_FAILED, "Period must be YYYY-MM.", 400);
+      const month = Number(match[2]);
+      if (month < 1 || month > 12) {
+        throw new ApiError(CODES.VALIDATION_FAILED, "Period month must be between 01 and 12.", 400);
+      }
+      await lockInstitutionFinancialMutation(tx, input.institutionId);
+      await assertFormulaInputPeriodMutable(tx, input.institutionId, Number(match[1]), month);
+    }
+
     const def = await tx.variableDefinition.create({
       data: {
         institutionId: input.institutionId,
@@ -142,67 +155,53 @@ export async function setCustomVariableValue(input: {
   billingPeriodKey: string; // "YYYY-MM"
   value: number;
 }) {
-  const def = await db.variableDefinition.findFirst({
-    where: { id: input.variableDefinitionId, institutionId: input.institutionId, archivedAt: null },
-  });
-
-  if (!def) {
-    throw new ApiError(CODES.NOT_FOUND, "Custom variable not found.", 404);
+  const match = /^(\d{4})-(\d{2})$/.exec(input.billingPeriodKey);
+  if (!match) {
+    throw new ApiError(CODES.VALIDATION_FAILED, "Period must be YYYY-MM.", 400);
   }
-
-  // Check if billing period is closed / billed (spec §93: closed periods cannot be mutated)
-  const [yearStr, monthStr] = input.billingPeriodKey.split("-");
-  const billingPeriod = await db.billingPeriod.findFirst({
-    where: {
-      institutionId: input.institutionId,
-      year: parseInt(yearStr, 10),
-      month: parseInt(monthStr, 10),
-    },
-  });
-
-  if (billingPeriod && (billingPeriod.status === "BILLED" || billingPeriod.status === "CLOSING")) {
-    throw new ApiError(
-      CODES.VALIDATION_FAILED,
-      `Billing period ${input.billingPeriodKey} is already ${billingPeriod.status}. Historical billed periods cannot be modified.`,
-      422
-    );
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) {
+    throw new ApiError(CODES.VALIDATION_FAILED, "Period month must be between 01 and 12.", 400);
   }
-
-  const isMoney = def.valueType === "MONEY";
   const periodStart = localDateMidnightUtc(`${input.billingPeriodKey}-01`);
 
   return await db.$transaction(async (tx) => {
-    // Check if a value already exists for this exact period
+    await lockInstitutionFinancialMutation(tx, input.institutionId);
+    await assertFormulaInputPeriodMutable(tx, input.institutionId, year, month);
+
+    const def = await tx.variableDefinition.findFirst({
+      where: { id: input.variableDefinitionId, institutionId: input.institutionId, archivedAt: null },
+    });
+    if (!def) {
+      throw new ApiError(CODES.NOT_FOUND, "Custom variable not found.", 404);
+    }
+
+    const isMoney = def.valueType === "MONEY";
     const existingVal = await tx.customVariableValue.findFirst({
-      where: {
-        variableDefinitionId: def.id,
-        billingPeriodKey: input.billingPeriodKey,
-      },
+      where: { variableDefinitionId: def.id, billingPeriodKey: input.billingPeriodKey },
     });
 
-    let valRow;
-    if (existingVal) {
-      valRow = await tx.customVariableValue.update({
-        where: { id: existingVal.id },
-        data: {
-          valueMinor: isMoney ? input.value : null,
-          valueNumber: !isMoney ? input.value : null,
-          createdByUserId: input.adminUserId,
-          updatedAt: new Date(),
-        },
-      });
-    } else {
-      valRow = await tx.customVariableValue.create({
-        data: {
-          variableDefinitionId: def.id,
-          valueMinor: isMoney ? input.value : null,
-          valueNumber: !isMoney ? input.value : null,
-          effectiveFrom: periodStart,
-          billingPeriodKey: input.billingPeriodKey,
-          createdByUserId: input.adminUserId,
-        },
-      });
-    }
+    const valRow = existingVal
+      ? await tx.customVariableValue.update({
+          where: { id: existingVal.id },
+          data: {
+            valueMinor: isMoney ? input.value : null,
+            valueNumber: !isMoney ? input.value : null,
+            createdByUserId: input.adminUserId,
+            updatedAt: new Date(),
+          },
+        })
+      : await tx.customVariableValue.create({
+          data: {
+            variableDefinitionId: def.id,
+            valueMinor: isMoney ? input.value : null,
+            valueNumber: !isMoney ? input.value : null,
+            effectiveFrom: periodStart,
+            billingPeriodKey: input.billingPeriodKey,
+            createdByUserId: input.adminUserId,
+          },
+        });
 
     await appendAudit(
       {
@@ -239,7 +238,7 @@ export async function archiveCustomVariable(input: {
 
   // Check if any active formula depends on this variable key (spec §65, §67)
   const activeFormulas = await db.formulaDefinition.findMany({
-    where: { institutionId: input.institutionId, status: "ACTIVE", archivedAt: null },
+    where: { institutionId: input.institutionId },
     include: {
       versions: {
         where: { active: true },
