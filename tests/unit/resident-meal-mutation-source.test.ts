@@ -43,12 +43,19 @@ describe("resident meal mutation source contracts", () => {
     expect(create).toBeGreaterThan(lock);
   });
 
-  test("admin guest override locks ACTIVE resident before reading or rewriting guest rows", () => {
-    const path = "src/app/api/v1/admin/meals/[instanceId]/guest-override/route.ts";
-    expectActiveLockBefore(path, "await tx.guestMealRequest.findMany");
-    const route = source(path);
-    const lock = route.indexOf("await lockActiveResidentForMealMutation");
-    expect(route.slice(lock)).not.toContain("await tx.user.findFirst");
+  test("admin guest correction locks Institution then ACTIVE resident before helper-owned guest writes", () => {
+    const route = source("src/app/api/v1/admin/meals/[instanceId]/guest-override/route.ts");
+    const helper = source("src/lib/domain/guest-meal-admin-correction.ts");
+    const tx = route.indexOf("db.$transaction");
+    const institutionLock = route.indexOf("await lockInstitutionFinancialMutation", tx);
+    const residentLock = route.indexOf("await lockActiveResidentForMealMutation", institutionLock);
+    const correction = route.indexOf("await applyAdminGuestMealQuantityCorrection", residentLock);
+    expect(institutionLock).toBeGreaterThan(tx);
+    expect(residentLock).toBeGreaterThan(institutionLock);
+    expect(correction).toBeGreaterThan(residentLock);
+    expect(helper).toContain("await client.guestMealRequest.findMany");
+    expect(helper).toContain("await client.guestMealRequest.update");
+    expect(route.slice(residentLock)).not.toContain("await tx.user.findFirst");
   });
 
   test("resident guest cancellation validates and transitions inside one serialized transaction", () => {
