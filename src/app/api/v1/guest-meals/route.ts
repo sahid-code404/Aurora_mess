@@ -20,6 +20,7 @@ import {
   actorScopedIdempotencyKey,
   claimIdempotencyKey,
   completeIdempotencyKey,
+  idempotencyRequestHash,
   sweepExpiredIdempotencyRecords,
 } from "@/lib/idempotency";
 import { keyOfUtcDate, requireInstitutionContext, dayCountBetween } from "@/lib/domain/meal-engine";
@@ -44,18 +45,34 @@ const listQuerySchema = z.object({
   to: dateKeySchema.optional(),
 });
 
+function idempotencyPayloadMismatch(): ApiError {
+  return new ApiError(
+    CODES.IDPOTENCY_CONFLICT,
+    "This idempotency key was already used for different guest-meal details. Use a new key for a different booking.",
+    409,
+    { idempotencyKey: "Reuse this key only when retrying the exact same guest-meal booking." }
+  );
+}
+
 export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const inst = await requireInstitutionContext(ctx.institutionId);
   const tz = inst.timezone;
   const body = await parseBody(ctx.req, createSchema);
+  const requestHash = body.idempotencyKey
+    ? idempotencyRequestHash({
+        mealInstanceId: body.mealInstanceId,
+        quantity: body.quantity,
+        note: body.note ?? null,
+      })
+    : null;
   const storageIdempotencyKey = body.idempotencyKey
     ? actorScopedIdempotencyKey(ctx.user.id, body.idempotencyKey)
     : null;
 
   // Transitional compatibility for unexpired pre-Phase-31 raw-key records.
   // A completed legacy payload is returned only if its guest booking belongs to
-  // the authenticated resident. An incomplete legacy claim cannot be attributed
-  // safely, so it remains a temporary conflict until its existing 24-hour expiry.
+  // the authenticated resident. Its original request fingerprint is unknowable,
+  // so compatibility lasts only until the existing 24-hour expiry.
   if (body.idempotencyKey) {
     const replayNow = new Date();
     const legacy = await db.idempotencyRecord.findUnique({
@@ -95,17 +112,19 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   }
 
   const result = await db.$transaction(async (tx) => {
-    if (storageIdempotencyKey) {
+    if (storageIdempotencyKey && requestHash) {
       const claim = await claimIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
         scope: IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
+        requestHash,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       });
       if (claim.state === "REPLAY") {
         return { replay: true as const, payload: claim.payload };
       }
+      if (claim.state === "MISMATCH") throw idempotencyPayloadMismatch();
       if (claim.state === "IN_PROGRESS") {
         throw new ApiError(
           CODES.IDPOTENCY_CONFLICT,
@@ -202,14 +221,16 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       createdAt: guest.createdAt.toISOString(),
     };
 
-    // Persist the replay payload before commit. A concurrent duplicate blocks on
-    // the actor-scoped claim row, then observes this exact response after commit.
-    if (storageIdempotencyKey) {
+    // Persist the fingerprint and replay payload before commit. A concurrent
+    // duplicate blocks on the actor-scoped claim row and can replay only if its
+    // normalized booking details have the exact same request hash.
+    if (storageIdempotencyKey && requestHash) {
       await completeIdempotencyKey({
         client: tx,
         institutionId: ctx.institutionId,
         scope: IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
+        requestHash,
         payload,
       });
     }
