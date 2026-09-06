@@ -23,6 +23,7 @@ import { cleanupUnreferencedStoredFile, storeUpload } from "@/lib/storage";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { notifyAdmins, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
 
 const itemSchema = z.object({
   itemName: z.string().trim().min(1, "Item name is required.").max(120),
@@ -144,6 +145,10 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const result = await (async () => {
     try {
       return await db.$transaction(async (tx) => {
+        // SUBMITTED is a billing-readiness blocker. Serialize its creation with
+        // bill generation so readiness cannot cross this state transition.
+        await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+
         const task = await tx.task.findFirst({
           where: { id: ctx.params.id, institutionId: ctx.institutionId, assignedResidentId: ctx.user.id },
         });
