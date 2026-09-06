@@ -995,7 +995,7 @@ model PolicyExemption {
   policyType       String    @default("DEFICIT_RESTRICTION")
   reason           String
   startsAt         DateTime  @default(now())
-  expiresAt        DateTime?
+  expiresAt        DateTime
   approvedByUserId String
   createdAt        DateTime  @default(now())
 

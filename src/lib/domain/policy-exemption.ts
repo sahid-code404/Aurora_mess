@@ -37,7 +37,7 @@ function isActiveWhere(now: Date) {
   return {
     policyType: POLICY_TYPE,
     startsAt: { lte: now },
-    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+    expiresAt: { gt: now },
   };
 }
 
@@ -116,11 +116,11 @@ export async function grantDeficitPolicyExemption(
         requestId: input.requestId,
         reason: input.reason,
         beforeSummary: "—",
-        afterSummary: `until ${created.expiresAt!.toISOString()}`,
+        afterSummary: `until ${created.expiresAt.toISOString()}`,
         metadata: {
           residentId: resident.id,
           expiresOn: input.expiresOn,
-          expiresAt: created.expiresAt!.toISOString(),
+          expiresAt: created.expiresAt.toISOString(),
           timeZone: institution.timezone,
         },
       },
@@ -169,7 +169,7 @@ export async function cancelDeficitPolicyExemption(
 
     const isActive =
       exemption.startsAt.getTime() <= now.getTime() &&
-      (exemption.expiresAt === null || exemption.expiresAt.getTime() > now.getTime());
+      exemption.expiresAt.getTime() > now.getTime();
     if (!isActive) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
@@ -193,7 +193,7 @@ export async function cancelDeficitPolicyExemption(
         entityId: exemption.id,
         requestId: input.requestId,
         reason: input.reason,
-        beforeSummary: exemption.expiresAt ? `until ${exemption.expiresAt.toISOString()}` : "legacy open-ended exemption",
+        beforeSummary: `until ${exemption.expiresAt.toISOString()}`,
         afterSummary: `ended ${now.toISOString()}`,
         metadata: { residentId: exemption.residentId },
       },

@@ -29,9 +29,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       institutionId: ctx.institutionId,
       policyType: "DEFICIT_RESTRICTION",
       startsAt: { lte: now },
-      // Legacy null-expiry rows remain visible so Admin can explicitly cancel
-      // them; all new writes are finite through the POST contract below.
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      expiresAt: { gt: now },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -52,8 +50,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       policyType: e.policyType,
       reason: e.reason,
       startsAt: e.startsAt.toISOString(),
-      expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,
-      legacyOpenEnded: e.expiresAt === null,
+      expiresAt: e.expiresAt.toISOString(),
       approvedByUserId: e.approvedByUserId,
       createdAt: e.createdAt.toISOString(),
     })),
@@ -91,8 +88,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       policyType: exemption.policyType,
       reason: exemption.reason,
       startsAt: exemption.startsAt.toISOString(),
-      expiresAt: exemption.expiresAt!.toISOString(),
-      legacyOpenEnded: false,
+      expiresAt: exemption.expiresAt.toISOString(),
       approvedByUserId: exemption.approvedByUserId,
       createdAt: exemption.createdAt.toISOString(),
     },
