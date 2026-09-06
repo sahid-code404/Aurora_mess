@@ -28,7 +28,7 @@ export async function resolveFundsVariables(
   const [paymentsAgg, billsAgg, refundsAgg] = await Promise.all([
     client.payment.aggregate({
       _sum: { amountMinor: true },
-      where: { institutionId, status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] } },
+      where: { institutionId, status: "APPROVED" },
     }),
     client.bill.aggregate({
       _sum: { subtotalMinor: true, adjustmentsMinor: true, totalDueMinor: true },

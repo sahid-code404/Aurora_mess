@@ -402,7 +402,7 @@ model Payment {
   method            String // UPI | CASH | BANK_TRANSFER | OTHER
   reference         String?
   notes             String?
-  status            String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED | REFUNDED | PARTIALLY_REFUNDED
+  status            String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED
   idempotencyKey    String?
   proofFileId       String?
   submittedAt       DateTime  @default(now())
@@ -440,7 +440,7 @@ model Refund {
   id              String    @id @default(cuid())
   institutionId   String
   residentId      String
-  paymentId       String?
+  paymentId       String? // legacy provenance only; new refunds use resident-level pooled credit
   amountMinor     Int
   mode            String // CARRY_FORWARD | ISSUE_REFUND
   reason          String

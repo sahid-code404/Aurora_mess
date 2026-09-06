@@ -632,7 +632,7 @@ export async function generateBilling(
       tx.payment.findMany({
         where: {
           institutionId: period.institutionId,
-          status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+          status: "APPROVED",
         },
         select: { id: true, residentId: true, amountMinor: true },
       }),

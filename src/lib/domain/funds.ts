@@ -70,7 +70,7 @@ export async function residentFundsSummary(residentId: string, client: any = db)
     activeExemption,
   ] = await Promise.all([
     client.payment.aggregate({
-      where: { residentId, status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] } },
+      where: { residentId, status: "APPROVED" },
       _sum: { amountMinor: true },
     }),
     client.payment.aggregate({ where: { residentId, status: "PENDING" }, _sum: { amountMinor: true } }),

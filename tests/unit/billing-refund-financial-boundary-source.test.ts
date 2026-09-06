@@ -46,18 +46,22 @@ describe("billing/refund financial boundary source ordering", () => {
     expect(claim).toBeLessThan(create);
   });
 
-  test("refund creation locks the resident as its first transaction statement before eligibility is read", () => {
+  test("refund creation locks the resident before authoritative eligibility and pooled refund insert", () => {
     expect(refunds).toContain(
       'import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";'
     );
     const transaction = refunds.indexOf("return db.$transaction(async (tx) => {");
     const lock = refunds.indexOf("await lockResidentFinancialMutation(", transaction);
     const residentRead = refunds.indexOf("const resident = await tx.user.findFirst(", transaction);
-    const paymentLink = refunds.indexOf("if (input.paymentId)", transaction);
     const eligibility = refunds.indexOf("const eligibility = await refundEligibilityForResident(", transaction);
+    const create = refunds.indexOf("const created = await tx.refund.create(", eligibility);
+
+    expect(transaction).toBeGreaterThan(-1);
     expect(lock).toBeGreaterThan(transaction);
     expect(lock).toBeLessThan(residentRead);
-    expect(residentRead).toBeLessThan(paymentLink);
-    expect(paymentLink).toBeLessThan(eligibility);
+    expect(residentRead).toBeLessThan(eligibility);
+    expect(eligibility).toBeLessThan(create);
+    expect(refunds).not.toContain("input.paymentId");
+    expect(refunds.slice(create)).toContain("paymentId: null");
   });
 });

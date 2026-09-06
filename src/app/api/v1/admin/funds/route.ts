@@ -54,7 +54,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       _sum: { amountMinor: true },
       where: {
         institutionId: ctx.institutionId,
-        status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },
+        status: "APPROVED",
         submittedAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),

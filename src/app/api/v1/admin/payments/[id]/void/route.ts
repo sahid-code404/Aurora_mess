@@ -15,6 +15,7 @@ import { reasonSchema } from "@/lib/validation";
 import { postJournal } from "@/lib/domain/ledger";
 import { recomputeBillSettlement } from "@/lib/domain/funds";
 import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertPaymentVoidRefundCoverage } from "@/lib/domain/payment-lifecycle";
 import { serializePayment } from "@/lib/domain/serialize";
 import { resolveNotificationsForEntity } from "@/lib/domain/notify";
 
@@ -26,25 +27,30 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const body = await parseBody(ctx.req, bodySchema);
 
   const payload = await db.$transaction(async (tx) => {
+    // Payment ownership is immutable, so this pre-lock read is used only to find
+    // the resident mutex. All lifecycle validation happens again after the lock.
+    const paymentBeforeLock = await tx.payment.findFirst({
+      where: { id: ctx.params.id, institutionId: ctx.institutionId },
+      select: { residentId: true },
+    });
+    if (!paymentBeforeLock) throw new ApiError(CODES.NOT_FOUND, "Payment not found.", 404);
+
+    // Serialize against payment approval/void, refund creation and bill changes.
+    await lockResidentFinancialMutation(tx, ctx.institutionId, paymentBeforeLock.residentId);
+
     const payment = await tx.payment.findFirst({ where: { id: ctx.params.id, institutionId: ctx.institutionId } });
     if (!payment) throw new ApiError(CODES.NOT_FOUND, "Payment not found.", 404);
     if (payment.status === "VOIDED") {
       throw new ApiError(CODES.PAYMENT_INVALID_STATE, "This payment was already voided.", 409);
     }
-    if (payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED") {
-      throw new ApiError(
-        CODES.PAYMENT_INVALID_STATE,
-        "Refunded payments cannot be voided — issue a correcting refund instead.",
-        409
-      );
-    }
     if (payment.status !== "APPROVED") {
       throw new ApiError(CODES.PAYMENT_INVALID_STATE, "Only approved payments can be voided.", 409);
     }
 
-    // Serialize the resident's entire settlement mutation before changing the
-    // payment status. A concurrent approval/void/adjustment must commit first.
-    await lockResidentFinancialMutation(tx, ctx.institutionId, payment.residentId);
+    // Refund Center resolves resident-level pooled excess, not an arbitrary
+    // payment. A void is safe only if the remaining approved-payment pool still
+    // covers every completed cash refund already paid to this resident.
+    const refundCoverage = await assertPaymentVoidRefundCoverage(tx, payment);
 
     const guard = await tx.payment.updateMany({
       where: { id: payment.id, status: "APPROVED" },
@@ -106,6 +112,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           reversalJournalId: journalId,
           reversedBills: reversal.changedBills,
           unappliedMinor: reversal.unappliedMinor,
+          issuedRefundsMinor: refundCoverage.issuedRefundsMinor,
+          remainingApprovedPaymentsMinor: refundCoverage.remainingApprovedPaymentsMinor,
         },
       },
       tx

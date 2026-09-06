@@ -299,7 +299,7 @@ export interface PaymentDto {
   amountMinor: number;
   amountFormatted: string;
   method: PaymentMethod;
-  status: "PENDING" | "APPROVED" | "REJECTED" | "VOIDED" | "REFUNDED" | "PARTIALLY_REFUNDED" | string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "VOIDED" | string;
   reference: string | null;
   notes: string | null;
   hasProof: boolean;
@@ -320,7 +320,6 @@ export interface PaymentsMeta {
   totalAvailableFormatted?: string;
   policyState?: string;
   pendingCount: number;
-  refundPendingCount: number;
   refundsThisMonth?: number;
   refundsThisMonthFormatted?: string;
 }
