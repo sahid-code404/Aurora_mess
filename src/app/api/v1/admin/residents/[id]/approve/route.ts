@@ -2,7 +2,7 @@
  * POST /api/v1/admin/residents/[id]/approve — approve a registration.
  * PENDING_APPROVAL | CHANGES_REQUESTED → ACTIVE. Sets membershipEffectiveFrom
  * to now when still null (mid-month join handling). Status history row, audit
- * (RESIDENT_APPROVED) and outbox notification, all in one transaction.
+ * (RESIDENT_APPROVED) and outbox notification, all in one serialized transaction.
  */
 import { db } from "@/lib/db";
 import { route } from "@/lib/auth/guard";
@@ -10,29 +10,30 @@ import { ApiError, CODES } from "@/lib/errors";
 import { appendAudit } from "@/lib/audit";
 import { appendOutbox, sweepOutbox } from "@/lib/outbox";
 import { resolveNotificationsForEntity } from "@/lib/domain/notify";
+import { lockResidentLifecycleMutation } from "@/lib/domain/resident-lifecycle";
 
 const ALLOWED = ["PENDING_APPROVAL", "CHANGES_REQUESTED"];
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const id = ctx.params.id;
-  const user = await db.user.findFirst({
-    where: { id, institutionId: ctx.institutionId, role: "RESIDENT" },
-  });
-  if (!user) {
-    throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
-  }
-  if (!ALLOWED.includes(user.status)) {
-    throw new ApiError(
-      CODES.VALIDATION_FAILED,
-      `This resident is currently ${user.status.replace(/_/g, " ").toLowerCase()} and cannot be approved.`,
-      409
-    );
-  }
 
-  const now = new Date();
-  const effectiveFrom = user.membershipEffectiveFrom ?? now;
+  const result = await db.$transaction(async (tx) => {
+    await lockResidentLifecycleMutation(tx, ctx.institutionId, id);
+    const user = await tx.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
+    }
+    if (!ALLOWED.includes(user.status)) {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        `This resident is currently ${user.status.replace(/_/g, " ").toLowerCase()} and cannot be approved.`,
+        409
+      );
+    }
 
-  await db.$transaction(async (tx) => {
+    const now = new Date();
+    const effectiveFrom = user.membershipEffectiveFrom ?? now;
+
     await tx.user.update({
       where: { id },
       data: {
@@ -91,6 +92,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       reason: "Resident registration approved by admin",
       client: tx,
     });
+
+    return { effectiveFrom };
   });
 
   try {
@@ -99,5 +102,5 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     /* notification delivery is asynchronous — never block the response */
   }
 
-  return { data: { id, status: "ACTIVE", membershipEffectiveFrom: effectiveFrom } };
+  return { data: { id, status: "ACTIVE", membershipEffectiveFrom: result.effectiveFrom } };
 });
