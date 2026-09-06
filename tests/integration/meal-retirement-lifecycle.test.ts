@@ -86,6 +86,38 @@ describe("meal-definition retirement lifecycle", () => {
     expect(afterRestore).toBe(1);
   });
 
+  test("concurrent deletion schedules serialize and create only one active request", async () => {
+    const { institution, admin, definition } = await fixture();
+    const attempts = await Promise.allSettled([
+      scheduleMealDefinitionDeletion({
+        institutionId: institution.id,
+        mealDefinitionId: definition.id,
+        actorUserId: admin.id,
+        requestId: unique("schedule-a"),
+        reason: "Concurrent schedule A",
+      }),
+      scheduleMealDefinitionDeletion({
+        institutionId: institution.id,
+        mealDefinitionId: definition.id,
+        actorUserId: admin.id,
+        requestId: unique("schedule-b"),
+        reason: "Concurrent schedule B",
+      }),
+    ]);
+    expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(
+      await db.deletionRequest.count({
+        where: {
+          institutionId: institution.id,
+          entityType: "MEAL_DEFINITION",
+          entityId: definition.id,
+          status: { in: ["QUEUED", "SCHEDULED", "BLOCKED"] },
+        },
+      })
+    ).toBe(1);
+  });
+
   test("due legacy queued deletion completes as a tombstone and cannot be restored", async () => {
     const { institution, admin, definition } = await fixture();
     const requestedAt = new Date("2026-07-01T00:00:00.000Z");

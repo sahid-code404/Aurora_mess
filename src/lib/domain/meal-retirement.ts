@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { appendAudit } from "@/lib/audit";
@@ -22,12 +23,35 @@ async function inTransaction<T>(client: Client, fn: (tx: Client) => Promise<T>):
   return fn(client);
 }
 
+/**
+ * Serialize every lifecycle mutation for one meal definition. The definition
+ * row is the stable mutex shared by archive, edit, deletion scheduling,
+ * cancellation, restoration and due-retirement completion.
+ */
+export async function lockMealDefinitionMutation(
+  client: Client,
+  institutionId: string,
+  mealDefinitionId: string
+): Promise<void> {
+  const rows = await client.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id"
+    FROM "MealDefinition"
+    WHERE "id" = ${mealDefinitionId}
+      AND "institutionId" = ${institutionId}
+    FOR UPDATE
+  `);
+  if (rows.length !== 1) {
+    throw new ApiError(CODES.NOT_FOUND, "This meal definition could not be found.", 404);
+  }
+}
+
 export async function scheduleMealDefinitionDeletion(
   input: ActorInput & { reason: string },
   client: Client = db
 ) {
   const now = input.now ?? new Date();
   return inTransaction(client, async (tx) => {
+    await lockMealDefinitionMutation(tx, input.institutionId, input.mealDefinitionId);
     const definition = await tx.mealDefinition.findFirst({
       where: { id: input.mealDefinitionId, institutionId: input.institutionId },
     });
@@ -101,6 +125,7 @@ export async function cancelMealDefinitionDeletion(
 ) {
   const now = input.now ?? new Date();
   return inTransaction(client, async (tx) => {
+    await lockMealDefinitionMutation(tx, input.institutionId, input.mealDefinitionId);
     const definition = await tx.mealDefinition.findFirst({
       where: { id: input.mealDefinitionId, institutionId: input.institutionId },
     });
@@ -167,6 +192,7 @@ export async function cancelMealDefinitionDeletion(
 export async function restoreMealDefinition(input: ActorInput, client: Client = db) {
   const now = input.now ?? new Date();
   return inTransaction(client, async (tx) => {
+    await lockMealDefinitionMutation(tx, input.institutionId, input.mealDefinitionId);
     const definition = await tx.mealDefinition.findFirst({
       where: { id: input.mealDefinitionId, institutionId: input.institutionId },
     });
@@ -255,6 +281,14 @@ export async function refreshDueMealDefinitionRetirements(
   let blocked = 0;
   for (const candidate of due) {
     await inTransaction(client, async (tx) => {
+      const discoveredDefinition = await tx.mealDefinition.findFirst({
+        where: { id: candidate.entityId, institutionId },
+        select: { id: true },
+      });
+      if (discoveredDefinition) {
+        await lockMealDefinitionMutation(tx, institutionId, candidate.entityId);
+      }
+
       const request = await tx.deletionRequest.findFirst({
         where: {
           id: candidate.id,

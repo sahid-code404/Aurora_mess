@@ -19,7 +19,10 @@ import {
   mealDefinitionUpdateSchema,
   validateDefinitionInvariants,
 } from "@/lib/domain/meal-definition-schema";
-import { refreshDueMealDefinitionRetirements } from "@/lib/domain/meal-retirement";
+import {
+  lockMealDefinitionMutation,
+  refreshDueMealDefinitionRetirements,
+} from "@/lib/domain/meal-retirement";
 
 function serializeVersion(v: Record<string, any>) {
   return {
@@ -123,6 +126,7 @@ export const PUT = route({ auth: "ADMIN" }, async (ctx) => {
   const patch = await parseBody(ctx.req, mealDefinitionUpdateSchema);
 
   const result = await db.$transaction(async (tx) => {
+    await lockMealDefinitionMutation(tx, ctx.institutionId, ctx.params.id);
     const def = await tx.mealDefinition.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },

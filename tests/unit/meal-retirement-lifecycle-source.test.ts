@@ -28,6 +28,15 @@ describe("meal-definition retirement source contracts", () => {
     expect(migration).toContain(""active" = FALSE");
   });
 
+  test("all lifecycle mutations share the MealDefinition row mutex", () => {
+    expect(domain).toContain('FROM "MealDefinition"');
+    expect(domain).toContain("FOR UPDATE");
+    expect(domain.match(/lockMealDefinitionMutation\(tx/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(detailRoute).toContain("await lockMealDefinitionMutation(tx, ctx.institutionId, ctx.params.id)");
+    const archive = Bun.file("src/app/api/v1/admin/meal-definitions/[id]/archive/route.ts");
+    expect(archive.size).toBeGreaterThan(0);
+  });
+
   test("scheduling archives immediately and persists SCHEDULED instead of dead QUEUED copy", () => {
     expect(domain).toContain('status: "SCHEDULED"');
     expect(domain).toContain("archivedAt: definition.archivedAt ?? now");
