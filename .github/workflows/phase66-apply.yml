@@ -1,0 +1,26 @@
+name: Phase66 Apply
+on:
+  push:
+    branches: [feat/phase66-archive-lifecycle-integrity]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[phase66-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase66-archive-lifecycle-integrity
+          fetch-depth: 0
+      - name: Apply reviewed patch
+        run: |
+          python scripts/audit_phase66_apply.py
+          rm scripts/audit_phase66_apply.py
+      - name: Commit product changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add prisma/schema.prisma src/lib/domain/rules/deficit-rules.ts src/app/api/v1/admin/rules/deficit/route.ts src/components/app/admin/settings.tsx scripts/audit_phase66_apply.py
+          git commit -m 'phase66: align archive lifecycle contracts [phase66-applied]'
+          git push origin HEAD:feat/phase66-archive-lifecycle-integrity
