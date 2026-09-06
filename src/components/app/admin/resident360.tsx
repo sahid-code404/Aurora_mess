@@ -906,6 +906,7 @@ export default function AdminResident360({ id }: { id?: string }) {
         onOpenChange={setExemptionOpen}
         residentId={id}
         residentName={profile.fullName}
+        timeZone={tz}
         onSaved={() => invalidate([`/api/v1/admin/residents/${id}`, "/api/v1/admin/funds", "/api/v1/admin/residents"])}
       />
 
@@ -920,6 +921,17 @@ function toInputDate(iso: string | null): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function dateKeyInTimeZone(now: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function EditResidentDialog({
@@ -1071,27 +1083,41 @@ function ExemptionDialog({
   onOpenChange,
   residentId,
   residentName,
+  timeZone,
   onSaved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   residentId: string;
   residentName: string;
+  timeZone: string;
   onSaved: () => void;
 }) {
   const [reason, setReason] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [saving, setSaving] = useState(false);
+  const todayKey = dateKeyInTimeZone(new Date(), timeZone);
+  const expiryError = expiresAt && expiresAt < todayKey
+    ? `Expiry must be ${todayKey} or later in ${timeZone}.`
+    : null;
+
+  useEffect(() => {
+    if (open) {
+      setReason("");
+      setExpiresAt("");
+    }
+  }, [open]);
 
   async function save() {
+    if (!expiresAt || expiryError || reason.trim().length < 3) return;
     setSaving(true);
     try {
       await postJson("/api/v1/admin/policy-exemptions", {
         residentId,
         reason: reason.trim(),
-        expiresAt: expiresAt || undefined,
+        expiresAt,
       });
-      toast.success("Exemption created", { description: `${residentName} is exempt until ${expiresAt || "cancelled"}.` });
+      toast.success("Exemption created", { description: `${residentName} is exempt through ${expiresAt}.` });
       setReason("");
       setExpiresAt("");
       onSaved();
@@ -1103,14 +1129,14 @@ function ExemptionDialog({
     }
   }
 
-  const valid = reason.trim().length >= 3;
+  const valid = reason.trim().length >= 3 && expiresAt.length > 0 && !expiryError;
 
   return (
     <DetailDialog
       open={open}
       onOpenChange={onOpenChange}
       title="Create deficit-policy exemption"
-      description="While active, deficit restrictions (meal limiting) are lifted for this resident. Audited with your reason."
+      description="Temporarily lift deficit meal restrictions. Choose a finite expiry date; the exemption can be ended earlier from Funds."
       footer={
         <>
           <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
@@ -1131,11 +1157,12 @@ function ExemptionDialog({
           placeholder="e.g. Salary delayed — settling by month end"
         />
         <TextField
-          label="Expires on (optional)"
+          label="Expires on"
           type="date"
           value={expiresAt}
           onChange={setExpiresAt}
-          hint="Leave empty to keep the exemption until cancelled."
+          error={expiryError}
+          hint={`Required. Applies through this date in ${timeZone}.`}
         />
         <div className="glass-inset flex items-center justify-between rounded-md px-3.5 py-2.5">
           <span className="text-xs font-semibold text-muted-foreground">Policy</span>
