@@ -53,7 +53,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     const now = new Date();
-    if (now.getTime() < instance.lockAt.getTime()) {
+    const lockPassed = now.getTime() >= instance.lockAt.getTime();
+    if (!lockPassed) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
         `Admin guest correction is available after this meal locks (${formatTimeLabel(instance.lockAt, inst.timezone)}). Before then, residents manage their own guest meals.`,
