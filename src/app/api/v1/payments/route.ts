@@ -33,6 +33,7 @@ import { finishPage, formFile, formText, keysetWhere, readFormData } from "@/lib
 import { serializePayment } from "@/lib/domain/serialize";
 import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-variables";
 import { residentFundsSummary } from "@/lib/domain/funds";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -160,6 +161,13 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const displayNumber = await nextPaymentNumber();
 
   const result = await db.$transaction(async (tx) => {
+    // A genuinely new payment must join the same resident financial mutex used
+    // by billing generation, payment review, refunds and bill adjustments. This
+    // prevents a PENDING payment from appearing after billing's readiness check
+    // but before its snapshot/bill commit. Completed fast replays already
+    // returned above and therefore never wait on this mutation lock.
+    await lockResidentFinancialMutation(tx, ctx.institutionId, ctx.user.id);
+
     if (storageIdempotencyKey) {
       const claim = await claimIdempotencyKey({
         client: tx,

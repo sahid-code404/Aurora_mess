@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { lockInstitutionResidentFinancialMutations } from "@/lib/domain/financial-lock";
 
 export type GuestMealLifecycleStatus = "REQUESTED" | "CONFIRMED" | "LOCKED" | "CANCELLED" | "CONSUMED";
 
@@ -24,6 +25,13 @@ export function deriveGuestMealLifecycleStatus(
  * CANCELLED and legacy REQUESTED rows are never auto-promoted.
  *
  * Status-qualified updateMany calls make concurrent refreshes idempotent.
+ *
+ * Billing calls this function first during its transaction, without a
+ * hostResidentId and with an explicit transaction client. In that exact
+ * transaction-scoped form we also acquire every resident financial mutex before
+ * any lifecycle/readiness query. Ordinary guest-history refreshes use the
+ * global client (or a host scope) and therefore do not hold institution-wide
+ * financial locks.
  */
 export async function refreshGuestMealLifecycle(options: {
   institutionId: string;
@@ -35,6 +43,14 @@ export async function refreshGuestMealLifecycle(options: {
 }): Promise<{ locked: number; consumed: number }> {
   const client = options.client ?? db;
   const now = options.now ?? new Date();
+
+  // Do not infer Prisma runtime shape here. An explicitly supplied client with
+  // no host scope is the billing transaction contract and therefore owns the
+  // institution-wide resident financial boundary.
+  if (options.client && !options.hostResidentId) {
+    await lockInstitutionResidentFinancialMutations(client, options.institutionId);
+  }
+
   const rows = await client.guestMealRequest.findMany({
     where: {
       institutionId: options.institutionId,

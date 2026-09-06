@@ -6,6 +6,7 @@ import { formatMinor } from "@/lib/money";
 import { getInstitution } from "@/lib/institution";
 import { postJournal } from "@/lib/domain/ledger";
 import { residentFundsSummary } from "@/lib/domain/funds";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 
 export type RefundMode = "CARRY_FORWARD" | "ISSUE_REFUND";
 
@@ -43,24 +44,6 @@ export type RefundEligibility = {
   } | null;
   carriedForwardAt: Date | null;
 };
-
-function isSerializationConflict(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: string }).code === "P2034";
-}
-
-/** PostgreSQL-safe serializable write with a small bounded retry. */
-async function serializableWrite<T>(work: (tx: any) => Promise<T>): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      return await db.$transaction(work, { isolationLevel: "Serializable" });
-    } catch (error) {
-      lastError = error;
-      if (!isSerializationConflict(error) || attempt === 3) throw error;
-    }
-  }
-  throw lastError;
-}
 
 /**
  * Determine whether a resident has an excess credit that may be resolved now.
@@ -172,19 +155,25 @@ export async function refundEligibilityForResident(
 /**
  * Create a refund atomically.
  *
- * The eligibility/available-credit read and refund write run at SERIALIZABLE
- * isolation so two admins cannot spend the same resident credit concurrently.
- * ISSUE_REFUND creates the domain row first as PROCESSING, posts a journal that
- * references the refund ID itself, then marks the row COMPLETED. Any failure
- * rolls the entire transaction back, so PROCESSING is never left behind by a
- * synchronous request failure.
+ * The resident financial mutex is the concurrency authority. We deliberately
+ * use PostgreSQL READ COMMITTED (Prisma's default) rather than SERIALIZABLE:
+ * when a refund waits behind billing/payment/adjustment work, the statements
+ * after the lock must observe the transaction that just committed ahead of it.
+ * Concurrent refunds are still serialized by the same resident row lock.
+ * ISSUE_REFUND creates the domain row as PROCESSING, posts the refund journal,
+ * then marks it COMPLETED inside the same transaction.
  */
 export async function createRefund(input: CreateRefundInput) {
   // residentFundsSummary reads institution settings through the cached
-  // institution service; pre-warm it before entering the serializable tx.
+  // institution service; pre-warm it before entering the write transaction.
   await getInstitution(input.institutionId);
 
-  return serializableWrite(async (tx) => {
+  return db.$transaction(async (tx) => {
+    // This is intentionally the first database statement in the transaction.
+    // A waiter resumes under READ COMMITTED and all subsequent eligibility reads
+    // see the billing/payment/adjustment state that committed ahead of it.
+    await lockResidentFinancialMutation(tx, input.institutionId, input.residentId);
+
     const resident = await tx.user.findFirst({
       where: { id: input.residentId, institutionId: input.institutionId, role: "RESIDENT" },
       include: { profile: { select: { fullName: true } } },
@@ -319,9 +308,8 @@ export async function createRefund(input: CreateRefundInput) {
       tx
     );
 
-    // Defense in depth. SERIALIZABLE isolation is the concurrency guarantee;
-    // this assertion also catches future calculation changes that could make a
-    // successful cash refund overdraw resident credit within the same transaction.
+    // Defense in depth: after the write, the same locked transaction must still
+    // report non-negative available credit.
     const summaryAfter = await residentFundsSummary(resident.id, tx);
     if (summaryAfter.availableMinor < 0) {
       throw new ApiError(
