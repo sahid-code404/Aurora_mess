@@ -243,7 +243,7 @@ model MealInstance {
   serviceEndAt            DateTime
   cutoffAt                DateTime
   lockAt                  DateTime
-  status                  String   @default("SCHEDULED") // SCHEDULED | OPEN | LOCKED | SERVICE_ACTIVE | COMPLETED | CANCELLED
+  status                  String   @default("OPEN") // OPEN | LOCKED | SERVICE_ACTIVE | COMPLETED | CANCELLED
   priceStrategySnapshot   String   @default("FORMULA")
   fixedPriceMinorSnapshot Int?
   createdAt               DateTime @default(now())

@@ -74,11 +74,22 @@ export function isUniqueViolation(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: string }).code === "P2002";
 }
 
-/** Instance status from server time: OPEN → LOCKED → COMPLETED. */
-export function computeInstanceStatus(now: Date, cutoffAt: Date, serviceEndAt: Date): string {
-  if (now.getTime() < cutoffAt.getTime()) return "OPEN";
-  if (now.getTime() < serviceEndAt.getTime()) return "LOCKED";
-  return "COMPLETED";
+/** The selection lock can never be later than service start. */
+export function computeMealLockAt(cutoffAt: Date, serviceStartAt: Date): Date {
+  return new Date(Math.min(cutoffAt.getTime(), serviceStartAt.getTime()));
+}
+
+/** Instance status from authoritative server time. CANCELLED is handled as terminal by refresh callers. */
+export function computeInstanceStatus(
+  now: Date,
+  lockAt: Date,
+  serviceStartAt: Date,
+  serviceEndAt: Date
+): "OPEN" | "LOCKED" | "SERVICE_ACTIVE" | "COMPLETED" {
+  if (now.getTime() >= serviceEndAt.getTime()) return "COMPLETED";
+  if (now.getTime() >= serviceStartAt.getTime()) return "SERVICE_ACTIVE";
+  if (now.getTime() >= lockAt.getTime()) return "LOCKED";
+  return "OPEN";
 }
 
 /** Resolve institution or fail loudly (misconfiguration is a 500, never silent). */
@@ -358,6 +369,7 @@ export async function ensureInstancesForRange(
 
       const cutoffAt = computeCutoffAt(dateKey, def.cutoffLocalTime, offsetDays, tz);
       const window = computeServiceWindow(dateKey, def.serviceStartLocal, def.serviceEndLocal, tz);
+      const lockAt = computeMealLockAt(cutoffAt, window.startAt);
       try {
         await client.mealInstance.create({
           data: {
@@ -368,8 +380,8 @@ export async function ensureInstancesForRange(
             serviceStartAt: window.startAt,
             serviceEndAt: window.endAt,
             cutoffAt,
-            lockAt: cutoffAt,
-            status: computeInstanceStatus(now, cutoffAt, window.endAt),
+            lockAt,
+            status: computeInstanceStatus(now, lockAt, window.startAt, window.endAt),
             priceStrategySnapshot: def.pricingStrategy ?? "FORMULA",
             fixedPriceMinorSnapshot: def.fixedPriceMinor ?? null,
           },
@@ -522,15 +534,29 @@ export async function refreshAndLock(
   const fromMid = localMidnight(fromKey);
   const toMid = localMidnight(toKey);
   const instances = (await client.mealInstance.findMany({
-    where: { institutionId, serviceDate: { gte: fromMid, lte: toMid }, cutoffAt: { lte: now } },
+    where: {
+      institutionId,
+      serviceDate: { gte: fromMid, lte: toMid },
+      status: { not: "CANCELLED" },
+      OR: [{ lockAt: { lte: now } }, { serviceStartAt: { lte: now } }, { serviceEndAt: { lte: now } }],
+    },
   })) as Record<string, any>[];
   if (instances.length === 0) return empty;
 
   let updatedInstances = 0;
   for (const inst of instances) {
-    const target = computeInstanceStatus(now, new Date(inst.cutoffAt), new Date(inst.serviceEndAt));
-    if (inst.status !== target) {
-      await client.mealInstance.update({ where: { id: inst.id }, data: { status: target } });
+    const effectiveLockAt = computeMealLockAt(new Date(inst.cutoffAt), new Date(inst.serviceStartAt));
+    const target = computeInstanceStatus(
+      now,
+      effectiveLockAt,
+      new Date(inst.serviceStartAt),
+      new Date(inst.serviceEndAt)
+    );
+    if (inst.status !== target || new Date(inst.lockAt).getTime() !== effectiveLockAt.getTime()) {
+      await client.mealInstance.update({
+        where: { id: inst.id },
+        data: { status: target, lockAt: effectiveLockAt },
+      });
       updatedInstances++;
     }
   }

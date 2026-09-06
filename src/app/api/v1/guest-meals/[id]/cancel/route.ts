@@ -32,10 +32,13 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   }
 
   const now = new Date();
-  if (now.getTime() >= guest.mealInstance.cutoffAt.getTime()) {
+  if (guest.mealInstance.status === "CANCELLED") {
+    throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
+  }
+  if (now.getTime() >= guest.mealInstance.lockAt.getTime()) {
     throw new ApiError(
       CODES.MEAL_CUTOFF_PASSED,
-      `This meal locked at ${formatTimeLabel(guest.mealInstance.cutoffAt, tz)}. Guest meals can no longer be changed.`,
+      `This meal locked at ${formatTimeLabel(guest.mealInstance.lockAt, tz)}. Guest meals can no longer be changed.`,
       409
     );
   }

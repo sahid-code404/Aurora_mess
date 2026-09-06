@@ -52,11 +52,14 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     }
 
     const now = new Date();
-    // Server-time cutoff — the browser countdown is decoration only (spec §16).
-    if (now.getTime() >= instance.cutoffAt.getTime()) {
+    if (instance.status === "CANCELLED") {
+      throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
+    }
+    // Server-time lock instant — never later than service start.
+    if (now.getTime() >= instance.lockAt.getTime()) {
       throw new ApiError(
         CODES.MEAL_CUTOFF_PASSED,
-        `This meal locked at ${formatTimeLabel(instance.cutoffAt, tz)}. Your change was not saved.`,
+        `This meal locked at ${formatTimeLabel(instance.lockAt, tz)}. Your change was not saved.`,
         409
       );
     }
