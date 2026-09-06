@@ -495,7 +495,7 @@ export interface PolicyExemptionRow {
   policyType: string;
   reason: string;
   startsAt: string;
-  expiresAt: string | null;
+  expiresAt: string;
   approvedByUserId: string;
   createdAt: string;
 }

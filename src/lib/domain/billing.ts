@@ -728,7 +728,7 @@ export async function generateBilling(
       policyExemptions: exemptionRows.map((e: any) => ({
         ...e,
         startsAt: e.startsAt.toISOString(),
-        expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,
+        expiresAt: e.expiresAt.toISOString(),
       })),
       totals: {
         residentCount: residents.length,

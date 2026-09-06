@@ -369,7 +369,7 @@ export default function AdminFunds() {
                   </div>
                   <p className="mt-1 truncate text-[12px] text-muted-foreground">{ex.reason}</p>
                   <p className="mt-1 text-[11px] text-muted-foreground/80">
-                    {ex.expiresAt ? `Until ${fmtDate(ex.expiresAt)}` : "Until cancelled"} · granted {fmtDate(ex.createdAt)}
+                    Until {fmtDate(ex.expiresAt)} · granted {fmtDate(ex.createdAt)}
                   </p>
                 </div>
                 <GlassButton variant="destructive" size="sm" onClick={() => setCancelTarget(ex)}>

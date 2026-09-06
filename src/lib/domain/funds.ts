@@ -97,7 +97,7 @@ export async function residentFundsSummary(residentId: string, client: any = db)
         residentId,
         policyType: "DEFICIT_RESTRICTION",
         startsAt: { lte: new Date() },
-        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        expiresAt: { gt: new Date() },
       },
     }),
   ]);
@@ -128,7 +128,7 @@ export async function residentFundsSummary(residentId: string, client: any = db)
   let graceUntilIso: string | null = null;
   if (activeExemption) {
     policyState = "EXEMPTED";
-    graceUntilIso = activeExemption.expiresAt?.toISOString() ?? null;
+    graceUntilIso = activeExemption.expiresAt.toISOString();
   } else if (availableMinor < -threshold && inst?.settings.deficitPolicyEnabled) {
     const oldestDue = unsettledBills[0]?.dueDate ?? null;
     if (oldestDue) {
