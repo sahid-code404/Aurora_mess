@@ -20,6 +20,10 @@ import {
 } from "@/lib/domain/meal-scope";
 import { listQuery, seekList } from "@/lib/domain/list";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
+import {
+  lockResidentLifecycleMutation,
+  requireActiveResidentAfterLock,
+} from "@/lib/domain/resident-lifecycle";
 
 const createSchema = z.object({
   startDate: dateKeySchema,
@@ -96,6 +100,11 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   }
 
   const created = await db.$transaction(async (tx) => {
+    // Persisted leave is Resident self-service. Serialize it against account
+    // deactivation/deletion and re-read ACTIVE only after the User mutex is held.
+    await lockResidentLifecycleMutation(tx, ctx.institutionId, ctx.user.id);
+    const resident = await requireActiveResidentAfterLock(tx, ctx.institutionId, ctx.user.id);
+
     // Revalidate inside the write transaction so a definition cannot become
     // archived between preview/request validation and persistence.
     const txSelection = await validateMealScopeSelection({
@@ -150,11 +159,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       tx
     );
 
-    const resident = await tx.user.findUnique({
-      where: { id: ctx.user.id },
-      include: { profile: true },
-    });
-    const residentName = resident?.profile?.fullName || ctx.user.email;
+    const residentName = resident.profile?.fullName || ctx.user.email;
     const scopeLabel =
       body.mealScope === "SELECTED_MEALS"
         ? ` for ${txSelection.meals.map((meal) => meal.name).join(", ")}`

@@ -37,6 +37,7 @@ import { serializePayment } from "@/lib/domain/serialize";
 import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-variables";
 import { residentFundsSummary } from "@/lib/domain/funds";
 import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
+import { requireActiveResidentAfterLock } from "@/lib/domain/resident-lifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -83,9 +84,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, fields);
   }
 
-  // Bind an active idempotency window to every side-effecting request fact.
-  // Proof bytes are included, not just filename/size, so replacing a receipt
-  // with another same-sized file cannot silently replay the previous payment.
   let requestHash: string | null = null;
   if (idempotencyKey) {
     if (proof && proof.size > MAX_PROOF_BYTES) {
@@ -115,10 +113,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     : null;
   let legacyInProgress = false;
 
-  // Completed idempotent retries are reads of an already-accepted business
-  // action, not new submission attempts. Resolve them before consuming the
-  // payment-submit abuse budget. Phase-37 records must match the current request
-  // hash before replay; older raw payloads remain compatible until their expiry.
   if (idempotencyKey && storageIdempotencyKey && requestHash) {
     const replayNow = new Date();
     const existing = await db.idempotencyRecord.findUnique({
@@ -179,9 +173,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     }
   }
 
-  // Only a request that still needs business processing consumes submission
-  // quota. This keeps completed network retries reliable even after the client/IP
-  // has exhausted the normal new-payment budget.
   const rl = await rateLimit(clientKey(ctx.req, "payment-submit"), 10, 60 * 60 * 1000);
   if (!rl.allowed) {
     throw new ApiError(
@@ -199,21 +190,18 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     );
   }
 
-  // Proof bytes must be staged before the domain transaction because storage is
-  // outside PostgreSQL. Display-number gaps remain harmless; staged proofs are
-  // removed below if the transaction aborts or resolves as an idempotent replay.
   const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null;
   const displayNumber = await nextPaymentNumber();
 
   const result = await (async () => {
     try {
       return await db.$transaction(async (tx) => {
-        // A genuinely new payment must join the same resident financial mutex used
-        // by billing generation, payment review, refunds and bill adjustments. This
-        // prevents a PENDING payment from appearing after billing's readiness check
-        // but before its snapshot/bill commit. Completed fast replays already
-        // returned above and therefore never wait on this mutation lock.
+        // Payment submission shares the Resident User-row mutex with billing,
+        // payment review and access lifecycle transitions. Re-read ACTIVE only
+        // after that mutex is held so a request authenticated before deactivation
+        // cannot create a new PENDING payment after deactivation commits.
         await lockResidentFinancialMutation(tx, ctx.institutionId, ctx.user.id);
+        const resident = await requireActiveResidentAfterLock(tx, ctx.institutionId, ctx.user.id);
 
         if (storageIdempotencyKey && requestHash) {
           const claim = await claimIdempotencyKey({
@@ -241,7 +229,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
           data: {
             institutionId: ctx.institutionId,
             displayNumber,
-            residentId: ctx.user.id, // NEVER client-supplied
+            residentId: ctx.user.id,
             amountMinor: amountMinor as number,
             method: method.data!,
             reference: reference ?? null,
@@ -296,12 +284,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
           tx
         );
 
-        const resident = await tx.user.findUnique({
-          where: { id: ctx.user.id },
-          include: { profile: true },
-        });
-        const residentName = resident?.profile?.fullName || ctx.user.email;
-
+        const residentName = resident.profile?.fullName || ctx.user.email;
         await notifyAdmins(
           ctx.institutionId,
           {
@@ -323,17 +306,11 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     }
   })();
 
-  // A concurrent request can claim/complete the same idempotency key after the
-  // fast preflight but before this transaction acquires the resident mutex. In
-  // that case this attempt returns the committed replay and its staged proof was
-  // never referenced, so clean it explicitly as well.
   if (result.replay && proofFile) {
     await cleanupUnreferencedStoredFile(proofFile.id, ctx.institutionId).catch(() => false);
   }
 
   await sweepOutboxSafe();
-  // Retention maintenance is deliberately best-effort and bounded. A cleanup
-  // failure must never turn a committed payment into an API failure.
   await sweepExpiredIdempotencyRecords({ institutionId: ctx.institutionId }).catch(() => 0);
 
   return {

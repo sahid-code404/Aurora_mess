@@ -1,11 +1,11 @@
 /**
  * POST /api/v1/payments/[id]/cancel — resident-owned payment lifecycle closure.
  *
- * Only the owning Resident may withdraw a PENDING payment. Pending payments
- * have not entered the ledger yet, so this transition creates no journal and
- * never changes bill settlement. The row-status update guard makes an Admin
- * review vs Resident withdrawal race deterministic: exactly one transition
- * wins and the loser receives RESOURCE_CHANGED instead of overwriting history.
+ * Only the owning ACTIVE Resident may withdraw a PENDING payment. The same User
+ * row mutex used by payment review/settlement and access lifecycle work is taken
+ * before the authoritative account/payment reads. Review, deactivation and
+ * withdrawal therefore observe one committed order; the status-qualified write
+ * remains the final protection against stale payment state.
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
@@ -14,33 +14,37 @@ import { appendAudit } from "@/lib/audit";
 import { formatMinor } from "@/lib/money";
 import { notifyAdmins, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
 import { serializePayment } from "@/lib/domain/serialize";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
+import { requireActiveResidentAfterLock } from "@/lib/domain/resident-lifecycle";
 
 export const dynamic = "force-dynamic";
 
 export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
-  const payment = await db.payment.findFirst({
-    where: {
-      id: ctx.params.id,
-      institutionId: ctx.institutionId,
-      residentId: ctx.user.id,
-    },
-  });
-
-  if (!payment) {
-    throw new ApiError(CODES.NOT_FOUND, "This payment could not be found.", 404);
-  }
-  if (payment.status === "VOIDED") {
-    throw new ApiError(CODES.PAYMENT_INVALID_STATE, "This payment is already withdrawn or voided.", 409);
-  }
-  if (payment.status !== "PENDING") {
-    throw new ApiError(
-      CODES.PAYMENT_INVALID_STATE,
-      "Only payments that are still waiting for review can be withdrawn.",
-      409
-    );
-  }
-
   const result = await db.$transaction(async (tx) => {
+    await lockResidentFinancialMutation(tx, ctx.institutionId, ctx.user.id);
+    const resident = await requireActiveResidentAfterLock(tx, ctx.institutionId, ctx.user.id);
+
+    const payment = await tx.payment.findFirst({
+      where: {
+        id: ctx.params.id,
+        institutionId: ctx.institutionId,
+        residentId: ctx.user.id,
+      },
+    });
+    if (!payment) {
+      throw new ApiError(CODES.NOT_FOUND, "This payment could not be found.", 404);
+    }
+    if (payment.status === "VOIDED") {
+      throw new ApiError(CODES.PAYMENT_INVALID_STATE, "This payment is already withdrawn or voided.", 409);
+    }
+    if (payment.status !== "PENDING") {
+      throw new ApiError(
+        CODES.PAYMENT_INVALID_STATE,
+        "Only payments that are still waiting for review can be withdrawn.",
+        409
+      );
+    }
+
     const guard = await tx.payment.updateMany({
       where: {
         id: payment.id,
@@ -92,12 +96,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       tx
     );
 
-    const resident = await tx.user.findUnique({
-      where: { id: ctx.user.id },
-      include: { profile: true },
-    });
-    const residentName = resident?.profile?.fullName || ctx.user.email;
-
+    const residentName = resident.profile?.fullName || ctx.user.email;
     await notifyAdmins(
       ctx.institutionId,
       {
