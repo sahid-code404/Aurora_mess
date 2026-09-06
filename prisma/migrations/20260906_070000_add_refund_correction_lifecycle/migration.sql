@@ -6,3 +6,6 @@ ALTER TABLE "Refund"
   ADD COLUMN "voidReason" TEXT,
   ADD COLUMN "voidedByUserId" TEXT,
   ADD COLUMN "voidedAt" TIMESTAMP(3);
+
+CREATE INDEX "Refund_institutionId_residentId_status_idx"
+  ON "Refund"("institutionId", "residentId", "status");

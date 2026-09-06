@@ -4,6 +4,7 @@ import { appendAudit } from "@/lib/audit";
 import { appendOutbox } from "@/lib/outbox";
 import { formatMinor } from "@/lib/money";
 import { postJournal } from "@/lib/domain/ledger";
+import { recomputeBillSettlement } from "@/lib/domain/funds";
 import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 
 export type VoidRefundInput = {
@@ -46,10 +47,10 @@ export async function voidRefund(input: VoidRefundInput) {
     });
     if (!refund) throw new ApiError(CODES.NOT_FOUND, "Refund not found.", 404);
     if (refund.status === "VOIDED") {
-      throw new ApiError(CODES.REFUND_NOT_ELIGIBLE, "This refund was already voided.", 409);
+      throw new ApiError(CODES.REFUND_INVALID_STATE, "This refund was already voided.", 409);
     }
     if (refund.status !== "COMPLETED") {
-      throw new ApiError(CODES.REFUND_NOT_ELIGIBLE, "Only completed refunds can be voided.", 409);
+      throw new ApiError(CODES.REFUND_INVALID_STATE, "Only completed refunds can be voided.", 409);
     }
 
     let reversalJournalId: string | null = null;
@@ -155,8 +156,16 @@ export async function voidRefund(input: VoidRefundInput) {
       },
     });
     if (guard.count !== 1) {
-      throw new ApiError(CODES.REFUND_NOT_ELIGIBLE, "This refund was already changed.", 409);
+      throw new ApiError(CODES.REFUND_INVALID_STATE, "This refund was already changed.", 409);
     }
+
+    // A reversed cash payout restores resident credit. Re-run the same FIFO
+    // settlement kernel used by payment mutations immediately so newer bills
+    // cannot remain due while Funds already exposes the restored credit.
+    const settlement =
+      refund.mode === "ISSUE_REFUND"
+        ? await recomputeBillSettlement(tx, refund.residentId)
+        : { changedBills: 0, unappliedMinor: 0 };
 
     await appendAudit(
       {
@@ -176,6 +185,8 @@ export async function voidRefund(input: VoidRefundInput) {
           amountMinor: refund.amountMinor,
           originalJournalId: refund.journalId,
           reversalJournalId,
+          settledBills: settlement.changedBills,
+          unappliedMinor: settlement.unappliedMinor,
         },
       },
       tx

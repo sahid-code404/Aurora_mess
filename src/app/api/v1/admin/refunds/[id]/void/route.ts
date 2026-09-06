@@ -10,6 +10,8 @@ import { voidRefund } from "@/lib/domain/refund-correction";
 import { serializeRefund } from "@/lib/domain/serialize";
 import { sweepOutbox } from "@/lib/outbox";
 
+export const dynamic = "force-dynamic";
+
 const bodySchema = z.object({ reason: reasonSchema });
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {

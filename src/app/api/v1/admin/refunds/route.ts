@@ -139,13 +139,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     },
   });
 
-  const sortedItems = [...page.items].sort((a, b) => {
-    const getRank = (status: string) => (status === "PENDING" || status === "PROCESSING" ? 0 : 1);
-    const rankA = getRank(a.status);
-    const rankB = getRank(b.status);
-    if (rankA !== rankB) return rankA - rankB;
-    return b.createdAt.getTime() - a.createdAt.getTime();
-  });
+  // Refund creation is atomic: only committed COMPLETED / VOIDED rows are
+  // externally visible. Preserve the keyset order rather than prioritizing
+  // unreachable PENDING / PROCESSING display states.
+  const sortedItems = page.items;
 
   return {
     data: sortedItems.map((refund) => ({

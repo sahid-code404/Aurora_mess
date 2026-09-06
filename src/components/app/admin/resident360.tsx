@@ -620,7 +620,7 @@ export default function AdminResident360({ id }: { id?: string }) {
                           </Chip>
                         </div>
                         <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                          {ref.reason}
+                          {ref.status === "VOIDED" ? `Corrected: ${ref.voidReason ?? "Administrative correction"}` : ref.reason}
                         </p>
                         <p className="text-[10px] text-muted-foreground/70 mt-0.5">
                           {fmtDate(ref.createdAt)} {ref.destination ? `· ${ref.destination}` : ""}

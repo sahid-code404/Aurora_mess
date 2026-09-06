@@ -530,7 +530,13 @@ export default function ResidentPayments() {
                               <MealOrb icon={<RotateCcw />} colorToken="sky" size="sm" />
                               <div className="min-w-0">
                                 <h4 className="truncate text-sm font-semibold text-foreground tracking-tight">
-                                  {r.mode === "CARRY_FORWARD" ? "Carried Forward" : "Refund Issued"}
+                                  {r.status === "VOIDED"
+                                    ? r.mode === "CARRY_FORWARD"
+                                      ? "Carry Forward Corrected"
+                                      : "Refund Corrected"
+                                    : r.mode === "CARRY_FORWARD"
+                                      ? "Carried Forward"
+                                      : "Refund Issued"}
                                 </h4>
                                 <p className="kpi-num mt-0.5 text-xs text-muted-foreground flex items-center gap-1 truncate">
                                   <Clock className="size-3 shrink-0" aria-hidden />
@@ -542,7 +548,7 @@ export default function ResidentPayments() {
                             <div className="text-right shrink-0">
                               <Money minor={r.amountMinor} className="text-base sm:text-lg font-bold text-foreground block leading-tight" />
                               <span className="kpi-num text-[11px] font-medium text-muted-foreground block mt-0.5">
-                                {r.mode === "CARRY_FORWARD" ? "credited" : "refunded"}
+                                {r.status === "VOIDED" ? "corrected" : r.mode === "CARRY_FORWARD" ? "credited" : "refunded"}
                               </span>
                             </div>
                           </div>
@@ -559,8 +565,8 @@ export default function ResidentPayments() {
                                   To: {r.destination}
                                 </span>
                               )}
-                              <span className="text-[11px] text-muted-foreground truncate max-w-[180px]" title={r.reason}>
-                                {r.reason}
+                              <span className="text-[11px] text-muted-foreground truncate max-w-[180px]" title={r.status === "VOIDED" ? r.voidReason ?? r.reason : r.reason}>
+                                {r.status === "VOIDED" ? `Corrected: ${r.voidReason ?? "Administrative correction"}` : r.reason}
                               </span>
                             </div>
                           </div>

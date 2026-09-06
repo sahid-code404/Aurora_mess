@@ -445,13 +445,19 @@ model Refund {
   mode            String // CARRY_FORWARD | ISSUE_REFUND
   reason          String
   destination     String?
-  status          String    @default("PENDING") // PENDING | PROCESSING | COMPLETED | FAILED | VOIDED
-  journalId       String?
-  createdByUserId String
-  createdAt       DateTime  @default(now())
-  completedAt     DateTime?
+  status            String    @default("PENDING") // COMPLETED | VOIDED; PROCESSING is transaction-internal, legacy PENDING/FAILED are invalid
+  journalId         String?
+  reversalJournalId String?
+  createdByUserId   String
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+  voidReason        String?
+  voidedByUserId    String?
+  voidedAt          DateTime?
 
   payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@index([institutionId, residentId, status])
 }
 
 // ---------------------------------------------------------------------
