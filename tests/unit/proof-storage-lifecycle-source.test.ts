@@ -30,6 +30,24 @@ describe("proof storage lifecycle source guards", () => {
     expect(rowDelete).toBeGreaterThan(objectDelete);
   });
 
+  test("runtime proof reads go through immutable size/checksum verification", () => {
+    const storage = source("src/lib/storage.ts");
+    const integrity = source("src/lib/storage-integrity.ts");
+    const readExport = storage.indexOf("export async function readStoredFile");
+    const verifiedRead = storage.indexOf(
+      "await readVerifiedStoredFileBytes(STORAGE_DIR, record)",
+      readExport
+    );
+    const rawRead = storage.indexOf("readFile(path.join(STORAGE_DIR, record.objectKey))", readExport);
+
+    expect(readExport).toBeGreaterThan(-1);
+    expect(verifiedRead).toBeGreaterThan(readExport);
+    expect(rawRead).toBe(-1);
+    expect(integrity).toContain("export async function readVerifiedStoredFileBytes");
+    expect(integrity).toContain("buffer.length !== record.sizeBytes");
+    expect(integrity).toContain('createHash("sha256").update(buffer).digest("hex")');
+  });
+
   test("payment cleans staged proof on rollback and on a late idempotent replay", () => {
     const payment = source("src/app/api/v1/payments/route.ts");
     const staged = payment.indexOf("const proofFile = proof ? await storeUpload");
