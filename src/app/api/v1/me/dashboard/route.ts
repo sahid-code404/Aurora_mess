@@ -2,8 +2,8 @@
  * GET /api/v1/me/dashboard — the resident home view (auth RESIDENT, §205-208):
  * greeting with the resident's name; KPIs (my meals today, available balance,
  * current amount to pay, derived payment status); today's meals with my state
- * + cutoff countdown info (server instants; the client renders the countdown);
- * today's GUEST meals (self-service under cutoff) so the current-day agenda
+ * + lock/cutoff countdown info (server instants; the client renders the countdown);
+ * today's GUEST meals (self-service until lockAt) so the current-day agenda
  * view can show the guest row above breakfast/lunch/dinner; recent activity =
  * my last 8 notifications; pinned announcements.
  */
@@ -38,7 +38,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
 
   // The dashboard exposes guest status, so persist time-derived lifecycle
   // transitions before the parallel read. This keeps it consistent with the
-  // dedicated guest page and avoids stale CONFIRMED rows after cutoff/service.
+  // dedicated guest page and avoids stale CONFIRMED rows after lock/service.
   await refreshGuestMealLifecycle({
     institutionId: ctx.institutionId,
     hostResidentId: ctx.user.id,
@@ -158,7 +158,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
           serviceEndAt: instance.serviceEndAt.toISOString(),
           cutoffAt: instance.cutoffAt.toISOString(),
           lockAt: instance.lockAt.toISOString(),
-          locked: now > instance.cutoffAt,
+          locked: now.getTime() >= instance.lockAt.getTime(),
           instanceStatus: instance.status,
           myState: mine?.effectiveState ?? null,
           myReason: mine?.effectiveReason ?? null,
@@ -175,6 +175,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
         note: g.note,
         status: g.status,
         cutoffAt: g.mealInstance.cutoffAt.toISOString(),
+        lockAt: g.mealInstance.lockAt.toISOString(),
       })),
       recentActivity: notifications.map((n) => ({
         id: n.id,
