@@ -21,10 +21,12 @@ import EmptyState from "@/components/glass/EmptyState";
 import ErrorState from "@/components/glass/ErrorState";
 import { ListSkeleton } from "@/components/glass/LoadingSkeleton";
 import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
+import { useSession } from "@/hooks/use-session";
 import { useApiMetaQuery } from "./_shared/api";
+import { currentMonthKeyInTz } from "./_shared/business-date";
 import { SearchField } from "./_shared/fields";
 import { Chip, FilterChips, KpiGrid } from "./_shared/chrome";
-import { fmtDateTime, todayKey } from "./_shared/format";
+import { fmtDateTime } from "./_shared/format";
 import type { AuditRow } from "./_shared/types";
 import { ApiClientError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -94,7 +96,9 @@ function prettyJson(raw: string | null): string {
 }
 
 export default function AdminAudit() {
-  const currentMonthKey = todayKey().slice(0, 7);
+  const { institution } = useSession();
+  const tz = institution?.timezone ?? "Asia/Kolkata";
+  const currentMonthKey = currentMonthKeyInTz(tz);
   const [monthKey, setMonthKey] = useState<string>(currentMonthKey);
   const [actionText, setActionText] = useState("");
   const [entityType, setEntityType] = useState("");
@@ -261,7 +265,7 @@ export default function AdminAudit() {
                         </span>
                       </span>
                       <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span className="kpi-num text-[11px] text-muted-foreground">{fmtDateTime(row.occurredAt)}</span>
+                        <span className="kpi-num text-[11px] text-muted-foreground">{fmtDateTime(row.occurredAt, tz)}</span>
                         <Chip tone={row.actorRole === "ADMIN" ? "frost" : "neutral"}>{row.actorRole ?? "—"}</Chip>
                         {row.reason && (
                           <span className="min-w-0 flex-1 basis-24 truncate text-[11px] italic text-muted-foreground/80">
