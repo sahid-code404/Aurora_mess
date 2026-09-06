@@ -94,10 +94,12 @@ const STATUS_LABELS: Record<string, string> = {
   CLOSING: "Closing",
   BILLED: "Billed",
   REOPENED: "Reopened",
+  UNKNOWN: "Unknown",
 };
 
-function normalize(status: string): string {
-  return status.trim().toUpperCase().replace(/[\s-]+/g, "_");
+function normalize(status: string | null | undefined): string {
+  const raw = typeof status === "string" ? status.trim() : "";
+  return (raw || "UNKNOWN").toUpperCase().replace(/[\s-]+/g, "_");
 }
 
 export function StatusBadge({
@@ -107,7 +109,7 @@ export function StatusBadge({
   icon: Icon,
   className,
 }: {
-  status: string;
+  status?: string | null;
   /** Override the humanized label (default derived from the status code). */
   label?: string;
   dot?: boolean;
@@ -116,7 +118,7 @@ export function StatusBadge({
 }) {
   const key = normalize(status);
   const tone = STATUS_TONES[key] ?? "neutral";
-  const text = label ?? STATUS_LABELS[key] ?? status;
+  const text = label ?? STATUS_LABELS[key] ?? status ?? "Unknown";
 
   return (
     <span
