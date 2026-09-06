@@ -1,9 +1,10 @@
 /**
  * POST /api/v1/admin/meals/[instanceId]/guest-override — admin override for guest meals.
  * Allows administrators to add, step (+/-), or remove guest meals for any active
- * resident even AFTER cutoff (admin authority). Records reason in audit trail
- * and notifies the resident. Resident-row serialization prevents concurrent
- * access-removal and guest mutations from validating different account states.
+ * resident after the authoritative meal lock boundary but before service ends.
+ * Records a mandatory reason in the audit trail and notifies the resident.
+ * Resident-row serialization prevents concurrent access-removal and guest
+ * mutations from validating different account states.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -40,11 +41,18 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (instance.status === "CANCELLED") {
       throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
     }
-    const isLocked = now.getTime() >= instance.lockAt.getTime();
-    if (!isLocked) {
+    const lockPassed = now.getTime() >= instance.lockAt.getTime();
+    if (!lockPassed) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
-        `Admin guest override is only allowed after the meal cutoff has passed (${formatTimeLabel(instance.cutoffAt, inst.timezone)}). Before cutoff, residents manage their own guest meals.`,
+        `Admin guest override is only allowed after this meal locks (${formatTimeLabel(instance.lockAt, inst.timezone)}). Before then, residents manage their own guest meals.`,
+        409
+      );
+    }
+    if (now.getTime() >= instance.serviceEndAt.getTime()) {
+      throw new ApiError(
+        CODES.MEAL_NOT_AVAILABLE,
+        "This meal service has already ended. Consumed guest-meal history cannot be rewritten; use the billing/refund correction flow for financial corrections.",
         409
       );
     }
@@ -59,6 +67,14 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       orderBy: { createdAt: "asc" },
     });
 
+    if (existing.some((request) => request.status === "CONSUMED")) {
+      throw new ApiError(
+        CODES.MEAL_NOT_AVAILABLE,
+        "Consumed guest meals are historical records and cannot be changed.",
+        409
+      );
+    }
+
     const currentTotal = existing.reduce((s, g) => s + g.quantity, 0);
 
     let originalBaseline = currentTotal;
@@ -71,6 +87,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     const overrideNote = `Admin override|orig:${originalBaseline}`;
+    const lockBoundary = instance.lockAt;
 
     const unitPriceMinor =
       instance.priceStrategySnapshot === "FIXED" && instance.fixedPriceMinorSnapshot != null
@@ -83,7 +100,11 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       for (const req of existing) {
         await tx.guestMealRequest.update({
           where: { id: req.id },
-          data: { status: "CANCELLED", lockedAt: now, note: overrideNote },
+          data: {
+            status: "CANCELLED",
+            lockedAt: req.lockedAt ?? lockBoundary,
+            note: overrideNote,
+          },
         });
       }
       if (existing.length === 0) {
@@ -97,7 +118,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
             totalPriceMinor: 0,
             status: "CANCELLED",
             note: overrideNote,
-            lockedAt: now,
+            lockedAt: lockBoundary,
           },
         });
         targetRecordId = created.id;
@@ -110,7 +131,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         data: {
           quantity: body.quantity,
           totalPriceMinor: body.quantity * primary.unitPriceMinor,
-          lockedAt: isLocked ? now : primary.lockedAt,
+          status: "LOCKED",
+          lockedAt: primary.lockedAt ?? lockBoundary,
           note: overrideNote,
         },
       });
@@ -118,7 +140,11 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       for (let i = 1; i < existing.length; i++) {
         await tx.guestMealRequest.update({
           where: { id: existing[i].id },
-          data: { status: "CANCELLED", lockedAt: now, note: overrideNote },
+          data: {
+            status: "CANCELLED",
+            lockedAt: existing[i].lockedAt ?? lockBoundary,
+            note: overrideNote,
+          },
         });
       }
     } else {
@@ -130,9 +156,9 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           quantity: body.quantity,
           unitPriceMinor,
           totalPriceMinor: body.quantity * unitPriceMinor,
-          status: "CONFIRMED",
+          status: "LOCKED",
           note: overrideNote,
-          lockedAt: isLocked ? now : null,
+          lockedAt: lockBoundary,
         },
       });
       targetRecordId = created.id;
@@ -160,6 +186,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           mealName,
           previousQuantity: currentTotal,
           newQuantity: body.quantity,
+          lockAt: instance.lockAt.toISOString(),
+          cutoffAt: instance.cutoffAt.toISOString(),
         },
       },
       tx
@@ -185,10 +213,13 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       residentId: resident.id,
       quantity: body.quantity,
       previousQuantity: currentTotal,
+      status: body.quantity === 0 ? "CANCELLED" : "LOCKED",
+      lockAt: instance.lockAt.toISOString(),
+      cutoffAt: instance.cutoffAt.toISOString(),
     };
   });
 
-  sweepOutboxSafe();
+  await sweepOutboxSafe();
 
   return { data: result };
 });

@@ -1,10 +1,10 @@
 /**
  * POST /api/v1/admin/meals/[instanceId]/override — admin override (spec §32).
- * Works even AFTER the cutoff (admin authority, mandatory reason + audit).
- * Sets adminOverrideState, bumps version, locks the row when past cutoff, and
- * recomputes the effective state. Admin authority may override soft deficit
- * policy/Resident choice, but never calendar/account/membership/cutoff/leave
- * eligibility gates.
+ * Works after the authoritative meal lock boundary (admin authority, mandatory
+ * reason + audit). Sets adminOverrideState, bumps version, freezes the row at
+ * MealInstance.lockAt, and recomputes the effective state. Admin authority may
+ * override soft deficit policy/Resident choice, but never calendar/account/
+ * membership/lock/leave eligibility gates.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -65,11 +65,12 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (instance.status === "CANCELLED") {
       throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
     }
-    const cutoffPassed = now.getTime() >= instance.lockAt.getTime();
-    if (!cutoffPassed) {
+    const lockBoundary = instance.lockAt;
+    const lockPassed = now.getTime() >= instance.lockAt.getTime();
+    if (!lockPassed) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
-        `Admin override is only allowed after the meal cutoff has passed (${formatTimeLabel(instance.cutoffAt, tz)}). Before cutoff, residents manage their own meals.`,
+        `Admin override is only allowed after this meal locks (${formatTimeLabel(lockBoundary, tz)}). Before then, residents manage their own meals.`,
         409
       );
     }
@@ -102,7 +103,9 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       { ...evalCtx, adminOverride: targetAdminOverride }
     );
 
-    const lockedAt = rm.lockedAt ?? (now.getTime() >= instance.cutoffAt.getTime() ? now : null);
+    // The row became immutable at the instance lock boundary, not at the later
+    // time an Admin happened to open/override it. Preserve that historical fact.
+    const lockedAt = rm.lockedAt ?? lockBoundary;
 
     const guard = await tx.residentMeal.updateMany({
       where: { id: rm.id, version: rm.version },
@@ -113,7 +116,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         policyState: evalCtx.restricted ? "RESTRICTED" : null,
         leaveState: evalCtx.onLeave ? "ON_LEAVE" : null,
         version: rm.version + 1,
-        ...(lockedAt ? { lockedAt } : {}),
+        lockedAt,
       },
     });
     if (guard.count !== 1) {
@@ -144,6 +147,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           reason: after.effectiveReason,
           adminOverrideState: targetAdminOverride,
           cleared: isResetToNormal,
+          lockedAt: updated.lockedAt?.toISOString() ?? null,
           version: updated.version,
         }),
         metadata: {
@@ -151,7 +155,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           mealInstanceId: instance.id,
           mealName,
           serviceDate,
-          lockedByOverride: lockedAt != null,
+          lockAt: lockBoundary.toISOString(),
+          configuredCutoffAt: instance.cutoffAt.toISOString(),
           cleared: isResetToNormal,
         },
       },
@@ -182,11 +187,18 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       overridden: after.effectiveReason === "ADMIN_OVERRIDE",
       locked: updated.lockedAt != null,
       lockedAt: updated.lockedAt ? updated.lockedAt.toISOString() : null,
+      lockAt: lockBoundary.toISOString(),
       cutoffAt: instance.cutoffAt.toISOString(),
       version: updated.version,
     };
   });
 
   await sweepOutboxSafe();
-  return { data: result, meta: { cutoffLabel: formatTimeLabel(new Date(result.cutoffAt), tz) } };
+  return {
+    data: result,
+    meta: {
+      lockLabel: formatTimeLabel(new Date(result.lockAt), tz),
+      cutoffLabel: formatTimeLabel(new Date(result.cutoffAt), tz),
+    },
+  };
 });

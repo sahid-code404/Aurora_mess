@@ -1,8 +1,9 @@
 /**
  * GET /api/v1/admin/meals?date=YYYY-MM-DD — the admin day sheet (spec §27).
- * Materializes the day for every ACTIVE resident, locks past-cutoff meals,
- * then returns per-instance counts + the full resident roster with today's
- * states and month-to-date ON counts. Big response is fine (≤200 residents).
+ * Materializes the day for every ACTIVE resident, freezes meals whose
+ * authoritative lock boundary has passed, then returns per-instance counts +
+ * the full resident roster with today's states and month-to-date ON counts.
+ * Big response is fine (≤200 residents).
  */
 import { z } from "zod";
 import { route } from "@/lib/auth/guard";
@@ -111,16 +112,16 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const monthStart = localDateMidnightUtc(month.startKey);
   const monthEnd = localDateMidnightUtc(month.endKey);
   const now = new Date();
-  // Confirmed/locked/override condition (spec §8 & cutoff rule):
-  // Counts only meals that are locked, confirmed (past cutoff), or explicitly overridden.
-  // Excludes unconfirmed future/open meals before cutoff.
+  // Confirmed/locked/override condition (spec §8 & lock-boundary rule):
+  // Counts only meals that are frozen at lockAt, persisted as locked, or
+  // explicitly overridden. Excludes future/open meals before lockAt.
   const confirmedOnFilter = {
     effectiveState: "ON",
     mealInstance: { serviceDate: { gte: monthStart, lte: monthEnd } },
     OR: [
       { lockedAt: { not: null } },
       { adminOverrideState: "ON" },
-      { mealInstance: { cutoffAt: { lte: now } } },
+      { mealInstance: { lockAt: { lte: now } } },
       { mealInstance: { status: { in: ["LOCKED", "SERVICE_ACTIVE", "COMPLETED"] } } },
     ],
   };
@@ -131,7 +132,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     OR: [
       { lockedAt: { not: null } },
       { adminOverrideState: "OFF" },
-      { mealInstance: { cutoffAt: { lte: now } } },
+      { mealInstance: { lockAt: { lte: now } } },
       { mealInstance: { status: { in: ["LOCKED", "SERVICE_ACTIVE", "COMPLETED"] } } },
     ],
   };
@@ -256,6 +257,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
           serviceDate: keyOfUtcDate(i.serviceDate),
           serviceWindow: { startAt: i.serviceStartAt.toISOString(), endAt: i.serviceEndAt.toISOString() },
           cutoffAt: i.cutoffAt.toISOString(),
+          lockAt: i.lockAt.toISOString(),
           status: i.status,
         },
         definition: {
