@@ -1,0 +1,31 @@
+name: Phase 64 Billing State Integrity
+
+on:
+  push:
+    branches:
+      - feat/phase64-billing-generation-state-integrity
+    paths:
+      - .github/workflows/phase64-billing-state.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase64-billing-generation-state-integrity
+          fetch-depth: 0
+      - name: Apply Phase 64
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_phase64_apply.py
+          git diff --check
+          git config user.name "BoardOps Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add prisma src tests
+          git commit -m "fix: align billing generation state persistence"
+          git push origin HEAD:feat/phase64-billing-generation-state-integrity
