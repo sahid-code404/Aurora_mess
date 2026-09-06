@@ -21,7 +21,7 @@ import { formatMinor, multiplyRoundHalfUp, parseDecimalToMinor } from "@/lib/mon
 import { getInstitution } from "@/lib/institution";
 import { nextExpenseNumber } from "@/lib/ids";
 import { dateKeySchema } from "@/lib/validation";
-import { storeUpload } from "@/lib/storage";
+import { cleanupUnreferencedStoredFile, storeUpload } from "@/lib/storage";
 import { sweepOutbox } from "@/lib/outbox";
 import { finishPage, formFile, formText, keysetWhere, parseJsonField, readFormData } from "@/lib/domain/http";
 import { serializeExpense } from "@/lib/domain/serialize";
@@ -109,15 +109,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     category = { id: found.id, name: found.name };
   }
 
-  // Proof + display number are prepared BEFORE the transaction (global client;
-  // a rollback leaves at most a harmless orphan file / number gap).
-  const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null;
-  const displayNumber = await nextExpenseNumber();
   const expenseDate = new Date(`${dateKey.data!}T00:00:00.000Z`);
 
-  // Closed-period guard (mirrors the membership route): an expense dated inside
-  // a BILLED period posts a real journal but is INVISIBLE to the immutable
-  // snapshot — the cost would never be recovered from residents (audit 9-c #7).
+  // Closed-period guard runs BEFORE staging proof bytes. A request that is
+  // deterministically invalid must not create storage that then needs recovery.
   const inst = await getInstitution(ctx.institutionId);
   const tz = inst?.timezone ?? "UTC";
   const billedPeriods = await db.billingPeriod.findMany({
@@ -136,51 +131,66 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
   }
 
-  const expense = await db.$transaction(async (tx) => {
-    const created = await tx.expense.create({
-      data: {
-        institutionId: ctx.institutionId,
-        displayNumber,
-        date: expenseDate,
-        categoryId: category?.id ?? null,
-        status: "PENDING",
-        source: "DIRECT",
-        description: description!,
-        comment: comment ?? null,
-        submittedByUserId: ctx.user.id,
-        totalMinor,
-        proofFileId: proofFile?.id ?? null,
-      },
-    });
-    await tx.expenseItem.createMany({
-      data: computed.map((item, index) => ({ ...item, expenseId: created.id, sortOrder: index })),
-    });
-    await appendAudit(
-      {
-        institutionId: ctx.institutionId,
-        actorUserId: ctx.user.id,
-        actorRole: "ADMIN",
-        action: "EXPENSE_CREATED",
-        entityType: "EXPENSE",
-        entityId: created.id,
-        requestId: ctx.requestId,
-        beforeSummary: null,
-        afterSummary: "PENDING",
-        metadata: {
-          totalMinor,
-          itemCount: computed.length,
-          date: dateKey.data!,
-          displayNumber,
-          hasProof: Boolean(proofFile),
-          categoryName: category?.name ?? null,
-        },
-        ip: ctx.req.headers.get("x-forwarded-for"),
-        userAgent: ctx.req.headers.get("user-agent") ?? undefined,
-      },
-      tx
-    );
-    return created;
-  });
+  // Proof + display number are staged only after all deterministic guards.
+  // A display-number gap is harmless; a failed domain transaction explicitly
+  // removes an unreferenced proof below.
+  const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null;
+  const displayNumber = await nextExpenseNumber();
+
+  const expense = await (async () => {
+    try {
+      return await db.$transaction(async (tx) => {
+        const created = await tx.expense.create({
+          data: {
+            institutionId: ctx.institutionId,
+            displayNumber,
+            date: expenseDate,
+            categoryId: category?.id ?? null,
+            status: "PENDING",
+            source: "DIRECT",
+            description: description!,
+            comment: comment ?? null,
+            submittedByUserId: ctx.user.id,
+            totalMinor,
+            proofFileId: proofFile?.id ?? null,
+          },
+        });
+        await tx.expenseItem.createMany({
+          data: computed.map((item, index) => ({ ...item, expenseId: created.id, sortOrder: index })),
+        });
+        await appendAudit(
+          {
+            institutionId: ctx.institutionId,
+            actorUserId: ctx.user.id,
+            actorRole: "ADMIN",
+            action: "EXPENSE_CREATED",
+            entityType: "EXPENSE",
+            entityId: created.id,
+            requestId: ctx.requestId,
+            beforeSummary: null,
+            afterSummary: "PENDING",
+            metadata: {
+              totalMinor,
+              itemCount: computed.length,
+              date: dateKey.data!,
+              displayNumber,
+              hasProof: Boolean(proofFile),
+              categoryName: category?.name ?? null,
+            },
+            ip: ctx.req.headers.get("x-forwarded-for"),
+            userAgent: ctx.req.headers.get("user-agent") ?? undefined,
+          },
+          tx
+        );
+        return created;
+      });
+    } catch (error) {
+      if (proofFile) {
+        await cleanupUnreferencedStoredFile(proofFile.id, ctx.institutionId).catch(() => false);
+      }
+      throw error;
+    }
+  })();
 
   sweepOutbox(20).catch(() => {});
 

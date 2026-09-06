@@ -7,7 +7,7 @@
  * default `uploads-storage/` path is intended for single-host/local deployments.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
@@ -36,6 +36,10 @@ export function detectMime(buffer: Buffer): { mime: string; ext: string } | null
 
 export type StoredFileRecord = { id: string; objectKey: string; fileName: string; mimeType: string; sizeBytes: number };
 
+function isMissingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT";
+}
+
 /** Validate + persist an uploaded proof. Returns the DB record. */
 export async function storeUpload(
   file: File,
@@ -55,21 +59,33 @@ export async function storeUpload(
     );
   }
   const objectKey = `${randomBytes(16).toString("hex")}.${detected.ext}`;
+  const objectPath = path.join(STORAGE_DIR, objectKey);
   await mkdir(STORAGE_DIR, { recursive: true });
-  await writeFile(path.join(STORAGE_DIR, objectKey), buffer);
+  await writeFile(objectPath, buffer);
   const sha = createHash("sha256").update(buffer).digest("hex");
-  const record = await db.storedFile.create({
-    data: {
-      institutionId,
-      objectKey,
-      fileName: (file.name || `proof.${detected.ext}`).slice(0, 180),
-      mimeType: detected.mime,
-      sizeBytes: buffer.length,
-      sha256: sha,
-      uploadedByUserId,
-      scanStatus: "CLEAN", // content signature/type validated; malware scanning is a separate future control
-    },
-  });
+
+  // Filesystem and PostgreSQL cannot share one transaction. If metadata
+  // persistence fails after bytes were written, remove those bytes immediately
+  // rather than leaving an object that no database row can ever discover.
+  let record;
+  try {
+    record = await db.storedFile.create({
+      data: {
+        institutionId,
+        objectKey,
+        fileName: (file.name || `proof.${detected.ext}`).slice(0, 180),
+        mimeType: detected.mime,
+        sizeBytes: buffer.length,
+        sha256: sha,
+        uploadedByUserId,
+        scanStatus: "CLEAN", // content signature/type validated; malware scanning is a separate future control
+      },
+    });
+  } catch (error) {
+    await unlink(objectPath).catch(() => {});
+    throw error;
+  }
+
   return {
     id: record.id,
     objectKey: record.objectKey,
@@ -77,6 +93,46 @@ export async function storeUpload(
     mimeType: record.mimeType,
     sizeBytes: record.sizeBytes,
   };
+}
+
+/**
+ * Best-effort lifecycle cleanup for a proof that was staged before a domain
+ * transaction but never became referenced by that transaction.
+ *
+ * The random StoredFile id belongs to one upload attempt, so another request
+ * cannot legitimately adopt it. Still, all current proof-bearing domains are
+ * checked before deletion as defense in depth: Payment, Expense and
+ * TaskSubmission. Referenced evidence is immutable and is never removed here.
+ */
+export async function cleanupUnreferencedStoredFile(
+  fileId: string,
+  institutionId: string
+): Promise<boolean> {
+  const record = await db.storedFile.findFirst({
+    where: { id: fileId, institutionId },
+    select: { id: true, objectKey: true },
+  });
+  if (!record) return false;
+
+  const [payment, expense, taskSubmission] = await Promise.all([
+    db.payment.findFirst({ where: { institutionId, proofFileId: fileId }, select: { id: true } }),
+    db.expense.findFirst({ where: { institutionId, proofFileId: fileId }, select: { id: true } }),
+    // TaskSubmission has no institutionId column. The StoredFile institution is
+    // already scoped above; any submission reference is enough to preserve it.
+    db.taskSubmission.findFirst({ where: { proofFileId: fileId }, select: { id: true } }),
+  ]);
+  if (payment || expense || taskSubmission) return false;
+
+  try {
+    await unlink(path.join(STORAGE_DIR, record.objectKey));
+  } catch (error) {
+    if (!isMissingFile(error)) return false;
+  }
+
+  const deleted = await db.storedFile.deleteMany({
+    where: { id: fileId, institutionId },
+  });
+  return deleted.count === 1;
 }
 
 /** Authenticated read of stored bytes. */

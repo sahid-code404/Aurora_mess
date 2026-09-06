@@ -30,7 +30,7 @@ import {
 } from "@/lib/idempotency";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { paymentMethodSchema } from "@/lib/validation";
-import { storeUpload } from "@/lib/storage";
+import { cleanupUnreferencedStoredFile, storeUpload } from "@/lib/storage";
 import { notifyAdmins, sweepOutboxSafe } from "@/lib/domain/notify";
 import { finishPage, formFile, formText, keysetWhere, readFormData } from "@/lib/domain/http";
 import { serializePayment } from "@/lib/domain/serialize";
@@ -199,119 +199,137 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     );
   }
 
-  // File storage + display number are prepared BEFORE the transaction. A
-  // rollback may therefore leave a harmless orphan file/number gap.
+  // Proof bytes must be staged before the domain transaction because storage is
+  // outside PostgreSQL. Display-number gaps remain harmless; staged proofs are
+  // removed below if the transaction aborts or resolves as an idempotent replay.
   const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null;
   const displayNumber = await nextPaymentNumber();
 
-  const result = await db.$transaction(async (tx) => {
-    // A genuinely new payment must join the same resident financial mutex used
-    // by billing generation, payment review, refunds and bill adjustments. This
-    // prevents a PENDING payment from appearing after billing's readiness check
-    // but before its snapshot/bill commit. Completed fast replays already
-    // returned above and therefore never wait on this mutation lock.
-    await lockResidentFinancialMutation(tx, ctx.institutionId, ctx.user.id);
+  const result = await (async () => {
+    try {
+      return await db.$transaction(async (tx) => {
+        // A genuinely new payment must join the same resident financial mutex used
+        // by billing generation, payment review, refunds and bill adjustments. This
+        // prevents a PENDING payment from appearing after billing's readiness check
+        // but before its snapshot/bill commit. Completed fast replays already
+        // returned above and therefore never wait on this mutation lock.
+        await lockResidentFinancialMutation(tx, ctx.institutionId, ctx.user.id);
 
-    if (storageIdempotencyKey && requestHash) {
-      const claim = await claimIdempotencyKey({
-        client: tx,
-        institutionId: ctx.institutionId,
-        scope: PAYMENT_IDEMPOTENCY_SCOPE,
-        key: storageIdempotencyKey,
-        requestHash,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      });
-      if (claim.state === "REPLAY") {
-        return { replay: true as const, payload: claim.payload };
-      }
-      if (claim.state === "MISMATCH") throw idempotencyPayloadMismatch();
-      if (claim.state === "IN_PROGRESS") {
-        throw new ApiError(
-          CODES.IDPOTENCY_CONFLICT,
-          "This request is already being processed. Please try again in a moment.",
-          409
+        if (storageIdempotencyKey && requestHash) {
+          const claim = await claimIdempotencyKey({
+            client: tx,
+            institutionId: ctx.institutionId,
+            scope: PAYMENT_IDEMPOTENCY_SCOPE,
+            key: storageIdempotencyKey,
+            requestHash,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          });
+          if (claim.state === "REPLAY") {
+            return { replay: true as const, payload: claim.payload };
+          }
+          if (claim.state === "MISMATCH") throw idempotencyPayloadMismatch();
+          if (claim.state === "IN_PROGRESS") {
+            throw new ApiError(
+              CODES.IDPOTENCY_CONFLICT,
+              "This request is already being processed. Please try again in a moment.",
+              409
+            );
+          }
+        }
+
+        const payment = await tx.payment.create({
+          data: {
+            institutionId: ctx.institutionId,
+            displayNumber,
+            residentId: ctx.user.id, // NEVER client-supplied
+            amountMinor: amountMinor as number,
+            method: method.data!,
+            reference: reference ?? null,
+            notes: notes ?? null,
+            status: "PENDING",
+            idempotencyKey: idempotencyKey ?? null,
+            proofFileId: proofFile?.id ?? null,
+          },
+        });
+        await tx.paymentStatusHistory.create({
+          data: {
+            paymentId: payment.id,
+            fromStatus: null,
+            toStatus: "PENDING",
+            changedByUserId: ctx.user.id,
+          },
+        });
+
+        const payload = serializePayment(payment);
+
+        if (storageIdempotencyKey && requestHash) {
+          await completeIdempotencyKey({
+            client: tx,
+            institutionId: ctx.institutionId,
+            scope: PAYMENT_IDEMPOTENCY_SCOPE,
+            key: storageIdempotencyKey,
+            requestHash,
+            payload,
+          });
+        }
+
+        await appendAudit(
+          {
+            institutionId: ctx.institutionId,
+            actorUserId: ctx.user.id,
+            actorRole: "RESIDENT",
+            action: "PAYMENT_SUBMITTED",
+            entityType: "PAYMENT",
+            entityId: payment.id,
+            requestId: ctx.requestId,
+            beforeSummary: null,
+            afterSummary: "PENDING",
+            metadata: {
+              amountMinor: payment.amountMinor,
+              method: payment.method,
+              displayNumber: payment.displayNumber,
+              hasProof: Boolean(proofFile),
+            },
+            ip: ctx.req.headers.get("x-forwarded-for"),
+            userAgent: ctx.req.headers.get("user-agent") ?? undefined,
+          },
+          tx
         );
-      }
-    }
 
-    const payment = await tx.payment.create({
-      data: {
-        institutionId: ctx.institutionId,
-        displayNumber,
-        residentId: ctx.user.id, // NEVER client-supplied
-        amountMinor: amountMinor as number,
-        method: method.data!,
-        reference: reference ?? null,
-        notes: notes ?? null,
-        status: "PENDING",
-        idempotencyKey: idempotencyKey ?? null,
-        proofFileId: proofFile?.id ?? null,
-      },
-    });
-    await tx.paymentStatusHistory.create({
-      data: {
-        paymentId: payment.id,
-        fromStatus: null,
-        toStatus: "PENDING",
-        changedByUserId: ctx.user.id,
-      },
-    });
+        const resident = await tx.user.findUnique({
+          where: { id: ctx.user.id },
+          include: { profile: true },
+        });
+        const residentName = resident?.profile?.fullName || ctx.user.email;
 
-    const payload = serializePayment(payment);
+        await notifyAdmins(
+          ctx.institutionId,
+          {
+            type: "PAYMENT_SUBMITTED",
+            title: "New payment submitted",
+            message: `${residentName} submitted a payment of ${formatMinor(payment.amountMinor)} (${payment.displayNumber}) for review.`,
+            entityRef: payment.id,
+          },
+          tx
+        );
 
-    if (storageIdempotencyKey && requestHash) {
-      await completeIdempotencyKey({
-        client: tx,
-        institutionId: ctx.institutionId,
-        scope: PAYMENT_IDEMPOTENCY_SCOPE,
-        key: storageIdempotencyKey,
-        requestHash,
-        payload,
+        return { replay: false as const, payload };
       });
+    } catch (error) {
+      if (proofFile) {
+        await cleanupUnreferencedStoredFile(proofFile.id, ctx.institutionId).catch(() => false);
+      }
+      throw error;
     }
+  })();
 
-    await appendAudit(
-      {
-        institutionId: ctx.institutionId,
-        actorUserId: ctx.user.id,
-        actorRole: "RESIDENT",
-        action: "PAYMENT_SUBMITTED",
-        entityType: "PAYMENT",
-        entityId: payment.id,
-        requestId: ctx.requestId,
-        beforeSummary: null,
-        afterSummary: "PENDING",
-        metadata: {
-          amountMinor: payment.amountMinor,
-          method: payment.method,
-          displayNumber: payment.displayNumber,
-          hasProof: Boolean(proofFile),
-        },
-        ip: ctx.req.headers.get("x-forwarded-for"),
-        userAgent: ctx.req.headers.get("user-agent") ?? undefined,
-      },
-      tx
-    );
-
-    const resident = await tx.user.findUnique({
-      where: { id: ctx.user.id },
-      include: { profile: true },
-    });
-    const residentName = resident?.profile?.fullName || ctx.user.email;
-
-    await notifyAdmins(
-      ctx.institutionId,
-      {
-        type: "PAYMENT_SUBMITTED",
-        title: "New payment submitted",
-        message: `${residentName} submitted a payment of ${formatMinor(payment.amountMinor)} (${payment.displayNumber}) for review.`,
-        entityRef: payment.id,
-      },
-      tx
-    );
-
-    return { replay: false as const, payload };
-  });
+  // A concurrent request can claim/complete the same idempotency key after the
+  // fast preflight but before this transaction acquires the resident mutex. In
+  // that case this attempt returns the committed replay and its staged proof was
+  // never referenced, so clean it explicitly as well.
+  if (result.replay && proofFile) {
+    await cleanupUnreferencedStoredFile(proofFile.id, ctx.institutionId).catch(() => false);
+  }
 
   await sweepOutboxSafe();
   // Retention maintenance is deliberately best-effort and bounded. A cleanup

@@ -19,7 +19,7 @@ import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { multiplyRoundHalfUp, parseDecimalToMinor } from "@/lib/money";
-import { storeUpload } from "@/lib/storage";
+import { cleanupUnreferencedStoredFile, storeUpload } from "@/lib/storage";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { notifyAdmins, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
@@ -132,7 +132,8 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const claimedTotalMinor = lines.reduce((sum, line) => sum + line.lineTotalMinor, 0);
 
   // Optional proof (validated: magic bytes + ≤2MB) — useful as a receipt for
-  // Market Tasks or completion evidence for Normal Tasks.
+  // Market Tasks or completion evidence for Normal Tasks. Storage lives outside
+  // PostgreSQL, so an aborted submission explicitly removes this staged proof.
   const proofRaw = form.get("proof");
   let proofFileId: string | null = null;
   if (proofRaw instanceof File && proofRaw.size > 0) {
@@ -140,96 +141,105 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     proofFileId = stored.id;
   }
 
-  const result = await db.$transaction(async (tx) => {
-    const task = await tx.task.findFirst({
-      where: { id: ctx.params.id, institutionId: ctx.institutionId, assignedResidentId: ctx.user.id },
-    });
-    if (!task) throw new ApiError(CODES.NOT_FOUND, "This task could not be found.", 404);
-    if (task.status !== "IN_PROGRESS") {
-      throw new ApiError(CODES.TASK_INVALID_STATE, "This task is not in a state that accepts a submission.", 409);
-    }
-    if (task.taskType !== preflightTask.taskType) {
-      throw new ApiError(CODES.RESOURCE_CHANGED, "This task changed while you were submitting it. Please reload.", 409);
-    }
+  const result = await (async () => {
+    try {
+      return await db.$transaction(async (tx) => {
+        const task = await tx.task.findFirst({
+          where: { id: ctx.params.id, institutionId: ctx.institutionId, assignedResidentId: ctx.user.id },
+        });
+        if (!task) throw new ApiError(CODES.NOT_FOUND, "This task could not be found.", 404);
+        if (task.status !== "IN_PROGRESS") {
+          throw new ApiError(CODES.TASK_INVALID_STATE, "This task is not in a state that accepts a submission.", 409);
+        }
+        if (task.taskType !== preflightTask.taskType) {
+          throw new ApiError(CODES.RESOURCE_CHANGED, "This task changed while you were submitting it. Please reload.", 409);
+        }
 
-    const existing = await tx.taskSubmission.findUnique({ where: { taskId: task.id } });
-    if (existing) {
-      throw new ApiError(CODES.TASK_INVALID_STATE, "This task already has a submission.", 409);
-    }
+        const existing = await tx.taskSubmission.findUnique({ where: { taskId: task.id } });
+        if (existing) {
+          throw new ApiError(CODES.TASK_INVALID_STATE, "This task already has a submission.", 409);
+        }
 
-    const submission = await tx.taskSubmission.create({
-      data: {
-        taskId: task.id,
-        comment,
-        claimedTotalMinor,
-        status: "SUBMITTED",
-        proofFileId,
-      },
-    });
-    for (const line of lines) {
-      await tx.taskSubmissionItem.create({
-        data: { taskSubmissionId: submission.id, ...line },
+        const submission = await tx.taskSubmission.create({
+          data: {
+            taskId: task.id,
+            comment,
+            claimedTotalMinor,
+            status: "SUBMITTED",
+            proofFileId,
+          },
+        });
+        for (const line of lines) {
+          await tx.taskSubmissionItem.create({
+            data: { taskSubmissionId: submission.id, ...line },
+          });
+        }
+        const updatedTask = await tx.task.update({
+          where: { id: task.id },
+          data: { status: "SUBMITTED" },
+        });
+
+        const isGeneralTask = task.taskType === "GENERAL";
+        await appendAudit(
+          {
+            institutionId: ctx.institutionId,
+            actorUserId: ctx.user.id,
+            actorRole: "RESIDENT",
+            action: isGeneralTask ? "TASK_COMPLETION_SUBMITTED" : "TASK_SUBMITTED",
+            entityType: "TASK",
+            entityId: task.id,
+            requestId: ctx.requestId,
+            beforeSummary: JSON.stringify({ status: task.status }),
+            afterSummary: JSON.stringify({
+              status: "SUBMITTED",
+              submissionId: submission.id,
+              claimedTotalMinor,
+              taskType: task.taskType,
+            }),
+            metadata: {
+              description: task.description,
+              taskType: task.taskType,
+              itemCount: lines.length,
+              claimedTotalMinor,
+              hasProof: proofFileId != null,
+              hasComment: comment != null,
+            },
+          },
+          tx
+        );
+
+        await notifyAdmins(
+          ctx.institutionId,
+          {
+            type: "TASK_SUBMITTED",
+            title: isGeneralTask ? "Normal task ready for verification" : "Market task purchase ready for verification",
+            message: isGeneralTask
+              ? `Completion for "${task.description}" is waiting for your verification.`
+              : `Purchase submission for "${task.description}" is waiting for your verification.`,
+            entityRef: task.id,
+          },
+          tx
+        );
+
+        await resolveNotificationsForEntity({
+          institutionId: ctx.institutionId,
+          entityRef: task.id,
+          types: ["TASK_ASSIGNED"],
+          actorUserId: ctx.user.id,
+          actorRole: "RESIDENT",
+          reason: isGeneralTask ? "Normal task completion submitted by resident" : "Market task purchase submitted by resident",
+          client: tx,
+        });
+
+        return { submission, updatedTask, taskType: task.taskType };
       });
+    } catch (error) {
+      if (proofFileId) {
+        await cleanupUnreferencedStoredFile(proofFileId, ctx.institutionId).catch(() => false);
+      }
+      throw error;
     }
-    const updatedTask = await tx.task.update({
-      where: { id: task.id },
-      data: { status: "SUBMITTED" },
-    });
-
-    const isGeneralTask = task.taskType === "GENERAL";
-    await appendAudit(
-      {
-        institutionId: ctx.institutionId,
-        actorUserId: ctx.user.id,
-        actorRole: "RESIDENT",
-        action: isGeneralTask ? "TASK_COMPLETION_SUBMITTED" : "TASK_SUBMITTED",
-        entityType: "TASK",
-        entityId: task.id,
-        requestId: ctx.requestId,
-        beforeSummary: JSON.stringify({ status: task.status }),
-        afterSummary: JSON.stringify({
-          status: "SUBMITTED",
-          submissionId: submission.id,
-          claimedTotalMinor,
-          taskType: task.taskType,
-        }),
-        metadata: {
-          description: task.description,
-          taskType: task.taskType,
-          itemCount: lines.length,
-          claimedTotalMinor,
-          hasProof: proofFileId != null,
-          hasComment: comment != null,
-        },
-      },
-      tx
-    );
-
-    await notifyAdmins(
-      ctx.institutionId,
-      {
-        type: "TASK_SUBMITTED",
-        title: isGeneralTask ? "Normal task ready for verification" : "Market task purchase ready for verification",
-        message: isGeneralTask
-          ? `Completion for "${task.description}" is waiting for your verification.`
-          : `Purchase submission for "${task.description}" is waiting for your verification.`,
-        entityRef: task.id,
-      },
-      tx
-    );
-
-    await resolveNotificationsForEntity({
-      institutionId: ctx.institutionId,
-      entityRef: task.id,
-      types: ["TASK_ASSIGNED"],
-      actorUserId: ctx.user.id,
-      actorRole: "RESIDENT",
-      reason: isGeneralTask ? "Normal task completion submitted by resident" : "Market task purchase submitted by resident",
-      client: tx,
-    });
-
-    return { submission, updatedTask, taskType: task.taskType };
-  });
+  })();
 
   await sweepOutboxSafe();
   return {
