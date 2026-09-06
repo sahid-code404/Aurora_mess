@@ -12,28 +12,28 @@ import { appendAudit } from "@/lib/audit";
 import { appendOutbox, sweepOutbox } from "@/lib/outbox";
 import { revokeAllUserSessions } from "@/lib/auth/session";
 import { reasonSchema } from "@/lib/validation";
+import { lockResidentLifecycleMutation } from "@/lib/domain/resident-lifecycle";
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const id = ctx.params.id;
   const body = await parseBody(ctx.req, z.object({ reason: reasonSchema }));
 
-  const user = await db.user.findFirst({
-    where: { id, institutionId: ctx.institutionId, role: "RESIDENT" },
-  });
-  if (!user) {
-    throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
-  }
-  if (user.status !== "ACTIVE") {
-    throw new ApiError(
-      CODES.VALIDATION_FAILED,
-      `Only active residents can be deactivated (currently ${user.status
-        .replace(/_/g, " ")
-        .toLowerCase()}).`,
-      409
-    );
-  }
-
   await db.$transaction(async (tx) => {
+    await lockResidentLifecycleMutation(tx, ctx.institutionId, id);
+    const user = await tx.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new ApiError(CODES.NOT_FOUND, "Resident not found.", 404);
+    }
+    if (user.status !== "ACTIVE") {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        `Only active residents can be deactivated (currently ${user.status
+          .replace(/_/g, " ")
+          .toLowerCase()}).`,
+        409
+      );
+    }
+
     await tx.user.update({ where: { id }, data: { status: "INACTIVE" } });
     await tx.userStatusHistory.create({
       data: {
@@ -76,7 +76,9 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     );
   });
 
-  // MANDATORY (spec §133): kill every live session immediately.
+  // MANDATORY (spec §133): kill every live session immediately after the
+  // authoritative transition commits. A losing concurrent transition never
+  // reaches this side effect.
   await revokeAllUserSessions(id);
   try {
     await sweepOutbox();
