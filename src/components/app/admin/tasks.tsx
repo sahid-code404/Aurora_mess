@@ -46,9 +46,10 @@ import { ApiClientError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { errMessage, useInvalidate, useApiMetaQuery } from "./_shared/api";
+import { currentMonthKeyInTz, todayKeyInTz } from "./_shared/business-date";
 import { MoneyField, SelectField, TextAreaField, TextField, moneyProblem } from "./_shared/fields";
 import { Chip, DetailDialog, FilterChips, KeyValue, KpiGrid, ProofImage, type KpiSpec } from "./_shared/chrome";
-import { fmtDate, fmtDateTime, fmtMinor, todayKey } from "./_shared/format";
+import { fmtDate, fmtDateTime, fmtMinor } from "./_shared/format";
 import type { ResidentRow, TaskRow } from "./_shared/types";
 
 const TASKS_PATH = "/api/v1/admin/tasks";
@@ -219,7 +220,8 @@ export default function AdminTasks() {
   const invalidate = useInvalidate();
   const { institution } = useSession();
   const tz = institution?.timezone ?? "Asia/Kolkata";
-  const currentMonthKey = todayKey().slice(0, 7);
+  const todayDateKey = todayKeyInTz(tz);
+  const currentMonthKey = currentMonthKeyInTz(tz);
   const [monthKey, setMonthKey] = useState<string>(currentMonthKey);
 
   const { data: envelope, isLoading, error, refetch } = useApiMetaQuery<TaskRow[]>(TASKS_PATH, {
@@ -276,7 +278,7 @@ export default function AdminTasks() {
   const openCount = (countsByStatus.ASSIGNED ?? 0) + (countsByStatus.ACCEPTED ?? 0);
   const doneCount = countsByStatus.APPROVED ?? 0;
   const overdueCount = tasks.filter(
-    (t) => ACTIVE_STATUSES.has(t.status) && t.dueDate && t.dueDate < todayKey()
+    (t) => ACTIVE_STATUSES.has(t.status) && t.dueDate && t.dueDate < todayDateKey
   ).length;
 
   const kpis: KpiSpec[] = [
