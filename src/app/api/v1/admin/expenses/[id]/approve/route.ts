@@ -1,6 +1,7 @@
 /**
  * POST /api/v1/admin/expenses/[id]/approve — approve a PENDING expense (auth ADMIN).
- * Transaction: status guard → journal Dr MESS_EXPENSE / Cr CASH → audit.
+ * Transaction: institution billing mutex → period guard → status guard →
+ * journal Dr MESS_EXPENSE / Cr CASH → audit.
  * Approved expenses are immutable; voiding posts a reversal (never a delete).
  */
 import { route } from "@/lib/auth/guard";
@@ -10,11 +11,15 @@ import { appendAudit } from "@/lib/audit";
 import { sweepOutbox } from "@/lib/outbox";
 import { postJournal } from "@/lib/domain/ledger";
 import { serializeExpense } from "@/lib/domain/serialize";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertExpensePeriodMutable } from "@/lib/domain/expense-period";
 
 export const dynamic = "force-dynamic";
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const payload = await db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+
     const expense = await tx.expense.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
       include: { category: { select: { id: true, name: true } }, _count: { select: { items: true } } },
@@ -29,6 +34,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         409
       );
     }
+
+    await assertExpensePeriodMutable(tx, ctx.institutionId, expense.date.toISOString().slice(0, 10));
 
     const guard = await tx.expense.updateMany({
       where: { id: expense.id, status: "PENDING" },
