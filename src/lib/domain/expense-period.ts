@@ -34,8 +34,7 @@ export async function assertExpensePeriodMutable(
   const frozen =
     period.status === "BILLED" ||
     period.status === "REOPENED" ||
-    period.generationState === "CLOSING" ||
-    period.generationState === "GENERATING";
+    period.generationState === "CLOSING";
 
   if (frozen) {
     throw new ApiError(

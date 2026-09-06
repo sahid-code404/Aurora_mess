@@ -721,12 +721,11 @@ model BillingPeriod {
   institutionId           String
   year                    Int
   month                   Int // 1-12
-  status                  String    @default("OPEN") // OPEN | CLOSING | BILLED | REOPENED
+  status                  String    @default("OPEN") // OPEN | BILLED | REOPENED
   formulaVersionId        String?
   mealChargeMinorSnapshot Int? // frozen per-meal charge at close time
   guestPriceMinorSnapshot Int?
-  generationState         String? // CLOSING | GENERATING | COMPLETED | FAILED
-  generationError         String?
+  generationState         String? // CLOSING | COMPLETED; failed transactions roll back to null
   closedAt                DateTime?
   billedAt                DateTime?
   createdByUserId         String?
