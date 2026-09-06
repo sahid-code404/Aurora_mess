@@ -2,8 +2,9 @@
  * POST /api/v1/admin/meals/[instanceId]/override — admin override (spec §32).
  * Works even AFTER the cutoff (admin authority, mandatory reason + audit).
  * Sets adminOverrideState, bumps version, locks the row when past cutoff, and
- * recomputes the effective state (admin override wins over selection/baseline
- * but NOT over calendar/membership/leave precedence gates).
+ * recomputes the effective state. Admin authority may override soft deficit
+ * policy/Resident choice, but never calendar/account/membership/cutoff/leave
+ * eligibility gates.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -17,6 +18,7 @@ import {
   calculateNormalMealState,
   ensureResidentMeals,
   evaluateResidentMeal,
+  hardMealEligibilityState,
   keyOfUtcDate,
   parseSnapshot,
   requireInstitutionContext,
@@ -45,7 +47,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     });
     if (!instance) throw new ApiError(CODES.NOT_FOUND, "This meal could not be found.", 404);
 
-    // Materialize the resident's row for this date if missing (lazy engine).
     const dateKey = keyOfUtcDate(instance.serviceDate);
     await ensureResidentMeals(resident.id, ctx.institutionId, tz, dateKey, dateKey, tx);
 
@@ -83,6 +84,15 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       rm: { ...rm, adminOverrideState: null } as never,
       client: tx,
     });
+
+    const hardEligibility = hardMealEligibilityState(evalCtx);
+    if (hardEligibility) {
+      throw new ApiError(
+        CODES.MEAL_NOT_AVAILABLE,
+        `This meal cannot be overridden while its eligibility state is ${hardEligibility.effectiveReason.replace(/_/g, " ").toLowerCase()}.`,
+        409
+      );
+    }
 
     const normal = calculateNormalMealState(evalCtx);
     const isResetToNormal = body.state === normal.effectiveState;
