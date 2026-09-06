@@ -18,7 +18,21 @@ jobs:
           ref: feat/phase44-refund-payment-lifecycle-coherence
           fetch-depth: 0
       - name: Apply exact substitutions
-        run: python3 .github/phase44_patch.py
+        shell: bash
+        run: |
+          set +e
+          python3 .github/phase44_patch.py > /tmp/phase44-patch.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            git reset --hard HEAD
+            cp /tmp/phase44-patch.log .github/phase44_patch_error.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/phase44_patch_error.txt
+            git commit -m "Phase 44: record patch assertion failure"
+            git push origin HEAD:feat/phase44-refund-payment-lifecycle-coherence
+            exit "$code"
+          fi
       - name: Commit production patch
         run: |
           git config user.name "github-actions[bot]"
