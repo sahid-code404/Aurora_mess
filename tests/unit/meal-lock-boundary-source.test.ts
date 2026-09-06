@@ -48,15 +48,23 @@ describe("meal lock boundary source guards", () => {
     expect(route).not.toContain("instance.cutoffAt.getTime() ? now");
   });
 
-  test("admin guest override cannot rewrite consumed history and creates locked rows at the true boundary", () => {
+  test("admin guest correction uses lockAt and serializes against billing instead of blocking service-ended meals", () => {
     const route = source("src/app/api/v1/admin/meals/[instanceId]/guest-override/route.ts");
 
+    const institutionLock = route.indexOf("await lockInstitutionFinancialMutation");
+    const residentLock = route.indexOf("await lockActiveResidentForMealMutation");
+    const billingGuard = route.indexOf("await assertGuestMealCorrectionPeriodMutable");
+    const mutation = route.indexOf("await applyAdminGuestMealQuantityCorrection");
+
+    expect(institutionLock).toBeGreaterThan(-1);
+    expect(residentLock).toBeGreaterThan(institutionLock);
+    expect(billingGuard).toBeGreaterThan(residentLock);
+    expect(mutation).toBeGreaterThan(billingGuard);
     expect(route).toContain("const lockPassed = now.getTime() >= instance.lockAt.getTime()");
-    expect(route).toContain("now.getTime() >= instance.serviceEndAt.getTime()");
-    expect(route).toContain('request.status === "CONSUMED"');
-    expect(route).toContain('status: "LOCKED"');
-    expect(route).toContain("lockedAt: lockBoundary");
-    expect(route).not.toContain("lockedAt: now");
+    expect(route).toContain("const serviceEnded = now.getTime() >= instance.serviceEndAt.getTime()");
+    expect(route).toContain('action: serviceEnded ? "GUEST_MEAL_POST_SERVICE_CORRECTION" : "GUEST_MEAL_OVERRIDE"');
+    expect(route).not.toContain("This meal service has already ended");
+    expect(route).not.toContain("Consumed guest meals are historical records and cannot be changed");
     expect(route).not.toContain("formatTimeLabel(instance.cutoffAt, inst.timezone)");
   });
 });
