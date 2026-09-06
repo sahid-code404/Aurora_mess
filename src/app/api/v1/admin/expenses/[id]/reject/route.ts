@@ -1,6 +1,8 @@
 /**
  * POST /api/v1/admin/expenses/[id]/reject — reject a PENDING expense (auth ADMIN).
  * No journal: rejected expenses never entered the books. Reason is audited.
+ * The institution mutex prevents billing readiness from crossing the removal of
+ * this pending-expense blocker.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -10,6 +12,7 @@ import { appendAudit } from "@/lib/audit";
 import { sweepOutbox } from "@/lib/outbox";
 import { reasonSchema } from "@/lib/validation";
 import { serializeExpense } from "@/lib/domain/serialize";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +22,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const body = await parseBody(ctx.req, bodySchema);
 
   const payload = await db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+
     const expense = await tx.expense.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
       include: { category: { select: { id: true, name: true } }, _count: { select: { items: true } } },
