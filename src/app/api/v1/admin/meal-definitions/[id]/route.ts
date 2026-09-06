@@ -19,6 +19,10 @@ import {
   mealDefinitionUpdateSchema,
   validateDefinitionInvariants,
 } from "@/lib/domain/meal-definition-schema";
+import {
+  lockMealDefinitionMutation,
+  refreshDueMealDefinitionRetirements,
+} from "@/lib/domain/meal-retirement";
 
 function serializeVersion(v: Record<string, any>) {
   return {
@@ -77,14 +81,40 @@ function normalizeCsv(csv: string | undefined, prev: string | null): string | nu
 
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   await requireInstitutionContext(ctx.institutionId);
+  await refreshDueMealDefinitionRetirements(ctx.institutionId);
   const def = await db.mealDefinition.findFirst({
     where: { id: ctx.params.id, institutionId: ctx.institutionId },
     include: { versions: { orderBy: { version: "desc" } } },
   });
   if (!def) throw new ApiError(CODES.NOT_FOUND, "This meal definition could not be found.", 404);
+  const latestDeletion = await db.deletionRequest.findFirst({
+    where: {
+      institutionId: ctx.institutionId,
+      entityType: "MEAL_DEFINITION",
+      entityId: def.id,
+    },
+    orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+  });
+  if (latestDeletion?.status === "COMPLETED") {
+    throw new ApiError(CODES.NOT_FOUND, "This meal definition has completed its deletion lifecycle.", 404);
+  }
   return {
     data: {
       ...serializeDefinition(def as never),
+      deletionRequest: latestDeletion
+        ? {
+            id: latestDeletion.id,
+            status: latestDeletion.status,
+            requestedAt: latestDeletion.requestedAt.toISOString(),
+            scheduledFor: latestDeletion.scheduledFor?.toISOString() ?? null,
+            reason: latestDeletion.reason,
+            blockedReason: latestDeletion.blockedReason,
+            completedAt: latestDeletion.completedAt?.toISOString() ?? null,
+            cancelReason: latestDeletion.cancelReason,
+            cancelledByUserId: latestDeletion.cancelledByUserId,
+            cancelledAt: latestDeletion.cancelledAt?.toISOString() ?? null,
+          }
+        : null,
       versions: ((def.versions ?? []) as Record<string, any>[]).map(serializeVersion),
     },
   };
@@ -92,14 +122,34 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
 export const PUT = route({ auth: "ADMIN" }, async (ctx) => {
   await requireInstitutionContext(ctx.institutionId);
+  await refreshDueMealDefinitionRetirements(ctx.institutionId);
   const patch = await parseBody(ctx.req, mealDefinitionUpdateSchema);
 
   const result = await db.$transaction(async (tx) => {
+    await lockMealDefinitionMutation(tx, ctx.institutionId, ctx.params.id);
     const def = await tx.mealDefinition.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     });
     if (!def) throw new ApiError(CODES.NOT_FOUND, "This meal definition could not be found.", 404);
+    const deletionRequest = await tx.deletionRequest.findFirst({
+      where: {
+        institutionId: ctx.institutionId,
+        entityType: "MEAL_DEFINITION",
+        entityId: def.id,
+        status: { in: ["QUEUED", "SCHEDULED", "BLOCKED", "COMPLETED"] },
+      },
+      orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+    });
+    if (def.deleteRequestedAt || deletionRequest) {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        deletionRequest?.status === "COMPLETED"
+          ? "A completed deletion tombstone cannot be edited."
+          : "Cancel the deletion request before editing this meal definition.",
+        409
+      );
+    }
 
     // Merge patch onto the current config and validate the RESULT as a whole.
     const merged = {

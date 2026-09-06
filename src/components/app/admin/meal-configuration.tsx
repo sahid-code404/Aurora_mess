@@ -19,6 +19,7 @@ import {
   EyeOff,
   History,
   Plus,
+  RotateCcw,
   Settings2,
   Trash2,
   Utensils,
@@ -500,7 +501,9 @@ export default function AdminMealConfiguration() {
   const [editingDef, setEditingDef] = useState<MealDefinitionRow | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<MealDefinitionRow | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<MealDefinitionRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MealDefinitionRow | null>(null);
+  const [cancelDeletionTarget, setCancelDeletionTarget] = useState<MealDefinitionRow | null>(null);
   const [acting, setActing] = useState(false);
   const invalidate = useInvalidate();
   const { institution } = useSession();
@@ -534,10 +537,42 @@ export default function AdminMealConfiguration() {
     try {
       await postJson(`${DEFS_PATH}/${target.id}/request-deletion`, { reason });
       invalidate([DEFS_PATH]);
-      toast.success("Deletion queued", {
-        description: `${target.name} will be removed after the 30-day safety window.`,
+      toast.success("Deletion scheduled", {
+        description: `${target.name} is archived now and leaves live configuration after the 30-day safety window.`,
       });
       setDeleteTarget(null);
+    } catch (err) {
+      toast.error(errMessage(err));
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function restore(target: MealDefinitionRow) {
+    setActing(true);
+    try {
+      await postJson(`${DEFS_PATH}/${target.id}/restore`, {});
+      invalidate([DEFS_PATH]);
+      toast.success("Meal restored", {
+        description: `${target.name} can generate future matching services again.`,
+      });
+      setRestoreTarget(null);
+    } catch (err) {
+      toast.error(errMessage(err));
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function cancelDeletion(target: MealDefinitionRow, reason: string | undefined) {
+    setActing(true);
+    try {
+      await postJson(`${DEFS_PATH}/${target.id}/cancel-deletion`, { reason });
+      invalidate([DEFS_PATH]);
+      toast.success("Deletion cancelled", {
+        description: `${target.name} remains archived. Restore it separately if it should return to service.`,
+      });
+      setCancelDeletionTarget(null);
     } catch (err) {
       toast.error(errMessage(err));
     } finally {
@@ -635,6 +670,7 @@ export default function AdminMealConfiguration() {
             {defs.map((def) => {
               const Icon = mealIcon(def.icon);
               const inactive = def.archivedAt != null;
+              const deletionPending = ["QUEUED", "SCHEDULED", "BLOCKED"].includes(def.deletionRequest?.status ?? "");
               const hex = mealHex(def.colorToken);
               return (
                 <motion.div
@@ -696,7 +732,7 @@ export default function AdminMealConfiguration() {
                           )}
                         </div>
                         <div className="mt-1 flex items-center justify-end">
-                          <StatusBadge status={inactive ? "INACTIVE" : "ACTIVE"} />
+                          <StatusBadge status={deletionPending ? "PENDING_DELETION" : inactive ? "INACTIVE" : "ACTIVE"} />
                         </div>
                       </div>
                     </div>
@@ -720,41 +756,50 @@ export default function AdminMealConfiguration() {
 
                       {/* Actions */}
                       <div className="ml-auto flex items-center gap-1.5">
-                        <ViewButton
-                          label="Edit"
-                          onClick={() => {
-                            setEditingDef(def);
-                            setWizardOpen(true);
-                          }}
-                        />
+                        {!deletionPending && (
+                          <ViewButton
+                            label="Edit"
+                            onClick={() => {
+                              setEditingDef(def);
+                              setWizardOpen(true);
+                            }}
+                          />
+                        )}
                         <OverflowMenu
                           label={`Actions for ${def.name}`}
                           actions={[
                             { key: "history", label: "Version history", icon: <History />, onSelect: () => setDetailId(def.id) },
-                            {
-                              key: "edit",
-                              label: "Edit (new version)",
-                              icon: <Settings2 />,
-                              onSelect: () => {
-                                setEditingDef(def);
-                                setWizardOpen(true);
-                              },
-                              separatorBefore: true,
-                            },
-                            ...(inactive
-                              ? []
-                              : [{ key: "archive", label: "Archive", icon: <Archive />, onSelect: () => setArchiveTarget(def), separatorBefore: true }]),
-                            ...(def.deleteRequestedAt
-                              ? []
+                            ...(!deletionPending
+                              ? [{
+                                  key: "edit",
+                                  label: "Edit (new version)",
+                                  icon: <Settings2 />,
+                                  onSelect: () => {
+                                    setEditingDef(def);
+                                    setWizardOpen(true);
+                                  },
+                                  separatorBefore: true,
+                                }]
+                              : []),
+                            ...(!deletionPending && !inactive
+                              ? [{ key: "archive", label: "Archive", icon: <Archive />, onSelect: () => setArchiveTarget(def), separatorBefore: true }]
+                              : []),
+                            ...(!deletionPending && inactive
+                              ? [{ key: "restore", label: "Restore", icon: <RotateCcw />, onSelect: () => setRestoreTarget(def), separatorBefore: true }]
+                              : []),
+                            ...(deletionPending
+                              ? [{ key: "cancel-delete", label: "Cancel deletion…", icon: <RotateCcw />, onSelect: () => setCancelDeletionTarget(def), separatorBefore: true }]
                               : [{ key: "delete", label: "Request deletion…", icon: <Trash2 />, onSelect: () => setDeleteTarget(def), destructive: true }]),
                           ]}
                         />
                       </div>
                     </div>
 
-                    {def.deleteRequestedAt && (
+                    {deletionPending && (
                       <p className="rounded-md bg-danger/10 px-2.5 py-1 text-[11px] font-medium text-danger">
-                        Deletion queued — {fmtDate(def.deleteRequestedAt)}
+                        {def.deletionRequest?.status === "BLOCKED"
+                          ? `Deletion blocked — ${def.deletionRequest.blockedReason ?? "Needs Admin review"}`
+                          : `Deletion scheduled${def.deletionRequest?.scheduledFor ? ` — ${fmtDate(def.deletionRequest.scheduledFor)}` : ""}`}
                       </p>
                     )}
                   </div>
@@ -824,11 +869,25 @@ export default function AdminMealConfiguration() {
           open
           onOpenChange={(open) => !open && setArchiveTarget(null)}
           title={`Archive ${archiveTarget.name}`}
-          description="Future services stop being generated. Residents' existing meals and all history stay intact. This can be reversed by editing the meal."
+          description="Future services stop being generated. Residents' existing meals and all history stay intact. Restore the meal explicitly if it should return to service."
           confirmLabel="Archive meal"
           tone="destructive"
           loading={acting}
           onConfirm={() => void archive(archiveTarget)}
+        />
+      )}
+
+      {/* restore archive */}
+      {restoreTarget && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => !open && setRestoreTarget(null)}
+          title={`Restore ${restoreTarget.name}`}
+          description="This reactivates the definition so future matching services may be generated again. Historical service versions remain unchanged."
+          confirmLabel="Restore meal"
+          tone="primary"
+          loading={acting}
+          onConfirm={() => void restore(restoreTarget)}
         />
       )}
 
@@ -838,13 +897,28 @@ export default function AdminMealConfiguration() {
           open
           onOpenChange={(open) => !open && setDeleteTarget(null)}
           title={`Request deletion — ${deleteTarget.name}`}
-          description="This queues the definition for deletion after a 30-day safety window, during which the request can be reviewed in the audit trail. The full version history is preserved."
-          confirmLabel="Queue deletion"
+          description="This archives the meal immediately, then schedules a tombstone after a 30-day safety window. The definition's versions and historical meal records are never destroyed."
+          confirmLabel="Schedule deletion"
           tone="destructive"
           requireReason
           reasonPlaceholder="Why is this meal being removed? (required)"
           loading={acting}
           onConfirm={(reason) => void requestDeletion(deleteTarget, reason)}
+        />
+      )}
+
+      {cancelDeletionTarget && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => !open && setCancelDeletionTarget(null)}
+          title={`Cancel deletion — ${cancelDeletionTarget.name}`}
+          description="The deletion request stays in history as CANCELLED. The meal remains archived until you explicitly restore it."
+          confirmLabel="Cancel deletion"
+          tone="destructive"
+          requireReason
+          reasonPlaceholder="Why is this deletion being cancelled? (required)"
+          loading={acting}
+          onConfirm={(reason) => void cancelDeletion(cancelDeletionTarget, reason)}
         />
       )}
     </StaggerGroup>

@@ -8,17 +8,30 @@ import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
+import { lockMealDefinitionMutation } from "@/lib/domain/meal-retirement";
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   await requireInstitutionContext(ctx.institutionId);
 
   const result = await db.$transaction(async (tx) => {
+    await lockMealDefinitionMutation(tx, ctx.institutionId, ctx.params.id);
     const def = await tx.mealDefinition.findFirst({
       where: { id: ctx.params.id, institutionId: ctx.institutionId },
     });
     if (!def) throw new ApiError(CODES.NOT_FOUND, "This meal definition could not be found.", 404);
     if (def.archivedAt) {
       throw new ApiError(CODES.VALIDATION_FAILED, "This meal definition is already archived.", 409);
+    }
+    const activeDeletion = await tx.deletionRequest.findFirst({
+      where: {
+        institutionId: ctx.institutionId,
+        entityType: "MEAL_DEFINITION",
+        entityId: def.id,
+        status: { in: ["QUEUED", "SCHEDULED", "BLOCKED"] },
+      },
+    });
+    if (activeDeletion || def.deleteRequestedAt) {
+      throw new ApiError(CODES.VALIDATION_FAILED, "This meal definition already has an active deletion request.", 409);
     }
     const now = new Date();
     const updated = await tx.mealDefinition.update({

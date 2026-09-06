@@ -1,8 +1,6 @@
 /**
- * GET /api/v1/admin/meal-definitions — list with latest version + KPIs.
- * POST /api/v1/admin/meal-definitions — create definition + immutable v1
- * MealDefinitionVersion snapshot + audit (spec §24-25). Money fields arrive as
- * decimal strings and are parsed to Int paise server-side.
+ * GET /api/v1/admin/meal-definitions — live definitions with retirement state.
+ * POST /api/v1/admin/meal-definitions — create definition + immutable v1.
  */
 import { route, parseBody } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
@@ -10,12 +8,33 @@ import { ApiError, CODES } from "@/lib/errors";
 import { localDateMidnightUtc } from "@/lib/time";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext, snapshotConfig } from "@/lib/domain/meal-engine";
+import { refreshDueMealDefinitionRetirements } from "@/lib/domain/meal-retirement";
 import {
   mealDefinitionCreateSchema,
   validateDefinitionInvariants,
 } from "@/lib/domain/meal-definition-schema";
 
-function serializeDefinition(def: Record<string, any>, latestVersion: Record<string, any> | null) {
+function serializeDeletionRequest(row: Record<string, any> | null) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    requestedAt: new Date(row.requestedAt).toISOString(),
+    scheduledFor: row.scheduledFor ? new Date(row.scheduledFor).toISOString() : null,
+    reason: row.reason ?? null,
+    blockedReason: row.blockedReason ?? null,
+    completedAt: row.completedAt ? new Date(row.completedAt).toISOString() : null,
+    cancelReason: row.cancelReason ?? null,
+    cancelledByUserId: row.cancelledByUserId ?? null,
+    cancelledAt: row.cancelledAt ? new Date(row.cancelledAt).toISOString() : null,
+  };
+}
+
+function serializeDefinition(
+  def: Record<string, any>,
+  latestVersion: Record<string, any> | null,
+  latestDeletion: Record<string, any> | null = null
+) {
   return {
     id: def.id,
     name: def.name,
@@ -39,6 +58,7 @@ function serializeDefinition(def: Record<string, any>, latestVersion: Record<str
     internalNotes: def.internalNotes ?? null,
     archivedAt: def.archivedAt ? new Date(def.archivedAt).toISOString() : null,
     deleteRequestedAt: def.deleteRequestedAt ? new Date(def.deleteRequestedAt).toISOString() : null,
+    deletionRequest: serializeDeletionRequest(latestDeletion),
     createdAt: new Date(def.createdAt).toISOString(),
     updatedAt: new Date(def.updatedAt).toISOString(),
     latestVersion: latestVersion
@@ -49,16 +69,45 @@ function serializeDefinition(def: Record<string, any>, latestVersion: Record<str
 
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   await requireInstitutionContext(ctx.institutionId);
+  await refreshDueMealDefinitionRetirements(ctx.institutionId);
+
   const defs = await db.mealDefinition.findMany({
     where: { institutionId: ctx.institutionId },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     include: { versions: { orderBy: { version: "desc" }, take: 1 } },
   });
-  const data = defs.map((d) => serializeDefinition(d as never, (d.versions?.[0] ?? null) as never));
-  const active = data.filter((d) => d.archivedAt == null).length;
+  const ids = defs.map((row) => row.id);
+  const requests = ids.length
+    ? await db.deletionRequest.findMany({
+        where: {
+          institutionId: ctx.institutionId,
+          entityType: "MEAL_DEFINITION",
+          entityId: { in: ids },
+        },
+        orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+      })
+    : [];
+  const latestByDefinition = new Map<string, (typeof requests)[number]>();
+  for (const request of requests) {
+    if (!latestByDefinition.has(request.entityId)) latestByDefinition.set(request.entityId, request);
+  }
+
+  const data = defs
+    .filter((definition) => latestByDefinition.get(definition.id)?.status !== "COMPLETED")
+    .map((definition) =>
+      serializeDefinition(
+        definition as never,
+        (definition.versions?.[0] ?? null) as never,
+        (latestByDefinition.get(definition.id) ?? null) as never
+      )
+    );
+  const active = data.filter((row) => row.archivedAt == null).length;
+  const pendingDeletion = data.filter((row) =>
+    ["QUEUED", "SCHEDULED", "BLOCKED"].includes(row.deletionRequest?.status ?? "")
+  ).length;
   return {
     data,
-    meta: { configured: data.length, active, inactive: data.length - active },
+    meta: { configured: data.length, active, inactive: data.length - active, pendingDeletion },
   };
 });
 
@@ -137,7 +186,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   return {
     data: serializeDefinition(
       { ...(created.def as unknown as Record<string, any>), versions: [created.version] },
-      created.version as unknown as Record<string, any>
+      created.version as unknown as Record<string, any>,
+      null
     ),
     meta: { version: created.version.version },
   };

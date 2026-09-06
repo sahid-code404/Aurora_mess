@@ -22,6 +22,7 @@ import { getInstitution, type InstitutionContext } from "@/lib/institution";
 import { isMealRestricted } from "@/lib/domain/funds";
 import { addDaysToKey, computeCutoffAt, computeServiceWindow, weekdayOfKey } from "@/lib/time";
 import { ApiError, CODES } from "@/lib/errors";
+import { refreshDueMealDefinitionRetirements } from "@/lib/domain/meal-retirement";
 
 type Client = any; // prisma client or interactive transaction client
 
@@ -308,6 +309,7 @@ export async function ensureInstancesForRange(
   client: Client = db
 ): Promise<number> {
   if (fromKey > toKey) return 0;
+  await refreshDueMealDefinitionRetirements(institutionId, client);
   const defs = (await client.mealDefinition.findMany({
     where: { institutionId, archivedAt: null },
   })) as Record<string, any>[];
