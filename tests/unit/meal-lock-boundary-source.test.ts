@@ -11,7 +11,7 @@ describe("meal lock boundary source guards", () => {
 
     expect(engine).toContain("instance: { serviceDate: Date; cutoffAt: Date; lockAt: Date; mealDefinitionId: string }");
     expect(engine).toContain("from.getTime() > inputs.instance.lockAt.getTime()");
-    expect(engine).toContain("from.getTime() > inst.lockAt.getTime()");
+    expect(engine).toContain("from.getTime() > new Date(inst.lockAt).getTime()");
     expect(engine).toContain("from.getTime() > new Date(instRow.lockAt).getTime()");
     expect(engine).toContain("lockedAt: lockBoundary");
     expect(engine).not.toContain("from.getTime() > inputs.instance.cutoffAt.getTime()");
