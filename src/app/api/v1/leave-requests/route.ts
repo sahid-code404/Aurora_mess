@@ -49,8 +49,8 @@ async function previewCounts(
     ...scopeWhere,
   };
   const [futureUnlockedMeals, alreadyLockedMeals] = await Promise.all([
-    db.mealInstance.count({ where: { ...base, cutoffAt: { gt: now } } }),
-    db.mealInstance.count({ where: { ...base, cutoffAt: { lte: now } } }),
+    db.mealInstance.count({ where: { ...base, lockAt: { gt: now } } }),
+    db.mealInstance.count({ where: { ...base, lockAt: { lte: now } } }),
   ]);
   return { futureUnlockedMeals, alreadyLockedMeals };
 }
@@ -243,7 +243,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
             institutionId: ctx.institutionId,
             serviceDate: { gte: leave.startDate, lte: leave.endDate },
             ...scopeWhere,
-            cutoffAt: { gt: now },
+            lockAt: { gt: now },
           },
         }),
         db.mealInstance.count({
@@ -251,7 +251,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
             institutionId: ctx.institutionId,
             serviceDate: { gte: leave.startDate, lte: leave.endDate },
             ...scopeWhere,
-            cutoffAt: { lte: now },
+            lockAt: { lte: now },
           },
         }),
       ]);

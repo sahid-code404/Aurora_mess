@@ -343,21 +343,25 @@ model LeaveRequestMeal {
 // ---------------------------------------------------------------------
 
 model CalendarEvent {
-  id              String   @id @default(cuid())
-  institutionId   String
-  name            String
-  description     String?
-  startDate       DateTime
-  endDate         DateTime
-  type            String   @default("HOLIDAY") // HOLIDAY | FESTIVAL | MAINTENANCE | CUSTOM
-  disableMeals    Boolean  @default(false)
-  mealScope       String   @default("ALL_MEALS") // ALL_MEALS | SELECTED_MEALS
-  createdByUserId String?
-  createdAt       DateTime @default(now())
+  id                String    @id @default(cuid())
+  institutionId     String
+  name              String
+  description       String?
+  startDate         DateTime
+  endDate           DateTime
+  type              String    @default("HOLIDAY") // HOLIDAY | FESTIVAL | MAINTENANCE | CUSTOM
+  disableMeals      Boolean   @default(false)
+  mealScope         String    @default("ALL_MEALS") // ALL_MEALS | SELECTED_MEALS
+  createdByUserId   String?
+  createdAt         DateTime  @default(now())
+  cancelledAt       DateTime?
+  cancelledByUserId String?
+  cancelReason      String?
 
   selectedMeals CalendarEventMeal[]
 
   @@index([institutionId, startDate])
+  @@index([institutionId, cancelledAt, startDate])
 }
 
 model CalendarEventMeal {
@@ -767,7 +771,7 @@ model Bill {
   mealChargeMinor   Int      @default(0)
   guestChargeMinor  Int      @default(0)
   subtotalMinor     Int      @default(0)
-  adjustmentsMinor  Int      @default(0)
+  adjustmentsMinor Int      @default(0)
   paymentsMinor     Int      @default(0)
   totalDueMinor     Int      @default(0)
   dueDate           DateTime
