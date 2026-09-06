@@ -2,11 +2,11 @@
  * /api/v1/admin/refunds (auth ADMIN)
  *
  * POST — issue a refund / resolve excess credit.
- * The financial mutation lives in the refund domain service, which runs the
- * available-credit read + write at PostgreSQL SERIALIZABLE isolation and posts
- * ISSUE_REFUND journals against the refund ID itself.
+ * The financial mutation lives in the refund domain service. It serializes
+ * resident financial mutations with the resident mutex before re-reading
+ * eligibility and posts ISSUE_REFUND journals against the refund ID itself.
  *
- * GET — refund list with resident names (keyset cursor).
+ * GET — searchable refund list with resident names (keyset cursor).
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -88,11 +88,39 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const url = new URL(ctx.req.url);
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const residentId = url.searchParams.get("residentId") ?? undefined;
+  const q = (url.searchParams.get("q") ?? "").trim();
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 25) || 25));
   const baseWhere: Record<string, unknown> = { institutionId: ctx.institutionId };
   if (residentId) baseWhere.residentId = residentId;
 
+  let searchConditions: Record<string, unknown>[] | null = null;
+  if (q) {
+    // Refund rows intentionally store residentId only. Resolve the visible
+    // resident identity first, then combine it with refund-native text fields.
+    const matchedResidents = await db.user.findMany({
+      where: {
+        institutionId: ctx.institutionId,
+        role: "RESIDENT",
+        OR: [
+          { email: { contains: q } },
+          { profile: { fullName: { contains: q } } },
+          { profile: { roomNumber: { contains: q } } },
+        ],
+      },
+      select: { id: true },
+      take: 100,
+    });
+    searchConditions = [
+      { residentId: { in: matchedResidents.map((resident) => resident.id) } },
+      { reason: { contains: q } },
+      { destination: { contains: q } },
+    ];
+  }
+
   const { where, take } = keysetWhere(baseWhere, "createdAt", cursor, limit);
+  if (searchConditions) {
+    where.AND = [...((where.AND as Record<string, unknown>[]) ?? []), { OR: searchConditions }];
+  }
   const rows = await db.refund.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take });
   const page = finishPage(rows, limit, (row) => row.createdAt);
 
