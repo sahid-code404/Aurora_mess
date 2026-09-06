@@ -7,7 +7,87 @@ type IdempotencyClient = Pick<Prisma.TransactionClient, "idempotencyRecord">;
 type ClaimResult =
   | { state: "CLAIMED" }
   | { state: "REPLAY"; payload: Record<string, unknown> }
+  | { state: "MISMATCH" }
   | { state: "IN_PROGRESS" };
+
+type ReplayResult =
+  | { state: "REPLAY"; payload: Record<string, unknown> }
+  | { state: "MISMATCH" };
+
+const ENVELOPE_VERSION = 1;
+const ENVELOPE_KEY = "__boardopsIdempotency";
+
+type ReplayEnvelope = {
+  [ENVELOPE_KEY]: {
+    version: number;
+    requestFingerprint: string;
+  };
+  payload: Record<string, unknown>;
+};
+
+function normalizeFingerprintValue(value: unknown): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("IDEMPOTENCY_FINGERPRINT_NON_FINITE_NUMBER");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeFingerprintValue);
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const normalized: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      if (record[key] === undefined) continue;
+      normalized[key] = normalizeFingerprintValue(record[key]);
+    }
+    return normalized;
+  }
+  throw new Error("IDEMPOTENCY_FINGERPRINT_UNSUPPORTED_VALUE");
+}
+
+/**
+ * Hash one canonical business-request shape. Object key ordering never changes
+ * the result; raw request values are never persisted in the idempotency table.
+ */
+export function idempotencyRequestFingerprint(value: unknown): string {
+  const canonical = JSON.stringify(normalizeFingerprintValue(value));
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+function isReplayEnvelope(value: unknown): value is ReplayEnvelope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const metadata = record[ENVELOPE_KEY];
+  const payload = record.payload;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const metaRecord = metadata as Record<string, unknown>;
+  return (
+    metaRecord.version === ENVELOPE_VERSION &&
+    typeof metaRecord.requestFingerprint === "string" &&
+    metaRecord.requestFingerprint.length === 64
+  );
+}
+
+/**
+ * Decode a completed replay row. New rows carry a fingerprint envelope; legacy
+ * rows remain plain payload JSON and replay unchanged until their normal expiry.
+ */
+export function parseIdempotencyReplay(
+  responseJson: string,
+  requestFingerprint?: string | null
+): ReplayResult {
+  const parsed = JSON.parse(responseJson) as unknown;
+  if (isReplayEnvelope(parsed)) {
+    if (
+      requestFingerprint &&
+      parsed[ENVELOPE_KEY].requestFingerprint !== requestFingerprint
+    ) {
+      return { state: "MISMATCH" };
+    }
+    return { state: "REPLAY", payload: parsed.payload };
+  }
+  return { state: "REPLAY", payload: parsed as Record<string, unknown> };
+}
 
 /**
  * Storage keys are derived from the authenticated actor plus the client key.
@@ -27,6 +107,7 @@ export async function claimIdempotencyKey(input: {
   key: string;
   expiresAt: Date;
   now?: Date;
+  requestFingerprint?: string | null;
 }): Promise<ClaimResult> {
   const now = input.now ?? new Date();
   if (input.expiresAt.getTime() <= now.getTime()) {
@@ -87,12 +168,12 @@ export async function claimIdempotencyKey(input: {
   if (!existing) return { state: "IN_PROGRESS" };
 
   if (existing.responseJson) {
-    return {
-      state: "REPLAY",
-      payload: JSON.parse(existing.responseJson) as Record<string, unknown>,
-    };
+    return parseIdempotencyReplay(existing.responseJson, input.requestFingerprint);
   }
 
+  // An in-progress request has not produced a replay payload/fingerprint yet.
+  // It is always a conflict for a second request; once the winner completes, a
+  // retry can distinguish exact replay from key reuse with changed details.
   return { state: "IN_PROGRESS" };
 }
 
@@ -102,7 +183,18 @@ export async function completeIdempotencyKey(input: {
   scope: string;
   key: string;
   payload: Record<string, unknown>;
+  requestFingerprint?: string | null;
 }) {
+  const stored: Record<string, unknown> | ReplayEnvelope = input.requestFingerprint
+    ? {
+        [ENVELOPE_KEY]: {
+          version: ENVELOPE_VERSION,
+          requestFingerprint: input.requestFingerprint,
+        },
+        payload: input.payload,
+      }
+    : input.payload;
+
   await input.client.idempotencyRecord.update({
     where: {
       institutionId_scope_key: {
@@ -111,7 +203,7 @@ export async function completeIdempotencyKey(input: {
         key: input.key,
       },
     },
-    data: { responseJson: JSON.stringify(input.payload) },
+    data: { responseJson: JSON.stringify(stored) },
   });
 }
 
