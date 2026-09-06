@@ -36,7 +36,7 @@ describe("billing/refund financial boundary source ordering", () => {
     expect(payments).toContain(
       'import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";'
     );
-    const transaction = payments.indexOf("const result = await db.$transaction(");
+    const transaction = payments.indexOf("return await db.$transaction(async (tx) => {");
     const lock = payments.indexOf("await lockResidentFinancialMutation(", transaction);
     const claim = payments.indexOf("const claim = await claimIdempotencyKey(", transaction);
     const create = payments.indexOf("const payment = await tx.payment.create(", transaction);
