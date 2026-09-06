@@ -73,12 +73,14 @@ describe("meal-state regression invariants", () => {
   });
 
   test("instance status transitions are driven by authoritative timestamps", () => {
-    const cutoff = new Date("2026-09-05T10:00:00.000Z");
+    const lockAt = new Date("2026-09-05T10:00:00.000Z");
+    const start = new Date("2026-09-05T11:00:00.000Z");
     const end = new Date("2026-09-05T12:00:00.000Z");
 
-    expect(computeInstanceStatus(new Date("2026-09-05T09:59:59.000Z"), cutoff, end)).toBe("OPEN");
-    expect(computeInstanceStatus(new Date("2026-09-05T10:00:00.000Z"), cutoff, end)).toBe("LOCKED");
-    expect(computeInstanceStatus(new Date("2026-09-05T12:00:00.000Z"), cutoff, end)).toBe("COMPLETED");
+    expect(computeInstanceStatus(new Date("2026-09-05T09:59:59.000Z"), lockAt, start, end)).toBe("OPEN");
+    expect(computeInstanceStatus(new Date("2026-09-05T10:00:00.000Z"), lockAt, start, end)).toBe("LOCKED");
+    expect(computeInstanceStatus(new Date("2026-09-05T11:00:00.000Z"), lockAt, start, end)).toBe("SERVICE_ACTIVE");
+    expect(computeInstanceStatus(new Date("2026-09-05T12:00:00.000Z"), lockAt, start, end)).toBe("COMPLETED");
   });
 });
 

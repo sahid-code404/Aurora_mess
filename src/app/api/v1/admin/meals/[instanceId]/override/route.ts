@@ -68,7 +68,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     const now = new Date();
-    const cutoffPassed = instance.status !== "OPEN" || now.getTime() >= instance.cutoffAt.getTime();
+    if (instance.status === "CANCELLED") {
+      throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
+    }
+    const cutoffPassed = now.getTime() >= instance.lockAt.getTime();
     if (!cutoffPassed) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,

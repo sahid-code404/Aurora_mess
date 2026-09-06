@@ -6,7 +6,7 @@ export type GuestMealLifecycleStatus = "REQUESTED" | "CONFIRMED" | "LOCKED" | "C
 
 export function deriveGuestMealLifecycleStatus(
   status: string,
-  cutoffAt: Date,
+  lockAt: Date,
   serviceEndAt: Date,
   now = new Date()
 ): GuestMealLifecycleStatus {
@@ -14,7 +14,7 @@ export function deriveGuestMealLifecycleStatus(
     return status as GuestMealLifecycleStatus;
   }
   if (now.getTime() >= serviceEndAt.getTime()) return "CONSUMED";
-  if (status === "CONFIRMED" && now.getTime() >= cutoffAt.getTime()) return "LOCKED";
+  if (status === "CONFIRMED" && now.getTime() >= lockAt.getTime()) return "LOCKED";
   return status as GuestMealLifecycleStatus;
 }
 
@@ -71,7 +71,7 @@ export async function refreshGuestMealLifecycle(options: {
         : {}),
     },
     include: {
-      mealInstance: { select: { cutoffAt: true, serviceEndAt: true } },
+      mealInstance: { select: { lockAt: true, serviceEndAt: true } },
     },
   });
 
@@ -80,7 +80,7 @@ export async function refreshGuestMealLifecycle(options: {
   for (const row of rows) {
     const next = deriveGuestMealLifecycleStatus(
       row.status,
-      row.mealInstance.cutoffAt,
+      row.mealInstance.lockAt,
       row.mealInstance.serviceEndAt,
       now
     );
@@ -90,8 +90,8 @@ export async function refreshGuestMealLifecycle(options: {
       where: { id: row.id, status: row.status },
       data:
         next === "LOCKED"
-          ? { status: "LOCKED", lockedAt: row.lockedAt ?? row.mealInstance.cutoffAt }
-          : { status: "CONSUMED", lockedAt: row.lockedAt ?? row.mealInstance.cutoffAt },
+          ? { status: "LOCKED", lockedAt: row.lockedAt ?? row.mealInstance.lockAt }
+          : { status: "CONSUMED", lockedAt: row.lockedAt ?? row.mealInstance.lockAt },
     });
     if (updated.count !== 1) continue;
     if (next === "LOCKED") locked += 1;

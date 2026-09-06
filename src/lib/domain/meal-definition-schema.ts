@@ -69,6 +69,7 @@ export function validateDefinitionInvariants(cfg: {
   serviceEndLocal?: string;
   cutoffStrategy?: string;
   cutoffOffsetDays?: number | null;
+  cutoffLocalTime?: string;
 }): { fields: Record<string, string>; fixedPriceMinorParsed: number | null } {
   const fields: Record<string, string> = {};
   let fixedPriceMinorParsed: number | null = null;
@@ -102,6 +103,18 @@ export function validateDefinitionInvariants(cfg: {
 
   if (cfg.cutoffStrategy === "CUSTOM_OFFSET" && (cfg.cutoffOffsetDays == null || cfg.cutoffOffsetDays < 0)) {
     fields.cutoffOffsetDays = "Enter the cutoff offset in days (0-30).";
+  }
+
+  const sameDayCutoff =
+    cfg.cutoffStrategy === "SAME_DAY" ||
+    (cfg.cutoffStrategy === "CUSTOM_OFFSET" && (cfg.cutoffOffsetDays ?? 0) === 0);
+  if (
+    sameDayCutoff &&
+    cfg.cutoffLocalTime &&
+    cfg.serviceStartLocal &&
+    cfg.cutoffLocalTime > cfg.serviceStartLocal
+  ) {
+    fields.cutoffLocalTime = "Same-day cutoff cannot be after service starts.";
   }
 
   return { fields, fixedPriceMinorParsed };

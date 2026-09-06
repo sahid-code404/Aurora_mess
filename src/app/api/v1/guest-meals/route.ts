@@ -141,10 +141,13 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     if (!instance) throw new ApiError(CODES.NOT_FOUND, "This meal could not be found.", 404);
 
     const now = new Date();
-    if (now.getTime() >= instance.cutoffAt.getTime()) {
+    if (instance.status === "CANCELLED") {
+      throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
+    }
+    if (now.getTime() >= instance.lockAt.getTime()) {
       throw new ApiError(
         CODES.MEAL_CUTOFF_PASSED,
-        `This meal locked at ${formatTimeLabel(instance.cutoffAt, tz)}. Guest meals can no longer be added.`,
+        `This meal locked at ${formatTimeLabel(instance.lockAt, tz)}. Guest meals can no longer be added.`,
         409
       );
     }

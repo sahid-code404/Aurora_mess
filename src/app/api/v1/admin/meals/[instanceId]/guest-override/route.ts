@@ -42,7 +42,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     }
 
     const now = new Date();
-    const isLocked = instance.status !== "OPEN" || now.getTime() >= instance.cutoffAt.getTime();
+    if (instance.status === "CANCELLED") {
+      throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
+    }
+    const isLocked = now.getTime() >= instance.lockAt.getTime();
     if (!isLocked) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
