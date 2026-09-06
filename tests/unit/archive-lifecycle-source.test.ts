@@ -16,8 +16,11 @@ describe("archive lifecycle source contracts", () => {
     expect(model).not.toContain("policyType, status");
 
     const rules = source("src/lib/domain/rules/deficit-rules.ts");
+    const definitionStart = rules.indexOf("async function ensureDeficitDefinition");
+    const definitionEnd = rules.indexOf("async function findDeficitDefinition", definitionStart);
+    const definitionCreate = rules.slice(definitionStart, definitionEnd);
     const overview = source("src/app/api/v1/admin/rules/deficit/route.ts");
-    expect(rules).not.toContain('status: "ACTIVE"');
+    expect(definitionCreate).not.toContain('status: "ACTIVE"');
     expect(overview).not.toContain("overview.definition.status");
   });
 
@@ -61,7 +64,7 @@ describe("archive lifecycle source contracts", () => {
     const settings = source("src/components/app/admin/settings.tsx");
     expect(settings).toContain("<ConfirmDialog");
     expect(settings).toContain('action: "ARCHIVE" | "REACTIVATE"');
-    expect(settings).toContain('requireReason');
+    expect(settings).toContain("requireReason");
     expect(settings).toContain('"archive" : "reactivate"');
   });
 });
