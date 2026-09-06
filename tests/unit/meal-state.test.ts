@@ -12,6 +12,7 @@ function ctx(overrides: Partial<MealEvalContext> = {}): MealEvalContext {
   return {
     visible: true,
     calendarDisabled: false,
+    accountInactive: false,
     onLeave: false,
     restricted: false,
     adminOverride: null,
@@ -52,12 +53,35 @@ describe("meal-state regression invariants", () => {
     });
   });
 
-  test("current admin override behavior remains authoritative over normal state", () => {
+  test("admin override remains authoritative over the soft deficit-policy gate", () => {
     expect(
       evaluateResidentMeal(null, ctx({ restricted: true, adminOverride: "ON", selected: "OFF" }))
     ).toEqual({
       effectiveState: "ON",
       effectiveReason: "ADMIN_OVERRIDE",
+    });
+  });
+
+  test("admin override cannot bypass hard calendar, account, membership, cutoff, or leave eligibility", () => {
+    expect(evaluateResidentMeal(null, ctx({ calendarDisabled: true, adminOverride: "ON" }))).toEqual({
+      effectiveState: "NOT_AVAILABLE",
+      effectiveReason: "CALENDAR_DISABLED",
+    });
+    expect(evaluateResidentMeal(null, ctx({ accountInactive: true, adminOverride: "ON" }))).toEqual({
+      effectiveState: "NOT_AVAILABLE",
+      effectiveReason: "ACCOUNT_INACTIVE",
+    });
+    expect(evaluateResidentMeal(null, ctx({ joinedAfterCutoff: true, adminOverride: "ON" }))).toEqual({
+      effectiveState: "NOT_AVAILABLE",
+      effectiveReason: "JOINED_AFTER_CUTOFF",
+    });
+    expect(evaluateResidentMeal(null, ctx({ membershipInactive: true, adminOverride: "ON" }))).toEqual({
+      effectiveState: "NOT_AVAILABLE",
+      effectiveReason: "MEMBERSHIP_INACTIVE",
+    });
+    expect(evaluateResidentMeal(null, ctx({ onLeave: true, adminOverride: "ON" }))).toEqual({
+      effectiveState: "ON_LEAVE",
+      effectiveReason: "LEAVE_APPROVED",
     });
   });
 
