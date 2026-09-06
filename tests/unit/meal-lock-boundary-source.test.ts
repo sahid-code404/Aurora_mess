@@ -60,7 +60,7 @@ describe("meal lock boundary source guards", () => {
     expect(residentLock).toBeGreaterThan(institutionLock);
     expect(billingGuard).toBeGreaterThan(residentLock);
     expect(mutation).toBeGreaterThan(billingGuard);
-    expect(route).toContain("now.getTime() < instance.lockAt.getTime()");
+    expect(route).toContain("const lockPassed = now.getTime() >= instance.lockAt.getTime()");
     expect(route).toContain("const serviceEnded = now.getTime() >= instance.serviceEndAt.getTime()");
     expect(route).toContain('action: serviceEnded ? "GUEST_MEAL_POST_SERVICE_CORRECTION" : "GUEST_MEAL_OVERRIDE"');
     expect(route).not.toContain("This meal service has already ended");
