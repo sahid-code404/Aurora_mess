@@ -90,10 +90,17 @@ afterAll(async () => {
       await db.mealDefinitionVersion.deleteMany({ where: { mealDefinitionId: { in: definitionIds } } });
       await db.mealDefinition.deleteMany({ where: { id: { in: definitionIds } } });
     }
-    await db.userStatusHistory.deleteMany({ where: { user: { institutionId: { in: ids } } } });
-    await db.session.deleteMany({ where: { user: { institutionId: { in: ids } } } });
-    await db.userProfile.deleteMany({ where: { user: { institutionId: { in: ids } } } });
-    await db.user.deleteMany({ where: { institutionId: { in: ids } } });
+    const users = await db.user.findMany({ where: { institutionId: { in: ids } }, select: { id: true, userProfileId: true } });
+    const userIds = users.map((row) => row.id);
+    const profileIds = users.flatMap((row) => (row.userProfileId ? [row.userProfileId] : []));
+    if (userIds.length > 0) {
+      await db.userStatusHistory.deleteMany({ where: { userId: { in: userIds } } });
+      await db.session.deleteMany({ where: { userId: { in: userIds } } });
+      await db.user.deleteMany({ where: { id: { in: userIds } } });
+    }
+    if (profileIds.length > 0) {
+      await db.userProfile.deleteMany({ where: { id: { in: profileIds } } });
+    }
     await db.institutionSettings.deleteMany({ where: { institutionId: { in: ids } } });
     await db.institution.deleteMany({ where: { id: { in: ids } } });
   }
