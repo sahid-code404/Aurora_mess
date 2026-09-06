@@ -65,11 +65,12 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     if (instance.status === "CANCELLED") {
       throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
     }
-    const lockPassed = now.getTime() >= instance.lockAt.getTime();
+    const lockBoundary = instance.lockAt;
+    const lockPassed = now.getTime() >= lockBoundary.getTime();
     if (!lockPassed) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
-        `Admin override is only allowed after this meal locks (${formatTimeLabel(instance.lockAt, tz)}). Before then, residents manage their own meals.`,
+        `Admin override is only allowed after this meal locks (${formatTimeLabel(lockBoundary, tz)}). Before then, residents manage their own meals.`,
         409
       );
     }
@@ -104,7 +105,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
 
     // The row became immutable at the instance lock boundary, not at the later
     // time an Admin happened to open/override it. Preserve that historical fact.
-    const lockedAt = rm.lockedAt ?? instance.lockAt;
+    const lockedAt = rm.lockedAt ?? lockBoundary;
 
     const guard = await tx.residentMeal.updateMany({
       where: { id: rm.id, version: rm.version },
@@ -154,7 +155,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           mealInstanceId: instance.id,
           mealName,
           serviceDate,
-          lockAt: instance.lockAt.toISOString(),
+          lockAt: lockBoundary.toISOString(),
           configuredCutoffAt: instance.cutoffAt.toISOString(),
           cleared: isResetToNormal,
         },
@@ -186,7 +187,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       overridden: after.effectiveReason === "ADMIN_OVERRIDE",
       locked: updated.lockedAt != null,
       lockedAt: updated.lockedAt ? updated.lockedAt.toISOString() : null,
-      lockAt: instance.lockAt.toISOString(),
+      lockAt: lockBoundary.toISOString(),
       cutoffAt: instance.cutoffAt.toISOString(),
       version: updated.version,
     };
