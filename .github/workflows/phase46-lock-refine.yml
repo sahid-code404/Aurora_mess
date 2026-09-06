@@ -1,0 +1,39 @@
+name: Phase 46 lifecycle lock refinement
+
+on:
+  push:
+    branches:
+      - feat/phase46-meal-retirement-lifecycle
+    paths:
+      - scripts/phase46_lock_refine.py
+      - .github/workflows/phase46-lock-refine.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase46-meal-retirement-lifecycle
+          fetch-depth: 0
+      - name: Apply lifecycle mutex refinement
+        run: python3 scripts/phase46_lock_refine.py
+      - name: Commit refinement
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/lib/domain/meal-retirement.ts \
+            'src/app/api/v1/admin/meal-definitions/[id]/archive/route.ts' \
+            'src/app/api/v1/admin/meal-definitions/[id]/route.ts' \
+            tests/integration/meal-retirement-lifecycle.test.ts \
+            tests/unit/meal-retirement-lifecycle-source.test.ts
+          if git diff --cached --quiet; then
+            echo "No refinement changes"
+          else
+            git commit -m "Phase 46: serialize meal retirement mutations"
+            git push origin HEAD:feat/phase46-meal-retirement-lifecycle
+          fi
