@@ -1,8 +1,9 @@
 /**
  * POST /api/v1/meals/[instanceId]/toggle — resident ON/OFF toggle (spec §31).
- * Transaction: materialize-on-demand → load rm (unique resident+instance) →
- * server-time cutoff check → optimistic version check → availability check →
- * write selected state + recompute effective (full re-evaluation) → audit.
+ * Transaction: Resident lifecycle mutex + authoritative ACTIVE read →
+ * materialize-on-demand → load rm (unique resident+instance) → server-time
+ * cutoff check → optimistic version check → availability check → write selected
+ * state + recompute effective (full re-evaluation) → audit.
  * Server time is the ONLY clock (spec §16).
  */
 import { z } from "zod";
@@ -20,6 +21,7 @@ import {
   parseSnapshot,
   requireInstitutionContext,
 } from "@/lib/domain/meal-engine";
+import { lockActiveResidentForMealMutation } from "@/lib/domain/resident-meal-mutation";
 
 const bodySchema = z.object({
   state: z.enum(["ON", "OFF"]),
@@ -33,6 +35,8 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const instanceId = ctx.params.instanceId;
 
   const result = await db.$transaction(async (tx) => {
+    const resident = await lockActiveResidentForMealMutation(tx, ctx.institutionId, ctx.user.id);
+
     const instance = await tx.mealInstance.findFirst({
       where: { id: instanceId, institutionId: ctx.institutionId },
       include: { definition: true, definitionVersion: true },
@@ -67,9 +71,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       throw new ApiError(CODES.RESOURCE_CHANGED, "This meal was just changed. Please refresh.", 409);
     }
 
-    const resident = await tx.user.findUnique({ where: { id: ctx.user.id } });
-    if (!resident) throw new ApiError(CODES.INTERNAL, "Account could not be resolved.", 500);
-
     const evalCtx = await buildEvalContext({
       resident: resident as never,
       institutionId: ctx.institutionId,
@@ -97,8 +98,6 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     }
 
     const before = { state: rm.effectiveState, reason: rm.effectiveReason, selected: rm.residentSelectedState };
-    // Re-evaluate with the candidate row: context carries selection/adminOverride
-    // (evaluateResidentMeal is pure — same inputs, same output).
     const candidateRm = { ...rm, residentSelectedState: body.state };
     const after = evaluateResidentMeal(candidateRm as never, { ...evalCtx, selected: body.state });
 
