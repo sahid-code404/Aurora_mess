@@ -17,7 +17,7 @@
  *   selected ?? baseline → RESIDENT_SELECTION | BASELINE_DEFAULT
  *
  * Hard eligibility gates (visibility, calendar, account/membership eligibility,
- * join cutoff and approved leave) are never bypassed by an Admin override.
+ * join lock boundary and approved leave) are never bypassed by an Admin override.
  * Deficit restriction is a soft policy gate and remains Admin-overridable.
  *
  * Server time is authoritative for every cutoff/lock decision (spec §16).
@@ -263,7 +263,7 @@ export type EvalInputs = {
     membershipEffectiveUntil: Date | null;
   };
   institutionId: string;
-  instance: { serviceDate: Date; cutoffAt: Date; mealDefinitionId: string };
+  instance: { serviceDate: Date; cutoffAt: Date; lockAt: Date; mealDefinitionId: string };
   definition: { defaultVisible?: boolean | null; defaultState?: string | null } | null;
   snapshot: Record<string, any> | null;
   rm: { baselineState: string; residentSelectedState: string | null; adminOverrideState: string | null };
@@ -332,7 +332,7 @@ export async function buildEvalContext(inputs: EvalInputs): Promise<MealEvalCont
     selected: inputs.rm.residentSelectedState ?? null,
     baseline: inputs.rm.baselineState === "OFF" ? "OFF" : "ON",
     membershipInactive: !!(until && until.getTime() < dayStart.getTime()),
-    joinedAfterCutoff: !!(from && from.getTime() > inputs.instance.cutoffAt.getTime()),
+    joinedAfterCutoff: !!(from && from.getTime() > inputs.instance.lockAt.getTime()),
   };
 }
 
@@ -437,8 +437,8 @@ export async function ensureInstancesForRange(
  * For each instance in range, create the ResidentMeal row when the resident is
  * an ACTIVE member whose membership window covers the service date. Not created
  * for PENDING_APPROVAL/REJECTED/INACTIVE users, GUEST_ONLY definitions, or dates
- * outside the membership window. Mid-month join after cutoff materializes as
- * NOT_AVAILABLE/JOINED_AFTER_CUTOFF (spec §30 — no retro ON).
+ * outside the membership window. Mid-month join after the effective lock
+ * boundary materializes as NOT_AVAILABLE/JOINED_AFTER_CUTOFF (spec §30 — no retro ON).
  * Returns the number of rows created.
  */
 export async function ensureResidentMeals(
@@ -521,7 +521,7 @@ export async function ensureResidentMeals(
       selected: null,
       baseline: baseline === "OFF" ? "OFF" : "ON",
       membershipInactive: false,
-      joinedAfterCutoff: !!(from && from.getTime() > inst.cutoffAt.getTime()),
+      joinedAfterCutoff: !!(from && from.getTime() > new Date(inst.lockAt).getTime()),
     };
     const result = evaluateResidentMeal(null, ctx);
 
@@ -555,8 +555,9 @@ export async function ensureResidentMeals(
  * For every instance in range whose lockAt has passed:
  * refresh instance status (LOCKED/SERVICE_ACTIVE/COMPLETED) and lock every
  * ResidentMeal that is not locked yet — reconstructing calendar/leave facts as
- * they existed at the actual lockAt boundary and writing lockedAt. Runs inside
- * the caller's transaction when passed `client`.
+ * they existed at the actual lockAt boundary and writing that authoritative
+ * boundary into ResidentMeal.lockedAt. Runs inside the caller's transaction
+ * when passed `client`.
  */
 export async function refreshAndLock(
   institutionId: string,
@@ -680,7 +681,7 @@ export async function refreshAndLock(
       selected: rm.residentSelectedState ?? null,
       baseline: rm.baselineState === "OFF" ? "OFF" : "ON",
       membershipInactive: !!(until && until.getTime() < dayStart.getTime()),
-      joinedAfterCutoff: !!(from && from.getTime() > new Date(instRow.cutoffAt).getTime()),
+      joinedAfterCutoff: !!(from && from.getTime() > lockBoundary.getTime()),
     };
     const result = evaluateResidentMeal(rm, ctx);
     await client.residentMeal.update({
@@ -690,7 +691,7 @@ export async function refreshAndLock(
         effectiveReason: result.effectiveReason,
         policyState: ctx.restricted ? "RESTRICTED" : null,
         leaveState: ctx.onLeave ? "ON_LEAVE" : null,
-        lockedAt: now,
+        lockedAt: lockBoundary,
       },
     });
     locked++;
@@ -796,7 +797,7 @@ export async function refreshUnlockedEffective(
       selected: rm.residentSelectedState ?? null,
       baseline: rm.baselineState === "OFF" ? "OFF" : "ON",
       membershipInactive: !!(until && until.getTime() < dayStart.getTime()),
-      joinedAfterCutoff: !!(from && from.getTime() > new Date(instRow.cutoffAt).getTime()),
+      joinedAfterCutoff: !!(from && from.getTime() > new Date(instRow.lockAt).getTime()),
     };
     const result = evaluateResidentMeal(rm, ctx);
     const nextPolicyState = ctx.restricted ? "RESTRICTED" : null;
@@ -837,6 +838,7 @@ export type SerializedInstance = {
   serviceDate: string;
   serviceWindow: { startAt: string; endAt: string };
   cutoffAt: string;
+  lockAt: string;
   status: string;
   pricing: { strategy: string; fixedPriceMinor: number | null };
 };
@@ -858,6 +860,7 @@ export function serializeMealInstance(
       endAt: new Date(inst.serviceEndAt).toISOString(),
     },
     cutoffAt: new Date(inst.cutoffAt).toISOString(),
+    lockAt: new Date(inst.lockAt).toISOString(),
     status: inst.status,
     pricing: {
       strategy: inst.priceStrategySnapshot ?? "FORMULA",
