@@ -42,8 +42,9 @@ describe("meal lock boundary source guards", () => {
     const route = source("src/app/api/v1/admin/meals/[instanceId]/override/route.ts");
 
     expect(route).toContain("const lockBoundary = instance.lockAt");
+    expect(route).toContain("const lockPassed = now.getTime() >= instance.lockAt.getTime()");
     expect(route).toContain("const lockedAt = rm.lockedAt ?? lockBoundary");
-    expect(route).toContain("lockAt: instance.lockAt.toISOString()");
+    expect(route).toContain("lockAt: lockBoundary.toISOString()");
     expect(route).not.toContain("instance.cutoffAt.getTime() ? now");
   });
 
