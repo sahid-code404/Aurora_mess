@@ -7,9 +7,18 @@ const source = readFileSync(
 );
 
 describe("payment idempotency and rate-limit ordering", () => {
-  test("completed replays happen before quota consumption while in-progress requests remain limited", () => {
+  test("completed matching replays and payload conflicts resolve before quota consumption while in-progress requests remain limited", () => {
+    const scopedInspection = source.indexOf(
+      "const inspected = inspectIdempotencyRecord(existing.responseJson, requestHash)"
+    );
+    const scopedMismatch = source.indexOf(
+      'if (inspected.state === "MISMATCH") throw idempotencyPayloadMismatch();'
+    );
     const scopedReplay = source.indexOf(
-      "return { data: JSON.parse(existing.responseJson), meta: { idempotentReplay: true } }"
+      'if (inspected.state === "REPLAY") {'
+    );
+    const scopedReplayReturn = source.indexOf(
+      "return { data: inspected.payload, meta: { idempotentReplay: true } }"
     );
     const legacyReplay = source.indexOf(
       "return { data: payload, meta: { idempotentReplay: true } }"
@@ -25,10 +34,13 @@ describe("payment idempotency and rate-limit ordering", () => {
       "const proofFile = proof ? await storeUpload(proof, ctx.institutionId, ctx.user.id) : null"
     );
 
-    expect(scopedReplay).toBeGreaterThan(-1);
+    expect(scopedInspection).toBeGreaterThan(-1);
+    expect(scopedMismatch).toBeGreaterThan(scopedInspection);
+    expect(scopedReplay).toBeGreaterThan(scopedMismatch);
+    expect(scopedReplayReturn).toBeGreaterThan(scopedReplay);
     expect(legacyReplay).toBeGreaterThan(-1);
     expect(legacyInProgressDetected).toBeGreaterThan(-1);
-    expect(limiter).toBeGreaterThan(scopedReplay);
+    expect(limiter).toBeGreaterThan(scopedReplayReturn);
     expect(limiter).toBeGreaterThan(legacyReplay);
     expect(limiter).toBeGreaterThan(legacyInProgressDetected);
     expect(legacyConflict).toBeGreaterThan(limiter);
