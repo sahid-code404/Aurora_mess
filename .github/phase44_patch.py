@@ -127,8 +127,23 @@ replace_exact(
 ''',
     '',
 )
-replace_exact("src/lib/domain/refunds.ts", '        paymentId: input.paymentId ?? null,', '        paymentId: null,')
-replace_exact("src/lib/domain/refunds.ts", '          paymentId: input.paymentId ?? null,\n', '')
+replace_exact(
+    "src/lib/domain/refunds.ts",
+    '''        residentId: resident.id,
+        paymentId: input.paymentId ?? null,
+        amountMinor: input.amountMinor,''',
+    '''        residentId: resident.id,
+        paymentId: null,
+        amountMinor: input.amountMinor,''',
+)
+replace_exact(
+    "src/lib/domain/refunds.ts",
+    '''          residentId: resident.id,
+          paymentId: input.paymentId ?? null,
+          journalId,''',
+    '''          residentId: resident.id,
+          journalId,''',
+)
 replace_exact(
     "src/lib/domain/refunds.ts",
     ''' * Refund lifecycle invariant:
