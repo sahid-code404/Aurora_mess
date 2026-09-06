@@ -565,8 +565,8 @@ export async function activateDeficitRuleVersion(input: {
     ) {
       throw new ApiError(CODES.NOT_FOUND, "Deficit rule version not found.", 404);
     }
-    if (candidate.status !== "DRAFT" && candidate.status !== "SCHEDULED") {
-      throw new ApiError(CODES.RESOURCE_CHANGED, "Only a draft or scheduled rule version can be activated.", 409);
+    if (candidate.status !== "DRAFT") {
+      throw new ApiError(CODES.RESOURCE_CHANGED, "Only a draft rule version can be activated.", 409);
     }
     if (candidate.checksum !== input.expectedChecksum) {
       throw new ApiError(
