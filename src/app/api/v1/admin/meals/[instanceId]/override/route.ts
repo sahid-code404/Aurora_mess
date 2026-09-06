@@ -66,7 +66,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
     }
     const lockBoundary = instance.lockAt;
-    const lockPassed = now.getTime() >= lockBoundary.getTime();
+    const lockPassed = now.getTime() >= instance.lockAt.getTime();
     if (!lockPassed) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
