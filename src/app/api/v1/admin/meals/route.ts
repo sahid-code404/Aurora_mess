@@ -199,7 +199,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         let guestOverridden = false;
         let guestOverrideCount = 0;
         for (const g of mGuests) {
-          const match = g.note?.match(/Admin override\|orig:(\d+)/);
+          const match = g.note?.match(/(?:Admin override|Admin post-service correction)\|orig:(\d+)/);
           if (match) {
             const originalBaseline = parseInt(match[1], 10);
             guestOverrideCount = Math.abs(guestCount - originalBaseline);
@@ -207,7 +207,11 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
             break;
           }
           // Backward compat: old records may just have "Admin override" without orig
-          if (g.note === "Admin override" || g.note?.startsWith("Admin override")) {
+          if (
+            g.note === "Admin override" ||
+            g.note?.startsWith("Admin override") ||
+            g.note?.startsWith("Admin post-service correction")
+          ) {
             guestOverridden = true;
             guestOverrideCount = guestCount; // best effort
             break;
