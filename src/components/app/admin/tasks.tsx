@@ -73,7 +73,9 @@ const STATUS_CHIPS = [
   { value: "ACCEPTED", label: "Accepted" },
   { value: "IN_PROGRESS", label: "In Progress" },
   { value: "APPROVED", label: "Completed" },
-  { value: "REJECTED", label: "Rejected" },
+  { value: "REJECTED", label: "Resident Rejected" },
+  { value: "REJECTED_BY_ADMIN", label: "Review Rejected" },
+  { value: "CANCELLED", label: "Cancelled" },
 ];
 
 const TASK_TYPE_LABELS: Record<string, string> = {
@@ -120,6 +122,7 @@ const STATUS_TILE: Record<string, string> = {
   APPROVED: "border-success/30 bg-success/12 text-success",
   REJECTED: "border-danger/30 bg-danger/12 text-danger",
   REJECTED_BY_ADMIN: "border-danger/30 bg-danger/12 text-danger",
+  CANCELLED: "border-border bg-muted/60 text-muted-foreground",
 };
 
 function statusTile(status: string): string {
@@ -133,6 +136,8 @@ function taskOrbColor(status: string): "emerald" | "rose" | "amber" | "frost" {
     case "REJECTED":
     case "REJECTED_BY_ADMIN":
       return "rose";
+    case "CANCELLED":
+      return "frost";
     case "SUBMITTED":
     case "IN_PROGRESS":
       return "amber";
@@ -222,7 +227,8 @@ export default function AdminTasks() {
   const tz = institution?.timezone ?? "Asia/Kolkata";
   const todayDateKey = todayKeyInTz(tz);
   const currentMonthKey = currentMonthKeyInTz(tz);
-  const [monthKey, setMonthKey] = useState<string>(currentMonthKey);
+  const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
+  const monthKey = monthParam ?? currentMonthKey;
 
   const { data: envelope, isLoading, error, refetch } = useApiMetaQuery<TaskRow[]>(TASKS_PATH, {
     status: status === "ALL" ? undefined : status,
@@ -313,11 +319,11 @@ export default function AdminTasks() {
       {/* Month navigation — centered picker capsule */}
       <StaggerItem>
       <PickerCapsule
-        onPrev={() => setMonthKey(shiftMonthKey(monthKey, -1))}
-        onNext={() => setMonthKey(shiftMonthKey(monthKey, 1))}
+        onPrev={() => setMonthParam(shiftMonthKey(monthKey, -1))}
+        onNext={() => setMonthParam(shiftMonthKey(monthKey, 1))}
         prevLabel="Previous month"
         nextLabel="Next month"
-        onPillClick={() => setMonthKey(currentMonthKey)}
+        onPillClick={() => setMonthParam(undefined)}
         pillAriaLabel="Reset to the current month"
         resettable={monthKey !== currentMonthKey}
       >
@@ -532,6 +538,7 @@ function TaskDetailDialog({
   const currentTask = task;
   const sub = currentTask.submission;
   const canReview = currentTask.status === "SUBMITTED" && sub && sub.status === "SUBMITTED";
+  const canCancel = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"].includes(currentTask.status);
 
   async function runReview(kind: "approve" | "reject", reason?: string) {
     if (!sub) return;
@@ -575,9 +582,20 @@ function TaskDetailDialog({
               </GlassButton>
             </>
           ) : (
-            <GlassButton variant="ghost" onClick={onClose}>
-              Close
-            </GlassButton>
+            <>
+              <GlassButton variant="ghost" onClick={onClose}>
+                Close
+              </GlassButton>
+              {canCancel && (
+                <TaskCancelAction
+                  task={currentTask}
+                  onDone={() => {
+                    onReviewDone();
+                    onClose();
+                  }}
+                />
+              )}
+            </>
           )
         }
       >
@@ -591,6 +609,9 @@ function TaskDetailDialog({
               <KeyValue label="Assigned date" value={fmtDateTime(currentTask.createdAt, tz)} />
               {currentTask.dueDate && <KeyValue label="Due date" value={fmtDate(currentTask.dueDate)} />}
               {currentTask.notes && <KeyValue label="Notes" value={currentTask.notes} />}
+              {currentTask.status === "CANCELLED" && currentTask.adminReviewReason && (
+                <KeyValue label="Cancellation reason" value={currentTask.adminReviewReason} />
+              )}
             </div>
           </div>
 
@@ -664,6 +685,48 @@ function TaskDetailDialog({
           requireReason={confirm === "reject"}
           loading={acting}
           onConfirm={(reason) => void runReview(confirm, reason)}
+        />
+      )}
+    </>
+  );
+}
+
+function TaskCancelAction({ task, onDone }: { task: TaskRow; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [acting, setActing] = useState(false);
+
+  async function cancel(reason?: string) {
+    if (!reason) return;
+    setActing(true);
+    try {
+      await postJson(`${TASKS_PATH}/${task.id}/cancel`, { reason });
+      toast.success("Task cancelled", { description: `${task.residentName} · ${task.description}` });
+      setOpen(false);
+      onDone();
+    } catch (err) {
+      toast.error(errMessage(err));
+    } finally {
+      setActing(false);
+    }
+  }
+
+  return (
+    <>
+      <GlassButton variant="destructive" icon={<XCircle className="size-4" />} onClick={() => setOpen(true)} disabled={acting}>
+        Cancel task…
+      </GlassButton>
+      {open && (
+        <ConfirmDialog
+          open
+          onOpenChange={(next) => !next && setOpen(false)}
+          title="Cancel task"
+          description={`Cancel "${task.description}" for ${task.residentName}? Submitted/completed work cannot be cancelled.`}
+          confirmLabel="Cancel task"
+          tone="destructive"
+          requireReason
+          reasonPlaceholder="Why is this task being cancelled? (required)"
+          loading={acting}
+          onConfirm={(reason) => void cancel(reason)}
         />
       )}
     </>
