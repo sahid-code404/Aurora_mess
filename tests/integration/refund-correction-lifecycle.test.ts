@@ -179,7 +179,7 @@ describe("refund correction lifecycle", () => {
       year: 2026,
       month: 1,
       subtotalMinor: 3_000,
-      dueDate: new Date("2026-02-15T00:00:00.000Z"),
+      dueDate: new Date(Date.now() + 30 * 86_400_000),
     });
     invalidateInstitutionCache();
 
@@ -205,7 +205,7 @@ describe("refund correction lifecycle", () => {
       year: 2026,
       month: 2,
       subtotalMinor: 4_000,
-      dueDate: new Date("2026-03-15T00:00:00.000Z"),
+      dueDate: new Date(Date.now() + 60 * 86_400_000),
     });
 
     // Settlement must use spendable resident cash, not gross approved receipts.
@@ -288,7 +288,7 @@ describe("refund correction lifecycle", () => {
       year: 2026,
       month: 3,
       subtotalMinor: 3_000,
-      dueDate: new Date("2026-04-15T00:00:00.000Z"),
+      dueDate: new Date(Date.now() + 30 * 86_400_000),
     });
     invalidateInstitutionCache();
     await recomputeBillSettlement(db, resident.id);
@@ -339,7 +339,7 @@ describe("refund correction lifecycle", () => {
       year: 2026,
       month: 4,
       subtotalMinor: 3_000,
-      dueDate: new Date("2026-05-15T00:00:00.000Z"),
+      dueDate: new Date(Date.now() + 30 * 86_400_000),
     });
     invalidateInstitutionCache();
     await recomputeBillSettlement(db, resident.id);
