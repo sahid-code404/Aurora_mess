@@ -65,7 +65,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
             institutionId: ctx.institutionId,
             serviceDate: { gte: leave.startDate, lte: leave.endDate },
             ...scopeWhere,
-            cutoffAt: { gt: now },
+            lockAt: { gt: now },
           },
         }),
         db.mealInstance.count({
@@ -73,7 +73,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
             institutionId: ctx.institutionId,
             serviceDate: { gte: leave.startDate, lte: leave.endDate },
             ...scopeWhere,
-            cutoffAt: { lte: now },
+            lockAt: { lte: now },
           },
         }),
       ]);
