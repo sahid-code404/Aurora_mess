@@ -73,6 +73,10 @@ interface RefundRow {
   status: string;
   createdAt: string;
   completedAt: string | null;
+  reversalJournalId: string | null;
+  voidReason: string | null;
+  voidedByUserId: string | null;
+  voidedAt: string | null;
 }
 
 interface RefundCandidate {
@@ -160,6 +164,8 @@ export default function AdminPayments() {
   const [reviewId, setReviewId] = useState<string | null>(null);
   const [action, setAction] = useState<ReviewAction | null>(null);
   const [refundTarget, setRefundTarget] = useState<RefundCandidate | null>(null);
+  const [refundVoidTarget, setRefundVoidTarget] = useState<RefundRow | null>(null);
+  const [refundVoidBusy, setRefundVoidBusy] = useState(false);
   const [acting, setActing] = useState(false);
   const invalidate = useInvalidate();
   const { institution } = useSession();
@@ -221,6 +227,33 @@ export default function AdminPayments() {
 
   const detailQuery = useApiQuery<PaymentDetail>(reviewId ? `${PAYMENTS_PATH}/${reviewId}` : null);
   const detail = detailQuery.data;
+
+  async function voidRefundRecord(reason?: string) {
+    if (!refundVoidTarget || refundVoidBusy) return;
+    setRefundVoidBusy(true);
+    try {
+      await postJson(`/api/v1/admin/refunds/${refundVoidTarget.id}/void`, { reason });
+      invalidate([
+        "/api/v1/admin/refunds",
+        "/api/v1/admin/refunds/eligible",
+        PAYMENTS_PATH,
+        "/api/v1/admin/funds",
+        "/api/v1/admin/dashboard",
+        "/api/v1/admin/billing",
+      ]);
+      toast.success("Refund correction recorded", {
+        description:
+          refundVoidTarget.mode === "ISSUE_REFUND"
+            ? `${refundVoidTarget.residentName} · ${refundVoidTarget.amountFormatted} restored to resident credit`
+            : `${refundVoidTarget.residentName} · carry-forward decision reopened`,
+      });
+      setRefundVoidTarget(null);
+    } catch (err) {
+      toast.error(errMessage(err));
+    } finally {
+      setRefundVoidBusy(false);
+    }
+  }
 
   async function runAction(kind: ReviewAction, reason?: string) {
     if (!reviewId) return;
@@ -456,7 +489,7 @@ export default function AdminPayments() {
                             className="text-base sm:text-lg font-bold text-foreground block leading-tight"
                           />
                           <span className="kpi-num text-[11px] font-medium text-muted-foreground block mt-0.5">
-                            {ref.mode === "ISSUE_REFUND" ? "payout" : "carried forward"}
+                            {ref.status === "VOIDED" ? "corrected" : ref.mode === "ISSUE_REFUND" ? "payout" : "carried forward"}
                           </span>
                         </div>
                       </div>
@@ -464,11 +497,15 @@ export default function AdminPayments() {
                       {/* Bottom row */}
                       <div className="mt-2.5 flex h-7 items-center justify-between gap-2 border-t border-border/15 pt-2">
                         <div className="no-scrollbar flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+                          <StatusBadge status={ref.status} />
                           <Chip tone={ref.mode === "ISSUE_REFUND" ? "warning" : "frost"} className="text-[10px] px-2 py-0.5 shrink-0">
                             {ref.mode === "ISSUE_REFUND" ? "Payout" : "Carry forward"}
                           </Chip>
-                          <span className="kpi-num text-[11px] text-muted-foreground truncate max-w-[200px]" title={ref.reason}>
-                            {ref.reason}
+                          <span
+                            className="kpi-num text-[11px] text-muted-foreground truncate max-w-[200px]"
+                            title={ref.status === "VOIDED" ? ref.voidReason ?? ref.reason : ref.reason}
+                          >
+                            {ref.status === "VOIDED" ? `Corrected: ${ref.voidReason ?? "Administrative correction"}` : ref.reason}
                           </span>
                           {ref.destination && (
                             <span className="kpi-num text-[11px] text-muted-foreground truncate max-w-[140px]" title={ref.destination}>
@@ -477,19 +514,36 @@ export default function AdminPayments() {
                           )}
                         </div>
 
-                        <motion.button
-                          type="button"
-                          whileTap={{ scale: 0.94 }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigateTo(`/admin/residents/${ref.residentId}`);
-                          }}
-                          aria-label={`View resident 360 for ${ref.residentName}`}
-                          className="glass-inset hover:glass-soft flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full px-3 text-xs font-semibold text-foreground transition-all hover:text-primary hover:ring-1 hover:ring-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                        >
-                          <span>Resident</span>
-                          <ChevronRight className="size-3" aria-hidden />
-                        </motion.button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {ref.status === "COMPLETED" && (
+                            <motion.button
+                              type="button"
+                              whileTap={{ scale: 0.94 }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRefundVoidTarget(ref);
+                              }}
+                              aria-label={`Void refund record for ${ref.residentName}`}
+                              className="glass-inset hover:glass-soft flex h-7 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-semibold text-destructive transition-all hover:ring-1 hover:ring-destructive/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                            >
+                              <Trash2 className="size-3" aria-hidden />
+                              <span>Void</span>
+                            </motion.button>
+                          )}
+                          <motion.button
+                            type="button"
+                            whileTap={{ scale: 0.94 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigateTo(`/admin/residents/${ref.residentId}`);
+                            }}
+                            aria-label={`View resident 360 for ${ref.residentName}`}
+                            className="glass-inset hover:glass-soft flex h-7 cursor-pointer items-center gap-1 rounded-full px-3 text-xs font-semibold text-foreground transition-all hover:text-primary hover:ring-1 hover:ring-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                          >
+                            <span>Resident</span>
+                            <ChevronRight className="size-3" aria-hidden />
+                          </motion.button>
+                        </div>
                       </div>
                     </div>
                   </GlassCard>
@@ -632,6 +686,32 @@ export default function AdminPayments() {
           detail={detail}
           tz={tz}
           onAction={(kind) => setAction(kind)}
+        />
+      )}
+
+      {refundVoidTarget && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => !open && !refundVoidBusy && setRefundVoidTarget(null)}
+          title={refundVoidTarget.mode === "ISSUE_REFUND" ? "Void issued refund" : "Void carry-forward decision"}
+          description={
+            refundVoidTarget.mode === "ISSUE_REFUND" ? (
+              <>
+                Use this only when the payout was reversed, returned, or recorded in error. BoardOps will post a compensating journal and restore
+                <span className="font-semibold"> {refundVoidTarget.amountFormatted}</span> to {refundVoidTarget.residentName}&apos;s available credit.
+              </>
+            ) : (
+              <>
+                This keeps the original history but reopens this bill cycle&apos;s excess-credit decision for {refundVoidTarget.residentName}.
+              </>
+            )
+          }
+          confirmLabel="Void refund"
+          tone="destructive"
+          requireReason
+          reasonPlaceholder="Why is this refund decision being corrected? (required)"
+          loading={refundVoidBusy}
+          onConfirm={(reason) => void voidRefundRecord(reason)}
         />
       )}
 

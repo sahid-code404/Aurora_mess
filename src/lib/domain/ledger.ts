@@ -144,6 +144,10 @@ export type ReconciliationResult = {
   refundJournalLinkMismatches: number;
   refundLegacyReferenceWarnings: number;
   carryForwardsWithJournal: number;
+  voidedCashRefundsWithoutReversalJournal: number;
+  refundReversalLinkMismatches: number;
+  voidedCarryForwardsWithJournal: number;
+  refundInvalidLifecycleRows: number;
   billsWithoutJournal: number;
   billsWithDuplicateJournals: number;
   unbalancedJournals: number;
@@ -160,6 +164,7 @@ type JournalRow = {
   refType: string | null;
   refId: string | null;
   status: string;
+  reversedByJournalId: string | null;
   entries: { debitMinor: number; creditMinor: number }[];
 };
 
@@ -185,8 +190,8 @@ function linkedJournalMatches(
  *
  * Historical refund journals created before Phase 10 may point at paymentId
  * instead of refundId. Those remain a non-blocking provenance warning when the
- * exact journal row still exists, is POSTED, belongs to the institution, and is
- * typed REFUND. New refunds are always linked by refundId.
+ * exact journal row still exists, has the lifecycle-appropriate journal status,
+ * belongs to the institution, and is typed REFUND. New refunds are always linked by refundId.
  */
 export async function reconcileInstitution(
   institutionId: string,
@@ -205,15 +210,22 @@ export async function reconcileInstitution(
       select: { id: true, status: true, journalId: true, reversalJournalId: true },
     }),
     client.refund.findMany({
-      where: { institutionId, status: "COMPLETED" },
-      select: { id: true, mode: true, paymentId: true, journalId: true },
+      where: { institutionId },
+      select: {
+        id: true,
+        mode: true,
+        status: true,
+        paymentId: true,
+        journalId: true,
+        reversalJournalId: true,
+      },
     }),
     client.bill.findMany({
       where: { institutionId, subtotalMinor: { gt: 0 } },
       select: { id: true },
     }),
     client.ledgerJournal.findMany({
-      where: { institutionId, status: "POSTED" },
+      where: { institutionId, status: { in: ["POSTED", "REVERSED"] } },
       include: { entries: { select: { debitMinor: true, creditMinor: true } } },
     }),
   ]);
@@ -259,36 +271,85 @@ export async function reconcileInstitution(
   let refundJournalLinkMismatches = 0;
   let refundLegacyReferenceWarnings = 0;
   let carryForwardsWithJournal = 0;
+  let voidedCashRefundsWithoutReversalJournal = 0;
+  let refundReversalLinkMismatches = 0;
+  let voidedCarryForwardsWithJournal = 0;
+  let refundInvalidLifecycleRows = 0;
+
   for (const refund of refunds as any[]) {
-    if (refund.mode === "CARRY_FORWARD") {
-      if (refund.journalId) carryForwardsWithJournal += 1;
+    if (refund.status !== "COMPLETED" && refund.status !== "VOIDED") {
+      refundInvalidLifecycleRows += 1;
       continue;
     }
-    if (refund.mode !== "ISSUE_REFUND") continue;
+
+    if (refund.mode === "CARRY_FORWARD") {
+      if (refund.status === "COMPLETED" && refund.journalId) carryForwardsWithJournal += 1;
+      if (refund.status === "VOIDED" && (refund.journalId || refund.reversalJournalId)) {
+        voidedCarryForwardsWithJournal += 1;
+      }
+      continue;
+    }
+
+    if (refund.mode !== "ISSUE_REFUND") {
+      refundInvalidLifecycleRows += 1;
+      continue;
+    }
+
     if (!refund.journalId) {
       cashRefundsWithoutJournal += 1;
+      if (refund.status === "VOIDED" && !refund.reversalJournalId) {
+        voidedCashRefundsWithoutReversalJournal += 1;
+      }
       continue;
     }
-    const journal = journalById.get(refund.journalId);
-    if (!journal || journal.institutionId !== institutionId || journal.status !== "POSTED" || journal.refType !== "REFUND") {
+
+    const originalJournal = journalById.get(refund.journalId);
+    const legacyRefMatches =
+      originalJournal?.refId == null ||
+      (refund.paymentId != null && originalJournal?.refId === refund.paymentId);
+    const referenceMatches = originalJournal?.refId === refund.id || legacyRefMatches;
+    const expectedOriginalStatus = refund.status === "VOIDED" ? "REVERSED" : "POSTED";
+
+    if (
+      !originalJournal ||
+      originalJournal.institutionId !== institutionId ||
+      originalJournal.status !== expectedOriginalStatus ||
+      originalJournal.refType !== "REFUND" ||
+      !referenceMatches
+    ) {
       refundJournalLinkMismatches += 1;
       continue;
     }
-    if (journal.refId !== refund.id) {
-      // Pre-Phase-10 rows used paymentId (or null) as REFUND refId. Only those
-      // exact legacy shapes are warnings; an unrelated reference is corruption.
-      if (journal.refId == null || (refund.paymentId != null && journal.refId === refund.paymentId)) {
-        refundLegacyReferenceWarnings += 1;
-      } else {
-        refundJournalLinkMismatches += 1;
+
+    if (originalJournal.refId !== refund.id && legacyRefMatches) {
+      refundLegacyReferenceWarnings += 1;
+    }
+
+    if (refund.status === "COMPLETED") {
+      if (originalJournal.reversedByJournalId != null || refund.reversalJournalId != null) {
+        refundReversalLinkMismatches += 1;
       }
+      continue;
+    }
+
+    if (!refund.reversalJournalId) {
+      voidedCashRefundsWithoutReversalJournal += 1;
+      continue;
+    }
+
+    const reversalJournal = journalById.get(refund.reversalJournalId);
+    if (
+      originalJournal.reversedByJournalId !== refund.reversalJournalId ||
+      !linkedJournalMatches(reversalJournal, institutionId, "REFUND", refund.id)
+    ) {
+      refundReversalLinkMismatches += 1;
     }
   }
 
   const billIds = new Set((bills as any[]).map((bill) => bill.id));
   const billJournalCounts = new Map<string, number>();
   for (const journal of journals) {
-    if (journal.refType === "BILL" && journal.refId && billIds.has(journal.refId)) {
+    if (journal.status === "POSTED" && journal.refType === "BILL" && journal.refId && billIds.has(journal.refId)) {
       billJournalCounts.set(journal.refId, (billJournalCounts.get(journal.refId) ?? 0) + 1);
     }
   }
@@ -335,10 +396,22 @@ export async function reconcileInstitution(
     cashRefundsWithoutJournal > 0 ? `${cashRefundsWithoutJournal} issued refund(s) without a journal` : null,
     refundJournalLinkMismatches > 0 ? `${refundJournalLinkMismatches} refund journal link mismatch(es)` : null,
     carryForwardsWithJournal > 0 ? `${carryForwardsWithJournal} carry-forward refund(s) incorrectly posted to the ledger` : null,
+    voidedCashRefundsWithoutReversalJournal > 0
+      ? `${voidedCashRefundsWithoutReversalJournal} voided cash refund(s) without a reversal journal`
+      : null,
+    refundReversalLinkMismatches > 0
+      ? `${refundReversalLinkMismatches} refund reversal journal link mismatch(es)`
+      : null,
+    voidedCarryForwardsWithJournal > 0
+      ? `${voidedCarryForwardsWithJournal} voided carry-forward refund(s) incorrectly linked to ledger journals`
+      : null,
+    refundInvalidLifecycleRows > 0
+      ? `${refundInvalidLifecycleRows} refund row(s) use an unsupported persisted lifecycle state or mode`
+      : null,
     billsWithoutJournal > 0 ? `${billsWithoutJournal} non-zero bill(s) without a journal` : null,
     billsWithDuplicateJournals > 0 ? `${billsWithDuplicateJournals} bill(s) with duplicate journals` : null,
-    unbalancedJournals > 0 ? `${unbalancedJournals} unbalanced posted journal(s)` : null,
-    journalsWithoutEntries > 0 ? `${journalsWithoutEntries} posted journal(s) without entries` : null,
+    unbalancedJournals > 0 ? `${unbalancedJournals} unbalanced ledger journal(s)` : null,
+    journalsWithoutEntries > 0 ? `${journalsWithoutEntries} ledger journal(s) without entries` : null,
     orphanPaymentExpenseBillJournals > 0
       ? `${orphanPaymentExpenseBillJournals} payment/expense/bill journal(s) reference missing domain records`
       : null,
@@ -363,6 +436,10 @@ export async function reconcileInstitution(
     refundJournalLinkMismatches,
     refundLegacyReferenceWarnings,
     carryForwardsWithJournal,
+    voidedCashRefundsWithoutReversalJournal,
+    refundReversalLinkMismatches,
+    voidedCarryForwardsWithJournal,
+    refundInvalidLifecycleRows,
     billsWithoutJournal,
     billsWithDuplicateJournals,
     unbalancedJournals,

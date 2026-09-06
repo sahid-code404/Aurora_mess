@@ -329,10 +329,14 @@ export interface RefundDto {
   amountMinor: number;
   amountFormatted: string;
   mode: "CARRY_FORWARD" | "ISSUE_REFUND" | string;
-  status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "VOIDED" | string;
+  status: "COMPLETED" | "VOIDED" | string;
   reason: string;
   destination: string | null;
   paymentId: string | null;
+  reversalJournalId: string | null;
+  voidReason: string | null;
+  voidedByUserId: string | null;
+  voidedAt: string | null;
   createdAt: string;
   completedAt: string | null;
 }

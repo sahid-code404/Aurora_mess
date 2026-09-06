@@ -92,6 +92,10 @@ export interface Resident360 {
     status: string;
     reason: string;
     destination: string | null;
+    reversalJournalId: string | null;
+    voidReason: string | null;
+    voidedByUserId: string | null;
+    voidedAt: string | null;
     createdAt: string;
     completedAt: string | null;
   }[];
