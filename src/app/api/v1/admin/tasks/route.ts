@@ -16,6 +16,7 @@ import { appendAudit } from "@/lib/audit";
 import { keyOfUtcDate, requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { listQuery, seekList } from "@/lib/domain/list";
 import { queueNotification, sweepOutboxSafe } from "@/lib/domain/notify";
+import { lockActiveResidentForTaskAssignment } from "@/lib/domain/resident-operational-work";
 
 const statusEnum = z.enum([
   "ASSIGNED",
@@ -224,15 +225,14 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   }
 
   const result = await db.$transaction(async (tx) => {
-    const resident = await tx.user.findFirst({
-      where: { id: body.assignedResidentId, institutionId: ctx.institutionId, role: "RESIDENT" },
-      include: { profile: true },
-    });
-    if (!resident || resident.status !== "ACTIVE") {
-      throw new ApiError(CODES.VALIDATION_FAILED, "Pick an active resident for this task.", 400, {
-        assignedResidentId: "Pick an active resident.",
-      });
-    }
+    // Task assignment and access removal contend on the same Resident row.
+    // Whoever commits first determines the authoritative outcome observed by
+    // the loser: ACTIVE + task, or non-ACTIVE + rejected assignment.
+    const resident = await lockActiveResidentForTaskAssignment(
+      tx,
+      ctx.institutionId,
+      body.assignedResidentId
+    );
 
     const task = await tx.task.create({
       data: {
