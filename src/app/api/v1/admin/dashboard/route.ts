@@ -96,7 +96,6 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     }
   }
 
-  const billingBlockers = pendingPayments + pendingExpenses + submittedTaskSubmissions;
   const needsAttention = [
     {
       key: "pendingResidentApprovals",
@@ -121,7 +120,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       greeting: {
         text: `${greeting.text}`,
         icon: greeting.icon,
-        institutionName: inst?.name ?? null,
+        // The client greeting contract is intentionally non-null. A missing
+        // institution row is abnormal but must never leak the literal `null`
+        // into dashboard copy while the rest of the read model remains usable.
+        institutionName: inst?.name ?? "Institution",
         localTime: `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`,
       },
       kpis: {

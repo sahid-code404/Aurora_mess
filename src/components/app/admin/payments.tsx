@@ -52,9 +52,10 @@ import { navigateTo } from "@/hooks/use-hash-route";
 import { useSession } from "@/hooks/use-session";
 import { ApiClientError, api } from "@/lib/api";
 import { useApiMetaQuery, errMessage, useInvalidate, metaNum, metaStr } from "./_shared/api";
+import { currentMonthKeyInTz } from "./_shared/business-date";
 import { SearchField } from "./_shared/fields";
 import { Chip, FilterChips, KpiGrid, KeyValue, ProofImage } from "./_shared/chrome";
-import { fmtDateTime, monthLabel, todayKey } from "./_shared/format";
+import { fmtDateTime, monthLabel } from "./_shared/format";
 import { RefundDialog } from "./_shared/refund-dialog";
 import type { PaymentDetail, PaymentRow } from "./_shared/types";
 
@@ -171,13 +172,15 @@ export default function AdminPayments() {
 
   const { data, isLoading, error, refetch } = useApiMetaQuery<PaymentRow[]>(PAYMENTS_PATH, {
     status: status === "ALL" || status === "REFUNDS" || status === "REFUND_CENTER" ? undefined : status,
-    q: status === "REFUND_CENTER" ? undefined : appliedSearch || undefined,
+    q: status === "REFUNDS" || status === "REFUND_CENTER" ? undefined : appliedSearch || undefined,
     month: monthParam,
   });
 
-  const refundsQuery = useApiMetaQuery<RefundRow[]>("/api/v1/admin/refunds", undefined, {
-    enabled: status === "REFUNDS",
-  });
+  const refundsQuery = useApiMetaQuery<RefundRow[]>(
+    "/api/v1/admin/refunds",
+    { q: status === "REFUNDS" ? appliedSearch || undefined : undefined },
+    { enabled: status === "REFUNDS" }
+  );
   const refundCandidatesQuery = useApiMetaQuery<RefundCandidate[]>(
     "/api/v1/admin/refunds/eligible",
     { q: status === "REFUND_CENTER" ? appliedSearch || undefined : undefined },
@@ -200,7 +203,7 @@ export default function AdminPayments() {
     });
   }, [payments]);
 
-  const thisMonthKey = todayKey().slice(0, 7);
+  const thisMonthKey = currentMonthKeyInTz(tz);
   const activeMonthKey = metaStr(meta, "month") ?? monthParam ?? thisMonthKey;
   const isThisMonth = activeMonthKey === thisMonthKey;
 
@@ -396,13 +399,23 @@ export default function AdminPayments() {
             )}
           </motion.div>
         ) : status === "REFUNDS" ? (
-          refundsQuery.isLoading ? (
+          refundsQuery.isLoading && !refundsQuery.data ? (
             <ListSkeleton rows={5} />
+          ) : refundsQuery.error ? (
+            <ErrorState
+              code={(refundsQuery.error as ApiClientError).code}
+              message={(refundsQuery.error as ApiClientError).message}
+              onRetry={() => void refundsQuery.refetch()}
+            />
           ) : (refundsQuery.data?.data ?? []).length === 0 ? (
             <EmptyState
               icon={RotateCcw}
-              title="No refunds recorded"
-              description="Refunds and excess credit resolutions will appear here."
+              title={appliedSearch ? "No refunds match" : "No refunds recorded"}
+              description={
+                appliedSearch
+                  ? "Try a different resident, room, reason or destination."
+                  : "Refunds and excess credit resolutions will appear here."
+              }
             />
           ) : (
             <div className="no-scrollbar max-h-[28rem] space-y-2 overflow-y-auto pr-1">

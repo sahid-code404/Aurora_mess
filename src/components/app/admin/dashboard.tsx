@@ -2,17 +2,15 @@
 
 /**
  * Admin Dashboard — greeting (institution-local time), 4 KPIs, Needs
- * Attention shortcuts and the recent activity feed rendered as an
- * Apple-style notification STACK (first 5 rows show; the rest fold behind
- * with peek cards that physically slide while scrolling).
+ * Attention shortcuts and recent operational activity.
  * GET /api/v1/admin/dashboard
  * Liquid Glass II: BoardOps composition — hero greeting card with
- * gradient name, auto-fit KPI grid (every card navigates), stacked
- * activity rows with icon orbs.
+ * gradient name, auto-fit KPI grid (every card navigates), animated
+ * keyboard-accessible action rows with icon orbs.
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   Banknote,
   CalendarClock,
@@ -26,7 +24,6 @@ import {
   Utensils,
   Wallet,
 } from "lucide-react";
-import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import GlassCard from "@/components/glass/GlassCard";
 import { KpiCard, type KpiGlow } from "@/components/glass/KpiCard";
@@ -42,7 +39,7 @@ import { ApiClientError } from "@/lib/api";
 import { getNotificationTargetRoute } from "@/lib/notification-routes";
 import { gradientForName, getTimeGreeting } from "@/lib/gradients";
 import { cn } from "@/lib/utils";
-import { fmtDateTime, timeAgo } from "./_shared/format";
+import { timeAgo } from "./_shared/format";
 
 interface DashboardData {
   greeting: { text: string; icon: string; institutionName: string; localTime: string };
@@ -62,8 +59,8 @@ interface DashboardData {
     action: string;
     copy: string;
     entityType: string;
-    entityId: string;
-    actorRole: string;
+    entityId: string | null;
+    actorRole: string | null;
     occurredAt: string;
   }[];
 }
@@ -274,13 +271,20 @@ export default function AdminDashboard() {
     {
       label: "Rate",
       value: kpis.mealChargeFormatted ?? "—",
-      sub: "Meal charge",
+      sub: mealChargeSub,
       icon: <Banknote />,
       glow: "warning",
       href: "#/admin/billing",
       navLabel: "Billing",
     },
   ];
+
+  const rowMotion = reducedMotion
+    ? {}
+    : {
+        whileHover: { y: -1, scale: 1.005 },
+        whileTap: { scale: 0.985 },
+      };
 
   return (
     <StaggerGroup className="space-y-4">
@@ -371,10 +375,13 @@ export default function AdminDashboard() {
             {needsAttention.map((item) => {
               const Icon = ATTENTION_ICONS[item.key] ?? CircleAlert;
               return (
-                <div
+                <motion.button
                   key={item.key}
+                  type="button"
                   onClick={() => navigateTo(item.href)}
-                  className="glass-inset hover:glass border border-border/40 group flex items-center gap-3 rounded-full p-2.5 px-3.5 sm:px-4 transition-all hover:bg-foreground/[0.04] dark:hover:bg-white/[0.04] cursor-pointer"
+                  {...rowMotion}
+                  className="glass-inset hover:glass border border-border/40 group flex w-full items-center gap-3 rounded-full p-2.5 px-3.5 text-left transition-all hover:bg-foreground/[0.04] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:hover:bg-white/[0.04] sm:px-4"
+                  aria-label={`Open ${item.label}, ${item.count} pending`}
                 >
                   <span
                     aria-hidden
@@ -396,7 +403,7 @@ export default function AdminDashboard() {
                     </span>
                     <ChevronRight className="size-3.5 text-muted-foreground/60 group-hover:text-foreground" />
                   </span>
-                </div>
+                </motion.button>
               );
             })}
           </div>
@@ -425,16 +432,15 @@ export default function AdminDashboard() {
             {recentActivity.map((event) => {
               const Icon = activityIcon(event.action);
               const tone = activityTone(event.action);
+              const target = getNotificationTargetRoute(event.action, "ADMIN", event.entityId);
               return (
-                <div
+                <motion.button
                   key={event.id}
-                  onClick={() => {
-                    const target = getNotificationTargetRoute(event.action, "ADMIN", event.entityId);
-                    if (target) {
-                      navigateTo(target);
-                    }
-                  }}
-                  className="glass-inset hover:glass border border-border/40 group flex items-center gap-3 rounded-full p-2.5 px-3.5 sm:px-4 transition-all hover:bg-foreground/[0.04] dark:hover:bg-white/[0.04] cursor-pointer"
+                  type="button"
+                  onClick={() => navigateTo(target)}
+                  {...rowMotion}
+                  className="glass-inset hover:glass border border-border/40 group flex w-full items-center gap-3 rounded-full p-2.5 px-3.5 text-left transition-all hover:bg-foreground/[0.04] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:hover:bg-white/[0.04] sm:px-4"
+                  aria-label={`Open ${actionLabel(event.action)}`}
                 >
                   <span
                     aria-hidden
@@ -456,7 +462,7 @@ export default function AdminDashboard() {
                   <span className="kpi-num shrink-0 text-[11px] text-muted-foreground group-hover:text-foreground transition-colors">
                     {timeAgo(event.occurredAt)}
                   </span>
-                </div>
+                </motion.button>
               );
             })}
           </div>
