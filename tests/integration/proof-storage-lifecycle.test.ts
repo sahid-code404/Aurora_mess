@@ -26,7 +26,6 @@ async function createStoredFile(institutionId: string) {
       mimeType: "application/pdf",
       sizeBytes: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
-      scanStatus: "CLEAN",
     },
   });
 

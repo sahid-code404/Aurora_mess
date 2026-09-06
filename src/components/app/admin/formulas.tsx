@@ -252,7 +252,6 @@ export default function AdminFormulas() {
   const filteredFormulas = useMemo(() => {
     return definitions.filter((f) => {
       if (formulaFilter === "ACTIVE" && f.status !== "ACTIVE") return false;
-      if (formulaFilter === "DRAFT" && f.status !== "DRAFT") return false;
       if (!formulaSearch.trim()) return true;
       const q = formulaSearch.toLowerCase();
       return (
@@ -432,7 +431,6 @@ export default function AdminFormulas() {
                   chips={[
                     { value: "ALL", label: "All" },
                     { value: "ACTIVE", label: "Active" },
-                    { value: "DRAFT", label: "Draft" },
                   ]}
                   value={formulaFilter}
                   onChange={setFormulaFilter}

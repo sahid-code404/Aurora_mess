@@ -233,7 +233,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 25) || 25));
 
   const fields: Record<string, string> = {};
-  if (status && !["DRAFT", "PENDING", "APPROVED", "REJECTED", "VOIDED"].includes(status)) {
+  if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED"].includes(status)) {
     fields.status = "Unknown expense status filter.";
   }
   let monthYear: { year: number; month: number } | null = null;
