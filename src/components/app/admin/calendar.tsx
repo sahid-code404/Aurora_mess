@@ -7,7 +7,7 @@
  * per type with token tones) → ONE events section card (CalendarDays icon
  * header) with type-orb rows and the meal-impact create flow.
  * GET /api/v1/calendar?from&to · POST /admin/calendar ·
- * POST /admin/calendar/impact · DELETE /admin/calendar/:id
+ * POST /admin/calendar/impact · DELETE /admin/calendar/:id (audited cancel)
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -19,7 +19,6 @@ import {
   CheckCircle2,
   PartyPopper,
   Plus,
-  Trash2,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -264,15 +263,14 @@ export default function AdminCalendar() {
   }
 
   async function removeEvent(reason?: string) {
-    if (!deleteTarget) return;
-    void reason;
+    if (!deleteTarget || !reason?.trim()) return;
     setActing(true);
     try {
-      await deleteJson(`${CAL_ADMIN_PATH}/${deleteTarget.id}`);
+      await deleteJson(`${CAL_ADMIN_PATH}/${deleteTarget.id}`, { reason: reason.trim() });
       invalidate([CAL_GET_PATH]);
-      toast.success("Event deleted", {
+      toast.success("Event cancelled", {
         description: deleteTarget.disableMeals
-          ? "Meals disabled by this event become available again on the next evaluation."
+          ? "Future unlocked meals are released. Meals already past their lock boundary keep their historical state."
           : deleteTarget.name,
       });
       setDeleteTarget(null);
@@ -479,7 +477,7 @@ export default function AdminCalendar() {
                         <OverflowMenu
                           label={`Actions for ${e.name}`}
                           actions={[
-                            { key: "delete", label: "Delete event", icon: <Trash2 />, onSelect: () => setDeleteTarget(e), destructive: true },
+                            { key: "cancel", label: "Cancel event", icon: <XCircle />, onSelect: () => setDeleteTarget(e), destructive: true },
                           ]}
                         />
                       </div>
@@ -651,21 +649,23 @@ export default function AdminCalendar() {
         />
       )}
 
-      {/* delete confirm */}
+      {/* cancel confirm */}
       {deleteTarget && (
         <ConfirmDialog
           open
           onOpenChange={(open) => !open && setDeleteTarget(null)}
-          title={`Delete "${deleteTarget.name}"`}
+          title={`Cancel "${deleteTarget.name}"`}
           description={
             deleteTarget.disableMeals
-              ? "Meals disabled by this event become available again as soon as the engine re-evaluates. Historical meal rows are preserved."
-              : "The event is removed from the calendar. Historical meal rows are preserved."
+              ? "Future unlocked meals stop being disabled by this event. Meals whose lock boundary has already passed keep the event's historical effect for billing integrity."
+              : "The event is removed from the active calendar but retained in the audit history."
           }
-          confirmLabel="Delete event"
+          confirmLabel="Cancel event"
           tone="destructive"
+          requireReason
+          reasonPlaceholder="Reason for cancelling this event (required)"
           loading={acting}
-          onConfirm={() => void removeEvent()}
+          onConfirm={(reason) => void removeEvent(reason)}
         />
       )}
 
