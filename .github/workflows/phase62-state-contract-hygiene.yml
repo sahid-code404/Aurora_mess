@@ -1,0 +1,134 @@
+name: Phase 62 State Contract Hygiene
+
+on:
+  push:
+    branches:
+      - feat/phase62-state-contract-hygiene
+    paths:
+      - .github/workflows/phase62-state-contract-hygiene.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase62-state-contract-hygiene
+          fetch-depth: 0
+
+      - name: Apply narrow contract cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, count: int = 1):
+              p = Path(path)
+              text = p.read_text()
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrences, found {actual}: {old!r}")
+              p.write_text(text.replace(old, new, count))
+
+          # StoredFile: remove a fake malware-scan lifecycle. Runtime performs
+          # synchronous signature/type validation plus immutable checksum checks;
+          # it does not run a malware scanner and must not persist a field that
+          # claims PENDING/CLEAN/FLAGGED scan states.
+          replace(
+              "prisma/schema.prisma",
+              '  scanStatus       String   @default("PENDING") // PENDING | CLEAN | FLAGGED\n',
+              "",
+          )
+          replace(
+              "src/lib/storage.ts",
+              '        scanStatus: "CLEAN", // content signature/type validated; malware scanning is a separate future control\n',
+              "",
+          )
+          replace(
+              "tests/integration/proof-storage-lifecycle.test.ts",
+              '      scanStatus: "CLEAN",\n',
+              "",
+          )
+          replace(
+              "tests/disaster-recovery-drill.sh",
+              '  "id", "institutionId", "objectKey", "fileName", "mimeType", "sizeBytes", "sha256", "scanStatus", "createdAt"\n',
+              '  "id", "institutionId", "objectKey", "fileName", "mimeType", "sizeBytes", "sha256", "createdAt"\n',
+          )
+          replace(
+              "tests/disaster-recovery-drill.sh",
+              "  'text/plain', $ORIGINAL_SIZE, '$ORIGINAL_SHA', 'CLEAN', NOW()\n",
+              "  'text/plain', $ORIGINAL_SIZE, '$ORIGINAL_SHA', NOW()\n",
+          )
+
+          # Expense rows are created directly as PENDING; DRAFT has no creation,
+          # mutation, or review path. Remove it from the live contract.
+          replace(
+              "prisma/schema.prisma",
+              '  status                 String    @default("PENDING") // DRAFT | PENDING | APPROVED | REJECTED | VOIDED\n',
+              '  status                 String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED\n',
+          )
+          replace(
+              "src/app/api/v1/admin/expenses/route.ts",
+              'if (status && !["DRAFT", "PENDING", "APPROVED", "REJECTED", "VOIDED"].includes(status)) {',
+              'if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED"].includes(status)) {',
+          )
+
+          # FormulaDefinition/FormulaVersion persisted states are also simpler
+          # than their original scaffold comments. Current runtime creates
+          # definitions ACTIVE, versions ACTIVE, then retires versions to
+          # HISTORICAL. Future applicability is represented by effectiveFrom.
+          replace(
+              "prisma/schema.prisma",
+              '  status            String    @default("ACTIVE") // ACTIVE | ARCHIVED | DRAFT\n',
+              '  status            String    @default("ACTIVE") // ACTIVE | ARCHIVED\n',
+          )
+          replace(
+              "prisma/schema.prisma",
+              '  status               String    @default("ACTIVE") // ACTIVE | SCHEDULED | DRAFT | HISTORICAL\n',
+              '  status               String    @default("ACTIVE") // ACTIVE | HISTORICAL\n',
+          )
+          replace(
+              "src/components/app/admin/formulas.tsx",
+              '      if (formulaFilter === "DRAFT" && f.status !== "DRAFT") return false;\n',
+              "",
+          )
+          replace(
+              "src/components/app/admin/formulas.tsx",
+              '                    { value: "DRAFT", label: "Draft" },\n',
+              "",
+          )
+
+          migration = Path("prisma/migrations/20260906_110000_state_contract_hygiene/migration.sql")
+          migration.parent.mkdir(parents=True, exist_ok=False)
+          migration.write_text('''-- Phase 62 — persisted state contract hygiene.\n-- No business/history rows are deleted. Legacy dead labels are mapped onto\n-- the live lifecycle before the unused upload scan marker is removed.\n\nUPDATE "Expense"\nSET "status" = 'PENDING'\nWHERE "status" = 'DRAFT';\n\nUPDATE "FormulaDefinition"\nSET "status" = CASE WHEN "archivedAt" IS NULL THEN 'ACTIVE' ELSE 'ARCHIVED' END\nWHERE "status" = 'DRAFT';\n\nUPDATE "FormulaVersion"\nSET "status" = CASE WHEN "active" = TRUE THEN 'ACTIVE' ELSE 'HISTORICAL' END\nWHERE "status" IN ('DRAFT', 'SCHEDULED');\n\nALTER TABLE "StoredFile" DROP COLUMN IF EXISTS "scanStatus";\n''')
+
+          test = Path("tests/unit/state-contract-hygiene-source.test.ts")
+          test.write_text('''import { describe, expect, test } from "bun:test";\nimport { readFileSync } from "node:fs";\n\nfunction source(path: string): string {\n  return readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");\n}\n\ndescribe("persisted state contract hygiene", () => {\n  test("StoredFile no longer claims an unimplemented malware scan lifecycle", () => {\n    const schema = source("prisma/schema.prisma");\n    const storage = source("src/lib/storage.ts");\n    const migration = source("prisma/migrations/20260906_110000_state_contract_hygiene/migration.sql");\n\n    expect(schema).not.toContain("scanStatus");\n    expect(storage).not.toContain("scanStatus");\n    expect(migration).toContain('ALTER TABLE "StoredFile" DROP COLUMN IF EXISTS "scanStatus"');\n  });\n\n  test("Expense exposes only its real review lifecycle", () => {\n    const schema = source("prisma/schema.prisma");\n    const route = source("src/app/api/v1/admin/expenses/route.ts");\n    const migration = source("prisma/migrations/20260906_110000_state_contract_hygiene/migration.sql");\n\n    expect(schema).toContain("// PENDING | APPROVED | REJECTED | VOIDED");\n    expect(route).toContain('["PENDING", "APPROVED", "REJECTED", "VOIDED"]');\n    expect(route).not.toContain('["DRAFT", "PENDING"');\n    expect(migration).toContain('WHERE "status" = \'DRAFT\'');\n  });\n\n  test("Formula UI and persistence describe the effective-window lifecycle actually implemented", () => {\n    const schema = source("prisma/schema.prisma");\n    const ui = source("src/components/app/admin/formulas.tsx");\n    const versions = source("src/lib/domain/formula/versions.ts");\n\n    expect(schema).toContain('// ACTIVE | ARCHIVED');\n    expect(schema).toContain('// ACTIVE | HISTORICAL');\n    expect(ui).not.toContain('formulaFilter === "DRAFT"');\n    expect(ui).not.toContain('{ value: "DRAFT", label: "Draft" }');\n    expect(versions).toContain('status: "ACTIVE"');\n    expect(versions).toContain('status: "HISTORICAL"');\n    expect(versions).toContain("effectiveFrom");\n  });\n});\n''')
+
+          # The helper workflow is self-deleting. The resulting branch contains
+          # only product/migration/test changes, not an operational backdoor.
+          Path(".github/workflows/phase62-state-contract-hygiene.yml").unlink()
+          PY
+
+          # Fail closed if live source/tests still mention the removed DB field.
+          if grep -R --line-number --exclude-dir=tool-results --exclude-dir=upload --exclude='migration.sql' 'scanStatus' src tests prisma/schema.prisma; then
+            echo 'scanStatus remains in live source/schema/tests' >&2
+            exit 1
+          fi
+
+          git diff --check
+          git status --short
+
+      - name: Commit cleanup to Phase 62 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "BoardOps Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: align persisted state contracts with runtime"
+          git push origin HEAD:feat/phase62-state-contract-hygiene
