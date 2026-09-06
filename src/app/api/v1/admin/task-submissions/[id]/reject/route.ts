@@ -1,7 +1,8 @@
 /**
  * POST /api/v1/admin/task-submissions/[id]/reject — reject a submission with a
  * mandatory reason: submission → REJECTED, task → REJECTED_BY_ADMIN (+audit,
- * resident notification). No money moves.
+ * resident notification). No money moves, but SUBMITTED is a billing-readiness
+ * blocker so its removal shares the institution billing mutex.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -11,6 +12,7 @@ import { reasonSchema } from "@/lib/validation";
 import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { queueNotification, resolveNotificationsForEntity, sweepOutboxSafe } from "@/lib/domain/notify";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
 
 const bodySchema = z.object({ reason: reasonSchema });
 
@@ -19,6 +21,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const body = await parseBody(ctx.req, bodySchema);
 
   const result = await db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, ctx.institutionId);
+
     const submission = await tx.taskSubmission.findUnique({
       where: { id: ctx.params.id },
       include: { task: true },
