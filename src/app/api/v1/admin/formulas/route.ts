@@ -1,5 +1,5 @@
 /**
- * GET /api/v1/admin/formulas — multi-formula definitions & active versions (auth ADMIN).
+ * GET /api/v1/admin/formulas — formula definitions & effective versions (auth ADMIN).
  * POST /api/v1/admin/formulas — create or update formula definition metadata.
  */
 import { z } from "zod";
@@ -34,10 +34,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       })()
     : currentPeriodBounds(tz);
 
-  // Ensure default Meal Charge exists
+  // Ensure default Meal Charge exists.
   await ensureFormulaDefinition(ctx.institutionId, "meal_charge");
 
-  // Fetch all active formula definitions
   const allDefinitions = await db.formulaDefinition.findMany({
     where: { institutionId: ctx.institutionId },
     include: {
@@ -71,7 +70,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       const ast = JSON.parse(activeVersion.compiledAstJson) as FormulaAst;
       estimate = await formulaEstimate(ctx.institutionId, ast, bounds.year, bounds.month);
     } catch {
-      // ignore
+      // Ignore preview-only estimate errors; formula history remains readable.
     }
   }
 
@@ -83,6 +82,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         description: d.description,
         outputVariableKey: d.outputVariableKey,
         scope: d.scope,
+        // FormulaDefinition deliberately has no persisted archive/status lifecycle.
+        // Keep the Admin read-model contract explicit and derived instead of
+        // reintroducing a dead database column.
+        status: "ACTIVE" as const,
         activeVersion: d.versions.find((v) => v.active) ? serializeFormulaVersion(d.versions.find((v) => v.active)) : null,
         versionsCount: d.versions.length,
       })),
@@ -93,6 +96,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
             description: selectedDef.description,
             outputVariableKey: selectedDef.outputVariableKey,
             scope: selectedDef.scope,
+            status: "ACTIVE" as const,
           }
         : null,
       activeVersion: activeVersion ? serializeFormulaVersion(activeVersion) : null,
@@ -148,7 +152,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     },
   });
 
-  // If initial formula expression or natural language source is provided, create version 1
+  // If initial formula expression or natural language source is provided, create version 1.
   if (body.source && body.source.trim()) {
     try {
       await createFormulaVersion({
@@ -164,7 +168,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         confirmImpact: true,
       });
     } catch (err) {
-      // If version creation fails due to syntax error, delete definition or throw
+      // The metadata row is compensating cleanup for a failed initial version;
+      // no established formula history exists at this point.
       await db.formulaDefinition.delete({ where: { id: def.id } });
       throw err;
     }
