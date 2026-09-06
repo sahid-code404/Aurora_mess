@@ -36,13 +36,15 @@ import GlassToggle from "@/components/glass/GlassToggle";
 import { GlassButton } from "@/components/glass/GlassButton";
 import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
 import { useApiQuery, postJson, deleteJson } from "@/hooks/use-api-query";
+import { useSession } from "@/hooks/use-session";
 import { ApiClientError } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { errMessage, useInvalidate } from "./_shared/api";
+import { todayKeyInTz } from "./_shared/business-date";
 import { SelectField, TextAreaField, TextField } from "./_shared/fields";
 import { Chip, OverflowMenu } from "./_shared/chrome";
-import { fmtDate, todayKey, initialsOf } from "./_shared/format";
+import { fmtDate, initialsOf } from "./_shared/format";
 import type { CalendarEventRow, MealDefinitionRow } from "./_shared/types";
 
 const CAL_GET_PATH = "/api/v1/calendar";
@@ -100,9 +102,14 @@ interface ImpactData {
 }
 
 export default function AdminCalendar() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const { institution } = useSession();
+  const tz = institution?.timezone ?? "Asia/Kolkata";
+  const serverToday = todayKeyInTz(tz);
+  const currentMonthKey = serverToday.slice(0, 7);
+  const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
+  const activeMonthKey = monthParam ?? currentMonthKey;
+  const year = Number(activeMonthKey.slice(0, 4));
+  const month = Number(activeMonthKey.slice(5, 7));
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CalendarEventRow | null>(null);
@@ -117,7 +124,6 @@ export default function AdminCalendar() {
   const { data: events, isLoading, error, refetch } = useApiQuery<CalendarEventRow[]>(CAL_GET_PATH, range);
   const { data: allLeaves, refetch: refetchLeaves } = useApiQuery<LeaveRequestRow[]>(LEAVE_PATH);
   const leaveRequests = Array.isArray(allLeaves) ? allLeaves : [];
-  const serverToday = todayKey();
 
   const leavesByDay = useMemo(() => {
     const map = new Map<string, LeaveRequestRow[]>();
@@ -234,7 +240,7 @@ export default function AdminCalendar() {
 
   const dayEvents = selectedDay ? (eventsByDay.get(selectedDay) ?? []) : listEvents;
 
-  const isCurrentMonth = `${year}-${pad2(month)}` === serverToday.slice(0, 7);
+  const isCurrentMonth = activeMonthKey === currentMonthKey;
 
   function shiftMonth(delta: number) {
     setSelectedDay(null);
@@ -247,16 +253,13 @@ export default function AdminCalendar() {
       m = 1;
       y += 1;
     }
-    setMonth(m);
-    setYear(y);
+    setMonthParam(`${y}-${pad2(m)}`);
   }
 
   /** Picker pill → jump back to the current month. */
   function resetToCurrentMonth() {
-    const [tY, tM] = serverToday.split("-").map(Number);
-    if (tY === year && tM === month) return;
-    setYear(tY);
-    setMonth(tM);
+    if (isCurrentMonth) return;
+    setMonthParam(undefined);
     setSelectedDay(null);
   }
 

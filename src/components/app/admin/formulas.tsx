@@ -63,9 +63,10 @@ import { ApiClientError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatMinor } from "@/lib/money";
 import { errMessage, useInvalidate } from "./_shared/api";
+import { currentMonthKeyInTz } from "./_shared/business-date";
 import { SearchField, SelectField, TextAreaField, TextField } from "./_shared/fields";
 import { Chip, DetailDialog, FilterChips, KpiGrid, KeyValue } from "./_shared/chrome";
-import { monthLabel, todayKey } from "./_shared/format";
+import { monthLabel } from "./_shared/format";
 import type {
   FormulaDefinitionItem,
   FormulaExplanationData,
@@ -150,8 +151,9 @@ function formatEvaluatedFormula(
 export default function AdminFormulas() {
   const invalidate = useInvalidate();
   const { institution } = useSession();
+  const tz = institution?.timezone ?? "Asia/Kolkata";
 
-  const thisMonthKey = todayKey().slice(0, 7);
+  const thisMonthKey = currentMonthKeyInTz(tz);
   const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
   const activeMonthKey = monthParam ?? thisMonthKey;
   const isThisMonth = activeMonthKey === thisMonthKey;

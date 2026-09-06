@@ -21,10 +21,12 @@ import EmptyState from "@/components/glass/EmptyState";
 import ErrorState from "@/components/glass/ErrorState";
 import { ListSkeleton } from "@/components/glass/LoadingSkeleton";
 import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
+import { useSession } from "@/hooks/use-session";
 import { useApiMetaQuery } from "./_shared/api";
+import { currentMonthKeyInTz } from "./_shared/business-date";
 import { SearchField } from "./_shared/fields";
 import { Chip, FilterChips, KpiGrid } from "./_shared/chrome";
-import { fmtDateTime, todayKey } from "./_shared/format";
+import { fmtDateTime } from "./_shared/format";
 import type { AuditRow } from "./_shared/types";
 import { ApiClientError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -94,8 +96,11 @@ function prettyJson(raw: string | null): string {
 }
 
 export default function AdminAudit() {
-  const currentMonthKey = todayKey().slice(0, 7);
-  const [monthKey, setMonthKey] = useState<string>(currentMonthKey);
+  const { institution } = useSession();
+  const tz = institution?.timezone ?? "Asia/Kolkata";
+  const currentMonthKey = currentMonthKeyInTz(tz);
+  const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
+  const monthKey = monthParam ?? currentMonthKey;
   const [actionText, setActionText] = useState("");
   const [entityType, setEntityType] = useState("");
   const [appliedAction, setAppliedAction] = useState("");
@@ -168,11 +173,11 @@ export default function AdminAudit() {
       {/* Month capsule — circular arrows + reset pill (BoardOps picker) */}
       <StaggerItem>
       <PickerCapsule
-        onPrev={() => setMonthKey(shiftMonthKey(monthKey, -1))}
-        onNext={() => setMonthKey(shiftMonthKey(monthKey, 1))}
+        onPrev={() => setMonthParam(shiftMonthKey(monthKey, -1))}
+        onNext={() => setMonthParam(shiftMonthKey(monthKey, 1))}
         prevLabel="Previous month"
         nextLabel="Next month"
-        onPillClick={() => setMonthKey(currentMonthKey)}
+        onPillClick={() => setMonthParam(undefined)}
         pillAriaLabel="Reset to the current month"
         resettable={monthKey !== currentMonthKey}
       >

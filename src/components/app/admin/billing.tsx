@@ -58,9 +58,10 @@ import { SPRING_SNAPPY } from "@/lib/motion";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useApiMetaQuery, errMessage, useInvalidate, metaNum, metaStr } from "./_shared/api";
+import { currentMonthKeyInTz } from "./_shared/business-date";
 import { MoneyField, SearchField, TextAreaField } from "./_shared/fields";
 import { FilterChips, KpiGrid, KeyValue } from "./_shared/chrome";
-import { fmtDate, fmtDateTime, monthLabel, todayKey } from "./_shared/format";
+import { fmtDate, fmtDateTime, monthLabel } from "./_shared/format";
 import type { BillingPeriodRow, BillRow } from "./_shared/types";
 
 const PERIODS_PATH = "/api/v1/admin/billing/periods";
@@ -83,8 +84,10 @@ function monthLongName(key: string): string {
 
 export default function AdminBilling() {
   const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
+  const { institution } = useSession();
+  const tz = institution?.timezone ?? "Asia/Kolkata";
 
-  const thisMonthKey = todayKey().slice(0, 7);
+  const thisMonthKey = currentMonthKeyInTz(tz);
   const activeMonthKey = monthParam ?? thisMonthKey;
   const isThisMonth = activeMonthKey === thisMonthKey;
 

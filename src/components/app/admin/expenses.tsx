@@ -46,9 +46,10 @@ import { useSession } from "@/hooks/use-session";
 import { api, ApiClientError } from "@/lib/api";
 import { SPRING_SNAPPY } from "@/lib/motion";
 import { useApiMetaQuery, errMessage, useInvalidate, metaNum, metaStr } from "./_shared/api";
+import { currentMonthKeyInTz, todayKeyInTz } from "./_shared/business-date";
 import { MoneyField, SearchField, SelectField, TextAreaField, TextField, moneyProblem } from "./_shared/fields";
 import { Chip, FilterChips, KpiGrid, KeyValue, ProofImage } from "./_shared/chrome";
-import { fmtDate, fmtDateTime, fmtMinor, monthLabel, parseMoneyToMinor, todayKey } from "./_shared/format";
+import { fmtDate, fmtDateTime, fmtMinor, monthLabel, parseMoneyToMinor } from "./_shared/format";
 import type { ExpenseCategory, ExpenseRow } from "./_shared/types";
 
 const EXPENSES_PATH = "/api/v1/admin/expenses";
@@ -81,14 +82,16 @@ function ExpenseFormDialog({
   open,
   onOpenChange,
   categories,
+  defaultDate,
   onSaved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   categories: ExpenseCategory[];
+  defaultDate: string;
   onSaved: () => void;
 }) {
-  const [date, setDate] = useState(todayKey());
+  const [date, setDate] = useState(defaultDate);
   const [categoryId, setCategoryId] = useState("");
   const [description, setDescription] = useState("");
   const [comment, setComment] = useState("");
@@ -97,6 +100,10 @@ function ExpenseFormDialog({
   const [saving, setSaving] = useState(false);
   const [fields, setFields] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (open) setDate(defaultDate);
+  }, [open, defaultDate]);
 
   const estimate = useMemo(() => {
     let total = 0;
@@ -457,7 +464,7 @@ export default function AdminExpenses() {
 
   // Effective month — the server echoes the resolved month in meta (it owns
   // the institution timezone); fall back to the client month before load.
-  const thisMonthKey = todayKey().slice(0, 7);
+  const thisMonthKey = currentMonthKeyInTz(tz);
   const activeMonthKey = metaStr(meta, "month") ?? monthParam ?? thisMonthKey;
   const isThisMonth = activeMonthKey === thisMonthKey;
 
@@ -696,6 +703,7 @@ export default function AdminExpenses() {
         open={formOpen}
         onOpenChange={setFormOpen}
         categories={categories}
+        defaultDate={todayKeyInTz(tz)}
         onSaved={() => invalidate([EXPENSES_PATH, "/api/v1/admin/dashboard"])}
       />
 
