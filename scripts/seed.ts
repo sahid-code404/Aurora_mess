@@ -253,7 +253,15 @@ async function main() {
     const serviceDate = localDateMidnightUtc(dateKey);
     const cutoffAt = computeCutoffAt(dateKey, defRow.def.cutoffLocalTime, 0, TZ);
     const window = computeServiceWindow(dateKey, defRow.def.serviceStartLocal, defRow.def.serviceEndLocal, TZ);
-    const status = now < cutoffAt ? "OPEN" : "LOCKED";
+    const lockAt = new Date(Math.min(cutoffAt.getTime(), window.startAt.getTime()));
+    const status =
+      now.getTime() >= window.endAt.getTime()
+        ? "COMPLETED"
+        : now.getTime() >= window.startAt.getTime()
+          ? "SERVICE_ACTIVE"
+          : now.getTime() >= lockAt.getTime()
+            ? "LOCKED"
+            : "OPEN";
     return db.mealInstance.create({
       data: {
         institutionId: inst.id,
@@ -263,7 +271,7 @@ async function main() {
         serviceStartAt: window.startAt,
         serviceEndAt: window.endAt,
         cutoffAt,
-        lockAt: cutoffAt,
+        lockAt,
         status,
         priceStrategySnapshot: "FORMULA",
       },

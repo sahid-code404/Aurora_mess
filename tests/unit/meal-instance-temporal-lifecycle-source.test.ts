@@ -31,4 +31,11 @@ describe("meal instance temporal lifecycle source contracts", () => {
     expect(definitionSchema).toContain("Same-day cutoff cannot be after service starts.");
     expect(definitionSchema).toContain("cfg.cutoffLocalTime > cfg.serviceStartLocal");
   });
+
+  test("development seed persists the same temporal states instead of stale LOCKED rows", async () => {
+    const seed = await Bun.file("scripts/seed.ts").text();
+    expect(seed).toContain('? "SERVICE_ACTIVE"');
+    expect(seed).toContain('? "COMPLETED"');
+    expect(seed).toContain("const lockAt = new Date(Math.min(cutoffAt.getTime(), window.startAt.getTime()))");
+  });
 });
