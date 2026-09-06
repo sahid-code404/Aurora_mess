@@ -23,6 +23,8 @@ import {
   actorScopedIdempotencyKey,
   claimIdempotencyKey,
   completeIdempotencyKey,
+  idempotencyRequestFingerprint,
+  parseIdempotencyReplay,
   sweepExpiredIdempotencyRecords,
 } from "@/lib/idempotency";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
@@ -39,6 +41,14 @@ export const dynamic = "force-dynamic";
 
 const MAX_PAYMENT_MINOR = 100_000_000; // ₹10,00,000.00 — sanity ceiling, documented
 const PAYMENT_IDEMPOTENCY_SCOPE = "PAYMENT_SUBMIT";
+
+function paymentIdempotencyMismatch(): ApiError {
+  return new ApiError(
+    CODES.IDPOTENCY_CONFLICT,
+    "This idempotency key was already used with different payment details. Use a new key for a changed payment.",
+    409
+  );
+}
 
 // ---------------------------------------------------------------------------
 // POST — submit
@@ -70,6 +80,22 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
     throw new ApiError(CODES.VALIDATION_FAILED, "Please check the highlighted fields.", 400, fields);
   }
 
+  const requestFingerprint = idempotencyKey
+    ? idempotencyRequestFingerprint({
+        amountMinor,
+        method: method.data,
+        reference: reference ?? null,
+        notes: notes ?? null,
+        proof: proof
+          ? {
+              name: proof.name,
+              size: proof.size,
+              type: proof.type || null,
+              lastModified: proof.lastModified,
+            }
+          : null,
+      })
+    : null;
   const storageIdempotencyKey = idempotencyKey
     ? actorScopedIdempotencyKey(ctx.user.id, idempotencyKey)
     : null;
@@ -77,8 +103,9 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
 
   // Completed idempotent retries are reads of an already-accepted business
   // action, not new submission attempts. Resolve them before consuming the
-  // payment-submit abuse budget. New records are resident-scoped; legacy raw-key
-  // records replay only after their payment ownership is verified.
+  // payment-submit abuse budget. Fingerprinted rows reject changed payment
+  // details; legacy pre-fingerprint payloads remain replay-compatible until
+  // their normal expiry.
   if (idempotencyKey && storageIdempotencyKey) {
     const replayNow = new Date();
     const existing = await db.idempotencyRecord.findUnique({
@@ -91,7 +118,9 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
       },
     });
     if (existing?.responseJson && existing.expiresAt.getTime() > replayNow.getTime()) {
-      return { data: JSON.parse(existing.responseJson), meta: { idempotentReplay: true } };
+      const replay = parseIdempotencyReplay(existing.responseJson, requestFingerprint);
+      if (replay.state === "MISMATCH") throw paymentIdempotencyMismatch();
+      return { data: replay.payload, meta: { idempotentReplay: true } };
     }
 
     const legacy = await db.idempotencyRecord.findUnique({
@@ -175,10 +204,12 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         scope: PAYMENT_IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        requestFingerprint,
       });
       if (claim.state === "REPLAY") {
         return { replay: true as const, payload: claim.payload };
       }
+      if (claim.state === "MISMATCH") throw paymentIdempotencyMismatch();
       if (claim.state === "IN_PROGRESS") {
         throw new ApiError(
           CODES.IDPOTENCY_CONFLICT,
@@ -220,6 +251,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         scope: PAYMENT_IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
         payload,
+        requestFingerprint,
       });
     }
 

@@ -20,6 +20,8 @@ import {
   actorScopedIdempotencyKey,
   claimIdempotencyKey,
   completeIdempotencyKey,
+  idempotencyRequestFingerprint,
+  parseIdempotencyReplay,
   sweepExpiredIdempotencyRecords,
 } from "@/lib/idempotency";
 import { keyOfUtcDate, requireInstitutionContext, dayCountBetween } from "@/lib/domain/meal-engine";
@@ -44,13 +46,48 @@ const listQuerySchema = z.object({
   to: dateKeySchema.optional(),
 });
 
+function guestIdempotencyMismatch(): ApiError {
+  return new ApiError(
+    CODES.IDPOTENCY_CONFLICT,
+    "This idempotency key was already used with different guest meal details. Use a new key for a changed booking.",
+    409
+  );
+}
+
 export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
   const inst = await requireInstitutionContext(ctx.institutionId);
   const tz = inst.timezone;
   const body = await parseBody(ctx.req, createSchema);
+  const requestFingerprint = body.idempotencyKey
+    ? idempotencyRequestFingerprint({
+        mealInstanceId: body.mealInstanceId,
+        quantity: body.quantity,
+        note: body.note ?? null,
+      })
+    : null;
   const storageIdempotencyKey = body.idempotencyKey
     ? actorScopedIdempotencyKey(ctx.user.id, body.idempotencyKey)
     : null;
+
+  // New actor-scoped rows can replay before opening a transaction, and their
+  // internal replay envelope rejects reuse of the same key with changed booking
+  // details. Legacy plain payloads remain compatible until normal expiry.
+  if (storageIdempotencyKey && requestFingerprint) {
+    const current = await db.idempotencyRecord.findUnique({
+      where: {
+        institutionId_scope_key: {
+          institutionId: ctx.institutionId,
+          scope: IDEMPOTENCY_SCOPE,
+          key: storageIdempotencyKey,
+        },
+      },
+    });
+    if (current?.responseJson && current.expiresAt.getTime() > Date.now()) {
+      const replay = parseIdempotencyReplay(current.responseJson, requestFingerprint);
+      if (replay.state === "MISMATCH") throw guestIdempotencyMismatch();
+      return { data: replay.payload, meta: { idempotentReplay: true } };
+    }
+  }
 
   // Transitional compatibility for unexpired pre-Phase-31 raw-key records.
   // A completed legacy payload is returned only if its guest booking belongs to
@@ -102,10 +139,12 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         scope: IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        requestFingerprint,
       });
       if (claim.state === "REPLAY") {
         return { replay: true as const, payload: claim.payload };
       }
+      if (claim.state === "MISMATCH") throw guestIdempotencyMismatch();
       if (claim.state === "IN_PROGRESS") {
         throw new ApiError(
           CODES.IDPOTENCY_CONFLICT,
@@ -211,6 +250,7 @@ export const POST = route({ auth: "RESIDENT" }, async (ctx) => {
         scope: IDEMPOTENCY_SCOPE,
         key: storageIdempotencyKey,
         payload,
+        requestFingerprint,
       });
     }
 
