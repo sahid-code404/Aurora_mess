@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { createRefund } from "@/lib/domain/refunds";
 import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
+import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";
 import { invalidateInstitutionCache } from "@/lib/institution";
 
 function unique(prefix: string): string {
@@ -90,7 +91,7 @@ afterAll(async () => {
 });
 
 describe("billing/refund financial boundary", () => {
-  test("billing's transaction-scoped lifecycle refresh blocks a new payment insert until the boundary commits", async () => {
+  test("billing's transaction-scoped lifecycle refresh blocks the mutex-backed payment submission until the boundary commits", async () => {
     const { institution, resident } = await createInstitutionAndResident();
     const barrierReady = deferred();
     const releaseBarrier = deferred();
@@ -109,15 +110,20 @@ describe("billing/refund financial boundary", () => {
 
     await barrierReady.promise;
 
-    const insert = db.payment.create({
-      data: {
-        institutionId: institution.id,
-        residentId: resident.id,
-        displayNumber: unique("PAY-209701"),
-        amountMinor: 1_000,
-        method: "UPI",
-        status: "PENDING",
-      },
+    // Mirrors the Payment POST correctness boundary: the route takes the
+    // resident mutex before its idempotency claim and Payment insert.
+    const insert = db.$transaction(async (tx) => {
+      await lockResidentFinancialMutation(tx, institution.id, resident.id);
+      return tx.payment.create({
+        data: {
+          institutionId: institution.id,
+          residentId: resident.id,
+          displayNumber: unique("PAY-209701"),
+          amountMinor: 1_000,
+          method: "UPI",
+          status: "PENDING",
+        },
+      });
     }).then((payment) => {
       insertFinished = true;
       return payment;
