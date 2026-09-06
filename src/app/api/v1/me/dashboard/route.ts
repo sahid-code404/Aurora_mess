@@ -15,6 +15,7 @@ import { dateKeyInTz, greetingFor, localDateMidnightUtc, partsInTz } from "@/lib
 import { residentFundsSummary } from "@/lib/domain/funds";
 import { derivePaymentStatus } from "@/lib/domain/billing";
 import { refreshGuestMealLifecycle } from "@/lib/domain/guest-meal-lifecycle";
+import { decorateAnnouncementLifecycle } from "@/lib/domain/announcement-lifecycle";
 import { serializeNotification } from "@/lib/domain/serialize";
 import { sweepOutbox } from "@/lib/outbox";
 
@@ -51,7 +52,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
     summary,
     unsettledBills,
     notifications,
-    pinnedAnnouncements,
+    pinnedAnnouncementCandidates,
     todayInstances,
     myMealsToday,
     todayGuestRequests,
@@ -68,6 +69,8 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
         orderBy: { createdAt: "desc" },
         take: 8,
       }),
+      // Fetch beyond the displayed five because archived rows are filtered from
+      // the append-only lifecycle stream after the publication-window query.
       db.announcement.findMany({
         where: {
           institutionId: ctx.institutionId,
@@ -77,7 +80,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
           OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
         },
         orderBy: [{ priority: "desc" }, { publishAt: "desc" }],
-        take: 5,
+        take: 30,
       }),
       db.mealInstance.findMany({
         where: { institutionId: ctx.institutionId, serviceDate: todayMidnight },
@@ -112,6 +115,12 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
         },
       }),
     ]);
+
+  const pinnedAnnouncements = (
+    await decorateAnnouncementLifecycle(db, ctx.institutionId, pinnedAnnouncementCandidates)
+  )
+    .filter((announcement) => !announcement.archived)
+    .slice(0, 5);
 
   sweepOutbox(20).catch(() => {});
 
