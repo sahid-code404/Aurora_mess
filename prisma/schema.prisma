@@ -623,7 +623,6 @@ model RuleDefinition {
   name          String
   description   String?
   policyType    String
-  status        String   @default("ACTIVE") // ACTIVE | ARCHIVED
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

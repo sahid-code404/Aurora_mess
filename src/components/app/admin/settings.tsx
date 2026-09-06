@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "next-themes";
 import {
+  Archive,
   Banknote,
   Building2,
   Check,
@@ -19,6 +20,7 @@ import {
   Lock,
   Palette,
   Plus,
+  RotateCcw,
   ScrollText,
   Utensils,
 } from "lucide-react";
@@ -30,6 +32,7 @@ import EmptyState from "@/components/glass/EmptyState";
 import ErrorState from "@/components/glass/ErrorState";
 import { ListSkeleton } from "@/components/glass/LoadingSkeleton";
 import { GlassButton } from "@/components/glass/GlassButton";
+import { ConfirmDialog } from "@/components/glass/ConfirmDialog";
 import { StaggerGroup, StaggerItem } from "@/components/glass/Stagger";
 import { useApiQuery, postJson, patchJson } from "@/hooks/use-api-query";
 import { useMounted } from "@/hooks/use-mounted";
@@ -218,6 +221,8 @@ export default function AdminSettings() {
   /* policies */
   const policiesQuery = useApiQuery<PolicyRow[]>(POLICIES_PATH);
   const [policyFormOpen, setPolicyFormOpen] = useState(false);
+  const [policyAction, setPolicyAction] = useState<{ policy: PolicyRow; action: "ARCHIVE" | "REACTIVATE" } | null>(null);
+  const [policyActionSaving, setPolicyActionSaving] = useState(false);
 
   /* theme */
   const { theme, setTheme } = useTheme();
@@ -445,7 +450,26 @@ export default function AdminSettings() {
         ) : (
           <div className="no-scrollbar max-h-[28rem] space-y-2 overflow-y-auto pr-1">
             {(policiesQuery.data ?? []).map((p) => (
-              <CollapseRow key={p.id} label={`${p.title} · v${p.latestVersion?.version ?? 1}`}>
+              <CollapseRow
+                key={p.id}
+                label={`${p.title} · v${p.latestVersion?.version ?? 1}${p.status === "ARCHIVED" ? " · Archived" : ""}`}
+              >
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <span className={cn(
+                    "rounded-pill px-2 py-1 text-[10px] font-semibold uppercase tracking-wide",
+                    p.status === "ARCHIVED" ? "bg-muted text-muted-foreground" : "bg-success/12 text-success"
+                  )}>
+                    {p.status === "ARCHIVED" ? "Archived" : "Active"}
+                  </span>
+                  <GlassButton
+                    variant="ghost"
+                    size="sm"
+                    icon={p.status === "ARCHIVED" ? <RotateCcw /> : <Archive />}
+                    onClick={() => setPolicyAction({ policy: p, action: p.status === "ARCHIVED" ? "REACTIVATE" : "ARCHIVE" })}
+                  >
+                    {p.status === "ARCHIVED" ? "Reactivate" : "Archive"}
+                  </GlassButton>
+                </div>
                 <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted-foreground">{p.content}</p>
                 <div className="mt-2.5 space-y-1">
                   {p.versions
@@ -495,6 +519,41 @@ export default function AdminSettings() {
           onOpenChange={setPolicyFormOpen}
           policies={policiesQuery.data ?? []}
           onSaved={() => invalidate([POLICIES_PATH])}
+        />
+      )}
+
+      {policyAction && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !policyActionSaving) setPolicyAction(null);
+          }}
+          title={policyAction.action === "ARCHIVE" ? `Archive ${policyAction.policy.title}?` : `Reactivate ${policyAction.policy.title}?`}
+          description={
+            policyAction.action === "ARCHIVE"
+              ? "New registrations will no longer be asked to accept this policy. Existing version history and resident acceptances stay intact."
+              : "This policy’s latest published version will become active for new registrations again."
+          }
+          confirmLabel={policyAction.action === "ARCHIVE" ? "Archive policy" : "Reactivate policy"}
+          tone={policyAction.action === "ARCHIVE" ? "destructive" : "primary"}
+          requireReason
+          reasonPlaceholder="Reason for this policy lifecycle change"
+          loading={policyActionSaving}
+          onConfirm={async (reason) => {
+            if (!reason) return;
+            setPolicyActionSaving(true);
+            try {
+              const action = policyAction.action === "ARCHIVE" ? "archive" : "reactivate";
+              await postJson(`${POLICIES_PATH}/${policyAction.policy.id}/${action}`, { reason });
+              invalidate([POLICIES_PATH]);
+              toast.success(policyAction.action === "ARCHIVE" ? "Policy archived" : "Policy reactivated");
+              setPolicyAction(null);
+            } catch (err) {
+              toast.error(errMessage(err));
+            } finally {
+              setPolicyActionSaving(false);
+            }
+          }}
         />
       )}
     </StaggerGroup>

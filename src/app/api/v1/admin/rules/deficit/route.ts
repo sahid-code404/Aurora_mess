@@ -19,7 +19,6 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
             name: overview.definition.name,
             description: overview.definition.description,
             policyType: overview.definition.policyType,
-            status: overview.definition.status,
           }
         : null,
       versions: overview.versions,

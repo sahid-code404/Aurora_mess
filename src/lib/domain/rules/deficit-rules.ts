@@ -251,7 +251,6 @@ async function ensureDeficitDefinition(institutionId: string, client: any = db):
       name: "Deficit Meal Restriction",
       description: "Controls resident meal access when available funds fall beyond the configured deficit threshold.",
       policyType: DEFICIT_POLICY_TYPE,
-      status: "ACTIVE",
     },
   });
 }
