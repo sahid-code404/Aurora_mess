@@ -1,10 +1,13 @@
 /**
- * POST /api/v1/admin/meals/[instanceId]/guest-override — admin override for guest meals.
- * Allows administrators to add, step (+/-), or remove guest meals for any active
- * resident after the authoritative meal lock boundary but before service ends.
- * Records a mandatory reason in the audit trail and notifies the resident.
- * Resident-row serialization prevents concurrent access-removal and guest
- * mutations from validating different account states.
+ * POST /api/v1/admin/meals/[instanceId]/guest-override — Admin guest correction.
+ *
+ * Before lock: Residents manage their own guest meals.
+ * After lock and before service end: Admin may override the locked guest count.
+ * After service end but before monthly billing is finalized: Admin may correct
+ * the consumed quantity. CONSUMED remains terminal; the before/after facts and
+ * mandatory reason are preserved in the audit trail.
+ * After billing starts/finalizes: guest counts are frozen and corrections move
+ * to the bill/refund correction lifecycle instead of rewriting billing inputs.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -16,6 +19,11 @@ import { appendAudit } from "@/lib/audit";
 import { requireInstitutionContext } from "@/lib/domain/meal-engine";
 import { queueNotification, sweepOutboxSafe } from "@/lib/domain/notify";
 import { lockActiveResidentForMealMutation } from "@/lib/domain/resident-meal-mutation";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import {
+  applyAdminGuestMealQuantityCorrection,
+  assertGuestMealCorrectionPeriodMutable,
+} from "@/lib/domain/guest-meal-admin-correction";
 
 const bodySchema = z.object({
   residentId: z.string().min(1),
@@ -29,6 +37,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const instanceId = ctx.params.instanceId;
 
   const result = await db.$transaction(async (tx) => {
+    // Global lock order: Institution financial mutex -> Resident mutex.
+    // Billing takes the same Institution mutex, so a correction and billing
+    // generation can never snapshot different guest totals concurrently.
+    await lockInstitutionFinancialMutation(tx, ctx.institutionId);
     const resident = await lockActiveResidentForMealMutation(tx, ctx.institutionId, body.residentId);
 
     const instance = await tx.mealInstance.findFirst({
@@ -36,157 +48,75 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       include: { definition: true },
     });
     if (!instance) throw new ApiError(CODES.NOT_FOUND, "This meal could not be found.", 404);
-
-    const now = new Date();
     if (instance.status === "CANCELLED") {
       throw new ApiError(CODES.MEAL_NOT_AVAILABLE, "This meal service was cancelled.", 409);
     }
-    const lockPassed = now.getTime() >= instance.lockAt.getTime();
-    if (!lockPassed) {
+
+    const now = new Date();
+    if (now.getTime() < instance.lockAt.getTime()) {
       throw new ApiError(
         CODES.VALIDATION_FAILED,
-        `Admin guest override is only allowed after this meal locks (${formatTimeLabel(instance.lockAt, inst.timezone)}). Before then, residents manage their own guest meals.`,
-        409
-      );
-    }
-    if (now.getTime() >= instance.serviceEndAt.getTime()) {
-      throw new ApiError(
-        CODES.MEAL_NOT_AVAILABLE,
-        "This meal service has already ended. Consumed guest-meal history cannot be rewritten; use the billing/refund correction flow for financial corrections.",
+        `Admin guest correction is available after this meal locks (${formatTimeLabel(instance.lockAt, inst.timezone)}). Before then, residents manage their own guest meals.`,
         409
       );
     }
 
-    const existing = await tx.guestMealRequest.findMany({
-      where: {
-        institutionId: ctx.institutionId,
-        hostResidentId: resident.id,
-        mealInstanceId: instance.id,
-        status: { not: "CANCELLED" },
-      },
-      orderBy: { createdAt: "asc" },
-    });
+    // Re-read this month under the Institution mutex. BILLED/REOPENED periods
+    // and in-progress generation are immutable financial boundaries.
+    await assertGuestMealCorrectionPeriodMutable(tx, ctx.institutionId, instance.serviceDate);
 
-    if (existing.some((request) => request.status === "CONSUMED")) {
-      throw new ApiError(
-        CODES.MEAL_NOT_AVAILABLE,
-        "Consumed guest meals are historical records and cannot be changed.",
-        409
-      );
-    }
-
-    const currentTotal = existing.reduce((s, g) => s + g.quantity, 0);
-
-    let originalBaseline = currentTotal;
-    for (const req of existing) {
-      const match = req.note?.match(/Admin override\|orig:(\d+)/);
-      if (match) {
-        originalBaseline = parseInt(match[1], 10);
-        break;
-      }
-    }
-
-    const overrideNote = `Admin override|orig:${originalBaseline}`;
-    const lockBoundary = instance.lockAt;
-
+    const serviceEnded = now.getTime() >= instance.serviceEndAt.getTime();
     const unitPriceMinor =
       instance.priceStrategySnapshot === "FIXED" && instance.fixedPriceMinorSnapshot != null
         ? instance.fixedPriceMinorSnapshot
         : inst.settings.guestMealPriceMinor;
 
-    let targetRecordId: string | null = null;
-
-    if (body.quantity === 0) {
-      for (const req of existing) {
-        await tx.guestMealRequest.update({
-          where: { id: req.id },
-          data: {
-            status: "CANCELLED",
-            lockedAt: req.lockedAt ?? lockBoundary,
-            note: overrideNote,
-          },
-        });
-      }
-      if (existing.length === 0) {
-        const created = await tx.guestMealRequest.create({
-          data: {
-            institutionId: ctx.institutionId,
-            hostResidentId: resident.id,
-            mealInstanceId: instance.id,
-            quantity: 0,
-            unitPriceMinor,
-            totalPriceMinor: 0,
-            status: "CANCELLED",
-            note: overrideNote,
-            lockedAt: lockBoundary,
-          },
-        });
-        targetRecordId = created.id;
-      }
-    } else if (existing.length > 0) {
-      const primary = existing[0];
-      targetRecordId = primary.id;
-      await tx.guestMealRequest.update({
-        where: { id: primary.id },
-        data: {
-          quantity: body.quantity,
-          totalPriceMinor: body.quantity * primary.unitPriceMinor,
-          status: "LOCKED",
-          lockedAt: primary.lockedAt ?? lockBoundary,
-          note: overrideNote,
-        },
-      });
-
-      for (let i = 1; i < existing.length; i++) {
-        await tx.guestMealRequest.update({
-          where: { id: existing[i].id },
-          data: {
-            status: "CANCELLED",
-            lockedAt: existing[i].lockedAt ?? lockBoundary,
-            note: overrideNote,
-          },
-        });
-      }
-    } else {
-      const created = await tx.guestMealRequest.create({
-        data: {
-          institutionId: ctx.institutionId,
-          hostResidentId: resident.id,
-          mealInstanceId: instance.id,
-          quantity: body.quantity,
-          unitPriceMinor,
-          totalPriceMinor: body.quantity * unitPriceMinor,
-          status: "LOCKED",
-          note: overrideNote,
-          lockedAt: lockBoundary,
-        },
-      });
-      targetRecordId = created.id;
-    }
+    const mutation = await applyAdminGuestMealQuantityCorrection({
+      client: tx,
+      institutionId: ctx.institutionId,
+      residentId: resident.id,
+      mealInstanceId: instance.id,
+      targetQuantity: body.quantity,
+      unitPriceMinor,
+      lockAt: instance.lockAt,
+      serviceEnded,
+    });
 
     const mealName = instance.definition?.name ?? "Meal";
     const residentName = resident.profile?.fullName ?? resident.email;
+    const correctionMode = serviceEnded ? "POST_SERVICE_CORRECTION" : "LOCKED_OVERRIDE";
 
     await appendAudit(
       {
         institutionId: ctx.institutionId,
         actorUserId: ctx.user.id,
         actorRole: "ADMIN",
-        action: "GUEST_MEAL_OVERRIDE",
+        action: serviceEnded ? "GUEST_MEAL_POST_SERVICE_CORRECTION" : "GUEST_MEAL_OVERRIDE",
         entityType: "GUEST_MEAL_REQUEST",
-        entityId: targetRecordId ?? instance.id,
+        entityId: mutation.targetRecordId ?? instance.id,
         requestId: ctx.requestId,
         reason: body.reason,
-        beforeSummary: JSON.stringify({ quantity: currentTotal }),
-        afterSummary: JSON.stringify({ quantity: body.quantity }),
+        beforeSummary: JSON.stringify({
+          quantity: mutation.currentTotal,
+          records: mutation.beforeRecords,
+        }),
+        afterSummary: JSON.stringify({
+          quantity: body.quantity,
+          lifecycleStatus: mutation.status,
+          correctionMode,
+        }),
         metadata: {
           hostResidentId: resident.id,
           residentName,
           mealInstanceId: instance.id,
           mealName,
-          previousQuantity: currentTotal,
+          previousQuantity: mutation.currentTotal,
           newQuantity: body.quantity,
+          originalBaseline: mutation.originalBaseline,
+          correctionMode,
+          serviceEnded,
           lockAt: instance.lockAt.toISOString(),
+          serviceEndAt: instance.serviceEndAt.toISOString(),
           cutoffAt: instance.cutoffAt.toISOString(),
         },
       },
@@ -198,11 +128,11 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         institutionId: ctx.institutionId,
         userId: resident.id,
         type: "GUEST_MEAL_OVERRIDE",
-        title: "Guest meal changed by admin",
+        title: serviceEnded ? "Guest meal corrected by admin" : "Guest meal changed by admin",
         message:
           body.quantity === 0
-            ? `Your guest meals for ${mealName} on ${formatDateLabel(instance.serviceDate)} were removed by the admin. Reason: ${body.reason}`
-            : `Your guest meals for ${mealName} on ${formatDateLabel(instance.serviceDate)} were changed to ${body.quantity} by the admin. Reason: ${body.reason}`,
+            ? `Your guest meals for ${mealName} on ${formatDateLabel(instance.serviceDate)} were corrected to 0 by the admin. Reason: ${body.reason}`
+            : `Your guest meals for ${mealName} on ${formatDateLabel(instance.serviceDate)} were ${serviceEnded ? "corrected" : "changed"} to ${body.quantity} by the admin. Reason: ${body.reason}`,
         entityRef: instance.id,
       },
       tx
@@ -212,14 +142,15 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       mealInstanceId: instance.id,
       residentId: resident.id,
       quantity: body.quantity,
-      previousQuantity: currentTotal,
-      status: body.quantity === 0 ? "CANCELLED" : "LOCKED",
+      previousQuantity: mutation.currentTotal,
+      status: mutation.status,
+      correctionMode,
+      serviceEnded,
       lockAt: instance.lockAt.toISOString(),
       cutoffAt: instance.cutoffAt.toISOString(),
     };
   });
 
   await sweepOutboxSafe();
-
   return { data: result };
 });
