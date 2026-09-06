@@ -23,6 +23,8 @@ import { SYSTEM_VARIABLES_MAP } from "./variables";
 import { FormulaDag } from "./dag";
 import { gatherAllVariables } from "./registry";
 import { selectFormulaVersionAt } from "./effective-version";
+import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
+import { assertFormulaInputPeriodMutable } from "./period-mutation";
 
 export interface FormulaVersionRow {
   id: string;
@@ -226,25 +228,14 @@ export async function parseFormulaSource(
   return { ast, formulaText: astToCanonical(ast), naturalSource: null };
 }
 
-/** Create a new immutable formula version with DAG cycle detection. */
-export async function createFormulaVersion(input: CreateVersionInput): Promise<CreateVersionOutcome> {
-  const inst = await getInstitution(input.institutionId);
-  const tz = inst?.timezone ?? "UTC";
-  const bounds = currentPeriodBounds(tz);
-
-  const { ast, formulaText, naturalSource } = await parseFormulaSource(input.mode, input.source);
-  const outputKey = (ast.type === "assignment" ? ast.target : input.outputVariableKey ?? "meal_charge").trim();
-
-  // 1. DAG cycle check (spec §44). Resolve every dependency formula for
-  // the same effective period as the candidate; the latest active pointer can
-  // point at NEXT_PERIOD and must never rewrite current/historical evaluation.
-  const nextYear = bounds.month === 12 ? bounds.year + 1 : bounds.year;
-  const nextMonth = bounds.month === 12 ? 1 : bounds.month + 1;
-  const nextMonthFirst = localDateMidnightUtc(`${nextYear}-${String(nextMonth).padStart(2, "0")}-01`);
-  const targetPeriodStart = input.effective === "CURRENT_OPEN" ? bounds.startAt : nextMonthFirst;
-
-  const allFormulaDefs = await db.formulaDefinition.findMany({
-    where: { institutionId: input.institutionId },
+async function buildFormulaDagForPeriod(
+  client: any,
+  institutionId: string,
+  outputKey: string,
+  targetPeriodStart: Date
+): Promise<FormulaDag> {
+  const allFormulaDefs = await client.formulaDefinition.findMany({
+    where: { institutionId },
     include: {
       versions: {
         orderBy: { version: "desc" },
@@ -268,9 +259,36 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
         dependsOn: periodVersion.dependencies.map((d: any) => d.variableKey),
       });
     } catch {
-      // ignore malformed legacy formula rows here; activation/build gates handle them
+      // Ignore malformed legacy rows here; normal activation/build validation
+      // remains fail-closed for newly persisted formula data.
     }
   }
+  return dag;
+}
+
+/** Create a new immutable formula version with DAG cycle detection. */
+export async function createFormulaVersion(input: CreateVersionInput): Promise<CreateVersionOutcome> {
+  const inst = await getInstitution(input.institutionId);
+  const tz = inst?.timezone ?? "UTC";
+  const bounds = currentPeriodBounds(tz);
+
+  const { ast, formulaText, naturalSource } = await parseFormulaSource(input.mode, input.source);
+  const outputKey = (ast.type === "assignment" ? ast.target : input.outputVariableKey ?? "meal_charge").trim();
+
+  // 1. DAG cycle check (spec §44). Resolve every dependency formula for
+  // the same effective period as the candidate; the latest active pointer can
+  // point at NEXT_PERIOD and must never rewrite current/historical evaluation.
+  const nextYear = bounds.month === 12 ? bounds.year + 1 : bounds.year;
+  const nextMonth = bounds.month === 12 ? 1 : bounds.month + 1;
+  const nextMonthFirst = localDateMidnightUtc(`${nextYear}-${String(nextMonth).padStart(2, "0")}-01`);
+  const targetPeriodStart = input.effective === "CURRENT_OPEN" ? bounds.startAt : nextMonthFirst;
+
+  const dag = await buildFormulaDagForPeriod(
+    db,
+    input.institutionId,
+    outputKey,
+    targetPeriodStart
+  );
 
   // Validate no circular dependency
   dag.validateNoCycles(outputKey, ast);
@@ -310,6 +328,22 @@ export async function createFormulaVersion(input: CreateVersionInput): Promise<C
   const referencedVars = extractVariableNames(ast);
 
   const version = await db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, input.institutionId);
+    const targetYear = input.effective === "CURRENT_OPEN" ? bounds.year : nextYear;
+    const targetMonth = input.effective === "CURRENT_OPEN" ? bounds.month : nextMonth;
+    await assertFormulaInputPeriodMutable(tx, input.institutionId, targetYear, targetMonth);
+
+    // Preview/cycle checks happen before confirmation for UX, but mutation must
+    // re-check under the shared Institution mutex so two concurrent formula
+    // writes cannot each validate against stale dependency graphs.
+    const lockedDag = await buildFormulaDagForPeriod(
+      tx,
+      input.institutionId,
+      outputKey,
+      targetPeriodStart
+    );
+    lockedDag.validateNoCycles(outputKey, ast);
+
     const definition = await ensureFormulaDefinition(input.institutionId, outputKey, tx);
 
     const maxAgg = await tx.formulaVersion.aggregate({

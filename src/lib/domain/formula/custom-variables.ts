@@ -88,8 +88,13 @@ export async function createCustomVariable(input: CreateCustomVariableInput) {
 
   const effectiveUntilDate = input.effectiveUntil ? new Date(input.effectiveUntil) : null;
   const isMoney = input.valueType === "MONEY";
+  const isBoolean = input.valueType === "BOOLEAN";
+  if (isBoolean && input.initialValue !== 0 && input.initialValue !== 1) {
+    throw new ApiError(CODES.VALIDATION_FAILED, "Boolean variables use 0 (false) or 1 (true).", 422);
+  }
 
   return await db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, input.institutionId);
     if (input.effectivePeriod) {
       const match = /^(\d{4})-(\d{2})$/.exec(input.effectivePeriod);
       if (!match) throw new ApiError(CODES.VALIDATION_FAILED, "Period must be YYYY-MM.", 400);
@@ -97,7 +102,6 @@ export async function createCustomVariable(input: CreateCustomVariableInput) {
       if (month < 1 || month > 12) {
         throw new ApiError(CODES.VALIDATION_FAILED, "Period month must be between 01 and 12.", 400);
       }
-      await lockInstitutionFinancialMutation(tx, input.institutionId);
       await assertFormulaInputPeriodMutable(tx, input.institutionId, Number(match[1]), month);
     }
 
@@ -120,7 +124,8 @@ export async function createCustomVariable(input: CreateCustomVariableInput) {
       data: {
         variableDefinitionId: def.id,
         valueMinor: isMoney ? input.initialValue : null,
-        valueNumber: !isMoney ? input.initialValue : null,
+        valueNumber: !isMoney && !isBoolean ? input.initialValue : null,
+        valueBoolean: isBoolean ? input.initialValue === 1 : null,
         effectiveFrom: effectiveFromDate,
         effectiveUntil: effectiveUntilDate,
         billingPeriodKey: input.effectivePeriod ?? null,
@@ -178,6 +183,10 @@ export async function setCustomVariableValue(input: {
     }
 
     const isMoney = def.valueType === "MONEY";
+    const isBoolean = def.valueType === "BOOLEAN";
+    if (isBoolean && input.value !== 0 && input.value !== 1) {
+      throw new ApiError(CODES.VALIDATION_FAILED, "Boolean variables use 0 (false) or 1 (true).", 422);
+    }
     const existingVal = await tx.customVariableValue.findFirst({
       where: { variableDefinitionId: def.id, billingPeriodKey: input.billingPeriodKey },
     });
@@ -187,7 +196,8 @@ export async function setCustomVariableValue(input: {
           where: { id: existingVal.id },
           data: {
             valueMinor: isMoney ? input.value : null,
-            valueNumber: !isMoney ? input.value : null,
+            valueNumber: !isMoney && !isBoolean ? input.value : null,
+            valueBoolean: isBoolean ? input.value === 1 : null,
             createdByUserId: input.adminUserId,
             updatedAt: new Date(),
           },
@@ -196,7 +206,8 @@ export async function setCustomVariableValue(input: {
           data: {
             variableDefinitionId: def.id,
             valueMinor: isMoney ? input.value : null,
-            valueNumber: !isMoney ? input.value : null,
+            valueNumber: !isMoney && !isBoolean ? input.value : null,
+            valueBoolean: isBoolean ? input.value === 1 : null,
             effectiveFrom: periodStart,
             billingPeriodKey: input.billingPeriodKey,
             createdByUserId: input.adminUserId,
@@ -228,60 +239,68 @@ export async function archiveCustomVariable(input: {
   adminUserId: string;
   variableDefinitionId: string;
 }) {
-  const def = await db.variableDefinition.findFirst({
-    where: { id: input.variableDefinitionId, institutionId: input.institutionId, archivedAt: null },
-  });
+  return db.$transaction(async (tx) => {
+    await lockInstitutionFinancialMutation(tx, input.institutionId);
 
-  if (!def) {
-    throw new ApiError(CODES.NOT_FOUND, "Custom variable not found.", 404);
-  }
-
-  // Check if any active formula depends on this variable key (spec §65, §67)
-  const activeFormulas = await db.formulaDefinition.findMany({
-    where: { institutionId: input.institutionId },
-    include: {
-      versions: {
-        where: { active: true },
-        include: { dependencies: true },
-      },
-    },
-  });
-
-  const blockingFormulas: string[] = [];
-  for (const f of activeFormulas) {
-    const activeVer = f.versions[0];
-    if (activeVer && activeVer.dependencies.some((d) => d.variableKey === def.key)) {
-      blockingFormulas.push(f.name);
+    const def = await tx.variableDefinition.findFirst({
+      where: { id: input.variableDefinitionId, institutionId: input.institutionId, archivedAt: null },
+    });
+    if (!def) {
+      throw new ApiError(CODES.NOT_FOUND, "Custom variable not found.", 404);
     }
-  }
 
-  if (blockingFormulas.length > 0) {
-    throw new ApiError(
-      CODES.VALIDATION_FAILED,
-      `${def.displayName} is used by ${blockingFormulas.join(", ")} and cannot be archived until those formulas are updated.`,
-      422
+    // The latest configured FormulaVersion may be current or scheduled for the
+    // next period. Either way, do not archive a variable that configuration
+    // still depends on. Historical periods remain readable because the provider
+    // includes definitions whose archivedAt is after the period start.
+    const configuredFormulas = await tx.formulaDefinition.findMany({
+      where: { institutionId: input.institutionId },
+      include: {
+        versions: {
+          where: { active: true },
+          include: { dependencies: true },
+        },
+      },
+    });
+
+    const blockingFormulas: string[] = [];
+    for (const formula of configuredFormulas) {
+      const configuredVersion = formula.versions[0];
+      if (configuredVersion?.dependencies.some((dependency) => dependency.variableKey === def.key)) {
+        blockingFormulas.push(formula.name);
+      }
+    }
+    if (blockingFormulas.length > 0) {
+      throw new ApiError(
+        CODES.VALIDATION_FAILED,
+        `${def.displayName} is used by ${blockingFormulas.join(", ")} and cannot be archived until those formulas are updated.`,
+        422
+      );
+    }
+
+    const updated = await tx.variableDefinition.update({
+      where: { id: def.id },
+      data: { archivedAt: new Date() },
+    });
+
+    await appendAudit(
+      {
+        institutionId: input.institutionId,
+        actorUserId: input.adminUserId,
+        actorRole: "ADMIN",
+        action: "CUSTOM_VARIABLE_ARCHIVED",
+        entityType: "VARIABLE_DEFINITION",
+        entityId: def.id,
+        requestId: `var-archive-${def.id}`,
+        beforeSummary: "ACTIVE",
+        afterSummary: "ARCHIVED",
+        metadata: { key: def.key },
+      },
+      tx
     );
-  }
 
-  const updated = await db.variableDefinition.update({
-    where: { id: def.id },
-    data: { archivedAt: new Date() },
+    return updated;
   });
-
-  await appendAudit({
-    institutionId: input.institutionId,
-    actorUserId: input.adminUserId,
-    actorRole: "ADMIN",
-    action: "CUSTOM_VARIABLE_ARCHIVED",
-    entityType: "VARIABLE_DEFINITION",
-    entityId: def.id,
-    requestId: `var-archive-${def.id}`,
-    beforeSummary: "ACTIVE",
-    afterSummary: "ARCHIVED",
-    metadata: { key: def.key },
-  });
-
-  return updated;
 }
 
 export async function togglePinVariable(input: {
