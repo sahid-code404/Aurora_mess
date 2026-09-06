@@ -1,0 +1,273 @@
+name: Phase 44 Branch Patcher
+
+on:
+  push:
+    branches:
+      - feat/phase44-refund-payment-lifecycle-coherence
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase44-refund-payment-lifecycle-coherence
+          fetch-depth: 0
+
+      - name: Apply exact refund/payment lifecycle substitutions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path, old, new, expected=1):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} matches, found {count}: {old[:120]!r}")
+              p.write_text(text.replace(old, new))
+
+          replace_exact(
+              "src/app/api/v1/admin/payments/route.ts",
+              'const STATUSES = ["PENDING", "APPROVED", "REJECTED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"];',
+              'const STATUSES = ["PENDING", "APPROVED", "REJECTED", "VOIDED"];',
+          )
+          replace_exact(
+              "src/app/api/v1/admin/payments/route.ts",
+              'status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },',
+              'status: "APPROVED",',
+          )
+
+          replace_exact(
+              "src/app/api/v1/payments/route.ts",
+              'if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"].includes(status)) {',
+              'if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED"].includes(status)) {',
+          )
+          replace_exact(
+              "src/app/api/v1/payments/route.ts",
+              'const [depositsAgg, pendingCount, refundPendingCount, refundsThisMonthAgg, funds] = await Promise.all([',
+              'const [depositsAgg, pendingCount, refundsThisMonthAgg, funds] = await Promise.all([',
+          )
+          replace_exact(
+              "src/app/api/v1/payments/route.ts",
+              'status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },',
+              'status: "APPROVED",',
+          )
+          replace_exact(
+              "src/app/api/v1/payments/route.ts",
+              '    db.refund.count({ where: { residentId: ctx.user.id, status: { in: ["PENDING", "PROCESSING"] } } }),\n',
+              '',
+          )
+          replace_exact(
+              "src/app/api/v1/payments/route.ts",
+              '      refundPendingCount,\n',
+              '',
+          )
+
+          for path in [
+              "src/lib/domain/funds.ts",
+              "src/lib/domain/formula/providers/funds.ts",
+              "src/app/api/v1/admin/funds/route.ts",
+          ]:
+              replace_exact(
+                  path,
+                  'status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] }',
+                  'status: "APPROVED"',
+              )
+
+          replace_exact(
+              "src/lib/domain/billing.ts",
+              'status: { in: ["APPROVED", "REFUNDED", "PARTIALLY_REFUNDED"] },',
+              'status: "APPROVED",',
+          )
+          replace_exact(
+              "src/lib/domain/ledger.ts",
+              'status: { in: ["APPROVED", "VOIDED", "REFUNDED", "PARTIALLY_REFUNDED"] },',
+              'status: { in: ["APPROVED", "VOIDED"] },',
+          )
+
+          replace_exact(
+              "src/components/glass/StatusBadge.tsx",
+              '  REFUNDED: "frost",\n',
+              '',
+          )
+          replace_exact(
+              "src/components/glass/StatusBadge.tsx",
+              '  REFUNDED: "Refunded",\n',
+              '',
+          )
+
+          replace_exact(
+              "src/components/app/resident/_shared/types.ts",
+              '  status: "PENDING" | "APPROVED" | "REJECTED" | "VOIDED" | "REFUNDED" | "PARTIALLY_REFUNDED" | string;',
+              '  status: "PENDING" | "APPROVED" | "REJECTED" | "VOIDED" | string;',
+          )
+          replace_exact(
+              "src/components/app/resident/_shared/types.ts",
+              '  refundPendingCount: number;\n',
+              '',
+          )
+
+          replace_exact(
+              "src/components/app/resident/payments.tsx",
+              '''              value={
+                meta?.refundPendingCount
+                  ? `${meta.refundPendingCount} Pending`
+                  : meta?.refundsThisMonthFormatted ?? "₹0.00"
+              }
+              sub={meta?.refundPendingCount ? "In review" : (meta?.refundsThisMonth ?? 0) > 0 ? "Processed" : "No refunds"}''',
+              '''              value={meta?.refundsThisMonthFormatted ?? "₹0.00"}
+              sub={(meta?.refundsThisMonth ?? 0) > 0 ? "Processed this month" : "No refunds this month"}''',
+          )
+
+          replace_exact(
+              "prisma/schema.prisma",
+              '// PENDING | APPROVED | REJECTED | VOIDED | REFUNDED | PARTIALLY_REFUNDED',
+              '// PENDING | APPROVED | REJECTED | VOIDED',
+          )
+          replace_exact(
+              "prisma/schema.prisma",
+              '  paymentId       String?\n  amountMinor',
+              '  paymentId       String? // legacy provenance only; new refunds use resident-level pooled credit\n  amountMinor',
+          )
+
+          replace_exact(
+              "src/app/api/v1/admin/refunds/route.ts",
+              '  paymentId: z.string().optional(),\n',
+              '',
+          )
+          replace_exact(
+              "src/app/api/v1/admin/refunds/route.ts",
+              '    paymentId: body.paymentId ?? null,\n',
+              '',
+          )
+
+          replace_exact(
+              "src/lib/domain/refunds.ts",
+              '  paymentId?: string | null;\n',
+              '',
+          )
+          replace_exact(
+              "src/lib/domain/refunds.ts",
+              '''    if (input.paymentId) {
+      const payment = await tx.payment.findFirst({
+        where: {
+          id: input.paymentId,
+          institutionId: input.institutionId,
+          residentId: resident.id,
+        },
+        select: { id: true },
+      });
+      if (!payment) {
+        throw new ApiError(CODES.VALIDATION_FAILED, "The linked payment does not belong to this resident.", 400, {
+          paymentId: "The linked payment does not belong to this resident.",
+        });
+      }
+    }
+
+''',
+              '',
+          )
+          replace_exact(
+              "src/lib/domain/refunds.ts",
+              '        paymentId: input.paymentId ?? null,',
+              '        paymentId: null,',
+          )
+          replace_exact(
+              "src/lib/domain/refunds.ts",
+              '          paymentId: input.paymentId ?? null,\n',
+              '',
+          )
+          replace_exact(
+              "src/lib/domain/refunds.ts",
+              ''' * Refund lifecycle invariant:
+ *   approved payment -> generated bill(s) -> bill settlement -> excess credit
+ *   -> ISSUE_REFUND or CARRY_FORWARD.
+''',
+              ''' * Refund lifecycle invariant:
+ *   approved resident payment pool -> generated bill(s) -> bill settlement ->
+ *   resident-level excess credit -> ISSUE_REFUND or CARRY_FORWARD.
+ * Refunds are intentionally not attributed to one arbitrary payment.
+''',
+          )
+
+          replace_exact(
+              "src/app/api/v1/admin/payments/[id]/void/route.ts",
+              'import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";\n',
+              'import { lockResidentFinancialMutation } from "@/lib/domain/financial-lock";\nimport { assertPaymentVoidRefundCoverage } from "@/lib/domain/payment-lifecycle";\n',
+          )
+          replace_exact(
+              "src/app/api/v1/admin/payments/[id]/void/route.ts",
+              '''  const payload = await db.$transaction(async (tx) => {
+    const payment = await tx.payment.findFirst({ where: { id: ctx.params.id, institutionId: ctx.institutionId } });
+    if (!payment) throw new ApiError(CODES.NOT_FOUND, "Payment not found.", 404);
+    if (payment.status === "VOIDED") {
+      throw new ApiError(CODES.PAYMENT_INVALID_STATE, "This payment was already voided.", 409);
+    }
+    if (payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED") {
+      throw new ApiError(
+        CODES.PAYMENT_INVALID_STATE,
+        "Refunded payments cannot be voided — issue a correcting refund instead.",
+        409
+      );
+    }
+    if (payment.status !== "APPROVED") {
+      throw new ApiError(CODES.PAYMENT_INVALID_STATE, "Only approved payments can be voided.", 409);
+    }
+
+    // Serialize the resident's entire settlement mutation before changing the
+    // payment status. A concurrent approval/void/adjustment must commit first.
+    await lockResidentFinancialMutation(tx, ctx.institutionId, payment.residentId);
+
+    const guard = await tx.payment.updateMany({''',
+              '''  const payload = await db.$transaction(async (tx) => {
+    // Payment ownership is immutable, so this pre-lock read is used only to find
+    // the resident mutex. All lifecycle validation happens again after the lock.
+    const paymentBeforeLock = await tx.payment.findFirst({
+      where: { id: ctx.params.id, institutionId: ctx.institutionId },
+      select: { residentId: true },
+    });
+    if (!paymentBeforeLock) throw new ApiError(CODES.NOT_FOUND, "Payment not found.", 404);
+
+    // Serialize against payment approval/void, refund creation and bill changes.
+    await lockResidentFinancialMutation(tx, ctx.institutionId, paymentBeforeLock.residentId);
+
+    const payment = await tx.payment.findFirst({ where: { id: ctx.params.id, institutionId: ctx.institutionId } });
+    if (!payment) throw new ApiError(CODES.NOT_FOUND, "Payment not found.", 404);
+    if (payment.status === "VOIDED") {
+      throw new ApiError(CODES.PAYMENT_INVALID_STATE, "This payment was already voided.", 409);
+    }
+    if (payment.status !== "APPROVED") {
+      throw new ApiError(CODES.PAYMENT_INVALID_STATE, "Only approved payments can be voided.", 409);
+    }
+
+    // Refund Center resolves resident-level pooled excess, not an arbitrary
+    // payment. A void is safe only if the remaining approved-payment pool still
+    // covers every completed cash refund already paid to this resident.
+    const refundCoverage = await assertPaymentVoidRefundCoverage(tx, payment);
+
+    const guard = await tx.payment.updateMany({''',
+          )
+          replace_exact(
+              "src/app/api/v1/admin/payments/[id]/void/route.ts",
+              '          unappliedMinor: reversal.unappliedMinor,\n',
+              '          unappliedMinor: reversal.unappliedMinor,\n          issuedRefundsMinor: refundCoverage.issuedRefundsMinor,\n          remainingApprovedPaymentsMinor: refundCoverage.remainingApprovedPaymentsMinor,\n',
+          )
+
+          print("Phase 44 exact substitutions applied")
+          PY
+
+      - name: Commit patched refund/payment lifecycle source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prisma src
+          git diff --cached --check
+          git commit -m "Phase 44: align pooled refunds with payment lifecycle"
+          git push origin HEAD:feat/phase44-refund-payment-lifecycle-coherence
