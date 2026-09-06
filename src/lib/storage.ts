@@ -79,7 +79,6 @@ export async function storeUpload(
         sizeBytes: buffer.length,
         sha256: sha,
         uploadedByUserId,
-        scanStatus: "CLEAN", // content signature/type validated; malware scanning is a separate future control
       },
     });
   } catch (error) {

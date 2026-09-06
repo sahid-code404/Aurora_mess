@@ -389,7 +389,6 @@ model StoredFile {
   sizeBytes        Int
   sha256           String
   uploadedByUserId String?
-  scanStatus       String   @default("PENDING") // PENDING | CLEAN | FLAGGED
   createdAt        DateTime @default(now())
 }
 
@@ -486,7 +485,7 @@ model Expense {
   displayNumber          String    @unique // EXP-YYYYMM-NNNN
   date                   DateTime
   categoryId             String?
-  status                 String    @default("PENDING") // DRAFT | PENDING | APPROVED | REJECTED | VOIDED
+  status                 String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED
   source                 String    @default("DIRECT") // DIRECT | TASK
   description            String
   comment                String?
@@ -664,7 +663,7 @@ model FormulaDefinition {
   description       String?
   outputVariableKey String    @default("meal_charge")
   scope             String    @default("BILLING_PERIOD") // GLOBAL | BILLING_PERIOD | RESIDENT | MEAL
-  status            String    @default("ACTIVE") // ACTIVE | ARCHIVED | DRAFT
+  status            String    @default("ACTIVE") // ACTIVE | ARCHIVED
   activeVersionId   String?
   archivedAt        DateTime?
   createdAt         DateTime  @default(now())
@@ -691,7 +690,7 @@ model FormulaVersion {
   reason               String?
   effectiveFrom        DateTime?
   effectiveUntil       DateTime?
-  status               String    @default("ACTIVE") // ACTIVE | SCHEDULED | DRAFT | HISTORICAL
+  status               String    @default("ACTIVE") // ACTIVE | HISTORICAL
   active               Boolean   @default(false)
   createdAt            DateTime  @default(now())
 

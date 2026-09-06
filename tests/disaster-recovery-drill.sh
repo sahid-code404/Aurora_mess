@@ -56,10 +56,10 @@ DELETE FROM "StoredFile" WHERE "id" = '$STORED_FILE_ID';
 INSERT INTO "RateLimitBucket" ("keyHash", "count", "resetAt", "updatedAt")
 VALUES ('$KEY_ONE', 7, NOW() + INTERVAL '1 hour', NOW());
 INSERT INTO "StoredFile" (
-  "id", "institutionId", "objectKey", "fileName", "mimeType", "sizeBytes", "sha256", "scanStatus", "createdAt"
+  "id", "institutionId", "objectKey", "fileName", "mimeType", "sizeBytes", "sha256", "createdAt"
 ) VALUES (
   '$STORED_FILE_ID', 'phase16-recovery', 'recovery-marker.txt', 'recovery-marker.txt',
-  'text/plain', $ORIGINAL_SIZE, '$ORIGINAL_SHA', 'CLEAN', NOW()
+  'text/plain', $ORIGINAL_SIZE, '$ORIGINAL_SHA', NOW()
 );
 SQL
 
