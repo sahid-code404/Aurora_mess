@@ -60,8 +60,10 @@ describe("task lifecycle serialization source contracts", () => {
   test("shared status and notification icon maps recognize task cancellation", () => {
     const badge = source("src/components/glass/StatusBadge.tsx");
     const icons = source("src/components/app/resident/_shared/icons.tsx");
+    const format = source("src/components/app/resident/_shared/format.ts");
     expect(badge).toContain('CANCELLED: "neutral"');
     expect(badge).toContain('CANCELLED: "Cancelled"');
     expect(icons).toContain("TASK_CANCELLED: TriangleAlert");
+    expect(format).toContain("TASK_CANCELLED: TriangleAlert");
   });
 });
