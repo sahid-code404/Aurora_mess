@@ -33,13 +33,13 @@ export async function lockMealDefinitionMutation(
   institutionId: string,
   mealDefinitionId: string
 ): Promise<void> {
-  const rows = await client.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+  const rows = (await client.$queryRaw(Prisma.sql`
     SELECT "id"
     FROM "MealDefinition"
     WHERE "id" = ${mealDefinitionId}
       AND "institutionId" = ${institutionId}
     FOR UPDATE
-  `);
+  `)) as Array<{ id: string }>;
   if (rows.length !== 1) {
     throw new ApiError(CODES.NOT_FOUND, "This meal definition could not be found.", 404);
   }
