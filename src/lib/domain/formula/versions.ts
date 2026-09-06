@@ -247,7 +247,7 @@ async function buildFormulaDagForPeriod(
   const dag = new FormulaDag();
   for (const def of allFormulaDefs) {
     if (def.outputVariableKey === outputKey) continue;
-    const periodVersion = selectFormulaVersionAt(def.versions, targetPeriodStart);
+    const periodVersion: any = selectFormulaVersionAt(def.versions, targetPeriodStart);
     if (!periodVersion) continue;
     try {
       const nodeAst = JSON.parse(periodVersion.compiledAstJson) as FormulaAst;
