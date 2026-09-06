@@ -1,7 +1,8 @@
 /**
- * GET /api/v1/calendar?from&to — calendar events for residents AND admins
+ * GET /api/v1/calendar?from&to — active calendar events for residents AND admins
  * (auth "ANY"). Events drive the meal engine's CALENDAR_DISABLED precedence
- * step. Dates are date keys; stored as local-date-midnight-UTC markers.
+ * step. Cancelled rows are retained only as historical meal-lock provenance and
+ * are not returned as live calendar events.
  */
 import { z } from "zod";
 import { route } from "@/lib/auth/guard";
@@ -40,6 +41,7 @@ export const GET = route({ auth: "ANY" }, async (ctx) => {
   const rows = await db.calendarEvent.findMany({
     where: {
       institutionId: ctx.institutionId,
+      cancelledAt: null,
       startDate: { lte: localDateMidnightUtc(to) },
       endDate: { gte: localDateMidnightUtc(from) },
     },
