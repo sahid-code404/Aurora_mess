@@ -9,11 +9,16 @@
  * Precedence (evaluateResidentMeal — THE order, spec §28):
  *   !visible → NOT_AVAILABLE/NOT_VISIBLE
  *   calendarDisabled → NOT_AVAILABLE/CALENDAR_DISABLED
+ *   accountInactive → NOT_AVAILABLE/ACCOUNT_INACTIVE
  *   joinedAfterCutoff / membershipInactive → NOT_AVAILABLE/JOINED_AFTER_CUTOFF|MEMBERSHIP_INACTIVE
  *   onLeave → ON_LEAVE/LEAVE_APPROVED
- *   restricted (deficit policy) → NOT_AVAILABLE/POLICY_RESTRICTED
  *   adminOverride set → that state/ADMIN_OVERRIDE
+ *   restricted (deficit policy) → NOT_AVAILABLE/POLICY_RESTRICTED
  *   selected ?? baseline → RESIDENT_SELECTION | BASELINE_DEFAULT
+ *
+ * Hard eligibility gates (visibility, calendar, account/membership eligibility,
+ * join cutoff and approved leave) are never bypassed by an Admin override.
+ * Deficit restriction is a soft policy gate and remains Admin-overridable.
  *
  * Server time is authoritative for every cutoff/lock decision (spec §16).
  */
@@ -166,6 +171,7 @@ export function snapshotConfig(def: Record<string, any>): Record<string, any> {
 export type MealEvalContext = {
   visible: boolean;
   calendarDisabled: boolean;
+  accountInactive: boolean;
   onLeave: boolean;
   restricted: boolean;
   adminOverride: string | null;
@@ -177,35 +183,38 @@ export type MealEvalContext = {
 
 export type EffectiveResult = { effectiveState: string; effectiveReason: string };
 
-/**
- * Normal meal state is calculated first from default + resident choice + leave + restrictions + cutoff.
- */
-export function calculateNormalMealState(ctx: MealEvalContext): EffectiveResult {
+/** Hard availability gates cannot be bypassed by Admin override or Resident choice. */
+export function hardMealEligibilityState(ctx: MealEvalContext): EffectiveResult | null {
   if (!ctx.visible) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "NOT_VISIBLE" };
   if (ctx.calendarDisabled) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "CALENDAR_DISABLED" };
+  if (ctx.accountInactive) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "ACCOUNT_INACTIVE" };
   if (ctx.joinedAfterCutoff) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "JOINED_AFTER_CUTOFF" };
   if (ctx.membershipInactive) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "MEMBERSHIP_INACTIVE" };
   if (ctx.onLeave) return { effectiveState: "ON_LEAVE", effectiveReason: "LEAVE_APPROVED" };
+  return null;
+}
+
+/** Normal state: hard eligibility, then soft policy, Resident choice, baseline. */
+export function calculateNormalMealState(ctx: MealEvalContext): EffectiveResult {
+  const hard = hardMealEligibilityState(ctx);
+  if (hard) return hard;
   if (ctx.restricted) return { effectiveState: "NOT_AVAILABLE", effectiveReason: "POLICY_RESTRICTED" };
   if (ctx.selected != null) return { effectiveState: ctx.selected, effectiveReason: "RESIDENT_SELECTION" };
   return { effectiveState: ctx.baseline === "OFF" ? "OFF" : "ON", effectiveReason: "BASELINE_DEFAULT" };
 }
 
 /**
- * THE precedence (spec §28). Pure function — same inputs, same output.
- * `rm` only supplies adminOverride / selected / baseline via the context.
- *
- * Final state:
- * if admin_override exists:
- *     effective_state = admin_override
- * else:
- *     effective_state = normal_state
- * Show Admin Override only when Admin state is different from normal state.
+ * THE precedence (spec §28). Hard eligibility always wins. Admin override may
+ * override soft policy/Resident choice/baseline but cannot make an unavailable,
+ * non-member, inactive or on-leave resident billable.
  */
 export function evaluateResidentMeal(
   _rm: Record<string, any> | null,
   ctx: MealEvalContext
 ): EffectiveResult {
+  const hard = hardMealEligibilityState(ctx);
+  if (hard) return hard;
+
   const normal = calculateNormalMealState(ctx);
   if (ctx.adminOverride != null) {
     if (ctx.adminOverride !== normal.effectiveState) {
@@ -229,7 +238,12 @@ export async function isRestrictionActive(
 }
 
 export type EvalInputs = {
-  resident: { id: string; membershipEffectiveFrom: Date | null; membershipEffectiveUntil: Date | null };
+  resident: {
+    id: string;
+    status: string;
+    membershipEffectiveFrom: Date | null;
+    membershipEffectiveUntil: Date | null;
+  };
   institutionId: string;
   instance: { serviceDate: Date; cutoffAt: Date; mealDefinitionId: string };
   definition: { defaultVisible?: boolean | null; defaultState?: string | null } | null;
@@ -239,7 +253,7 @@ export type EvalInputs = {
   overrides?: { onLeave?: boolean; skipPolicy?: boolean; skipCalendar?: boolean };
 };
 
-/** Gather live context (calendar, leave, policy, membership) for one resident+instance. */
+/** Gather live context (calendar, leave, policy, membership/account eligibility). */
 export async function buildEvalContext(inputs: EvalInputs): Promise<MealEvalContext> {
   const client = inputs.client ?? db;
   const dayStart = utcDayFloor(inputs.instance.serviceDate);
@@ -292,6 +306,7 @@ export async function buildEvalContext(inputs: EvalInputs): Promise<MealEvalCont
   return {
     visible,
     calendarDisabled,
+    accountInactive: inputs.resident.status !== "ACTIVE",
     onLeave,
     restricted,
     adminOverride: inputs.rm.adminOverrideState ?? null,
@@ -344,7 +359,6 @@ export async function ensureInstancesForRange(
     const weekdays = parseWeekdaysCsv(def.weekdaysCsv);
     const oneTimeKey = def.specificDate ? keyOfUtcDate(new Date(def.specificDate)) : null;
 
-    // Latest immutable version — create v1 snapshot if none exists.
     let latest = await client.mealDefinitionVersion.findFirst({
       where: { mealDefinitionId: def.id },
       orderBy: { version: "desc" },
@@ -388,7 +402,7 @@ export async function ensureInstancesForRange(
         });
         created++;
       } catch (e) {
-        if (isUniqueViolation(e)) continue; // concurrent materialization — fine
+        if (isUniqueViolation(e)) continue;
         throw e;
       }
     }
@@ -416,7 +430,7 @@ export async function ensureResidentMeals(
   toKey: string,
   client: Client = db
 ): Promise<number> {
-  void tz; // tz not needed here — instances already carry instants
+  void tz;
   if (fromKey > toKey) return 0;
   const resident = (await client.user.findUnique({ where: { id: residentId } })) as Record<string, any> | null;
   if (!resident || resident.institutionId !== institutionId) return 0;
@@ -436,7 +450,6 @@ export async function ensureResidentMeals(
   })) as { mealInstanceId: string }[];
   const existingIds = new Set(existing.map((r) => r.mealInstanceId));
 
-  // Bulk context data for the whole range.
   const disableEvents = (await client.calendarEvent.findMany({
     where: { institutionId, disableMeals: true, startDate: { lte: toMid }, endDate: { gte: fromMid } },
     include: { selectedMeals: { select: { mealDefinitionId: true } } },
@@ -453,12 +466,12 @@ export async function ensureResidentMeals(
   let created = 0;
   for (const inst of instances) {
     if (existingIds.has(inst.id)) continue;
-    if (inst.definition?.mealType === "GUEST_ONLY") continue; // separate guest domain
+    if (inst.definition?.mealType === "GUEST_ONLY") continue;
 
     const dayStart = utcDayFloor(inst.serviceDate);
     const dayEnd = new Date(dayStart.getTime() + DAY_MS - 1);
-    if (from && from.getTime() > dayEnd.getTime()) continue; // joins after this day — not a member
-    if (until && until.getTime() < dayStart.getTime()) continue; // membership ended before this day
+    if (from && from.getTime() > dayEnd.getTime()) continue;
+    if (until && until.getTime() < dayStart.getTime()) continue;
 
     const snapshot = parseSnapshot(inst.definitionVersion?.configSnapshotJson);
     const baseline = snapshot?.defaultState === "OFF" || snapshot?.defaultState === "ON"
@@ -474,6 +487,7 @@ export async function ensureResidentMeals(
       calendarDisabled: disableEvents.some(
         (e) => dayCoveredBy(dayStart, e) && scopedRowAffectsMeal(e, inst.mealDefinitionId)
       ),
+      accountInactive: false,
       onLeave: approvedLeaves.some(
         (l) => dayCoveredBy(dayStart, l) && scopedRowAffectsMeal(l, inst.mealDefinitionId)
       ),
@@ -481,7 +495,7 @@ export async function ensureResidentMeals(
       adminOverride: null,
       selected: null,
       baseline: baseline === "OFF" ? "OFF" : "ON",
-      membershipInactive: false, // not possible for rows we create (window checked above)
+      membershipInactive: false,
       joinedAfterCutoff: !!(from && from.getTime() > inst.cutoffAt.getTime()),
     };
     const result = evaluateResidentMeal(null, ctx);
@@ -571,7 +585,6 @@ export async function refreshAndLock(
   })) as Record<string, any>[];
   if (rms.length === 0) return { lockedResidentMeals: 0, updatedInstances };
 
-  // Bulk context for the lock sweep.
   const instanceRows = (await client.mealInstance.findMany({
     where: { id: { in: instanceIds } },
     include: { definition: true, definitionVersion: true },
@@ -593,7 +606,6 @@ export async function refreshAndLock(
     include: { selectedMeals: { select: { mealDefinitionId: true } } },
   })) as ({ residentId: string; startDate: Date; endDate: Date; reviewedAt: Date | null } & MealScopedRow)[];
 
-  // Policy only when enabled (avoids per-resident funds queries otherwise).
   const inst = await getInstitution(institutionId);
   const policyOn = !!inst?.settings.deficitPolicyEnabled && !!inst?.settings.restrictMealsOnDeficit;
   const restrictedByResident = new Map<string, boolean>();
@@ -619,18 +631,13 @@ export async function refreshAndLock(
 
     const ctx: MealEvalContext = {
       visible,
-      // Spec §36 freeze-at-cutoff + §154 promise: facts that appeared AFTER
-      // the cutoff (leave approved late, calendar event created late) must not
-      // retroactively flip a cutoff-passed meal when the row locks late —
-      // only facts already known at cutoff time participate in the frozen
-      // evaluation. The leave-approve route's preview ("meals whose cutoff
-      // already passed will not change") stays truthful.
       calendarDisabled: disableEvents.some(
         (e) =>
           dayCoveredBy(dayStart, e) &&
           scopedRowAffectsMeal(e, instRow.mealDefinitionId) &&
           e.createdAt.getTime() <= new Date(instRow.cutoffAt).getTime()
       ),
+      accountInactive: resident.status !== "ACTIVE",
       onLeave: leaves.some(
         (l) =>
           l.residentId === rm.residentId &&
@@ -654,7 +661,7 @@ export async function refreshAndLock(
         effectiveReason: result.effectiveReason,
         policyState: ctx.restricted ? "RESTRICTED" : null,
         leaveState: ctx.onLeave ? "ON_LEAVE" : null,
-        lockedAt: now, // freeze (spec §36)
+        lockedAt: now,
       },
     });
     locked++;
@@ -668,12 +675,10 @@ export async function refreshAndLock(
 
 /**
  * Re-evaluate every UNLOCKED ResidentMeal in range against live facts
- * (calendar events, approved leave, deficit policy, membership). Locked rows
- * are frozen (spec §36) and never touched. Rows whose computed state is
- * unchanged are not written (idempotent reads). `version` is NOT bumped — the
- * optimistic-concurrency token only guards resident selections.
- * Called by the read paths so calendar/leave/policy changes reflect without
- * eager rewrites (lazy materialization — rows are never rewritten eagerly).
+ * (calendar events, approved leave, deficit policy, account/membership status).
+ * Locked rows are frozen (spec §36) and never touched. Rows whose computed state
+ * is unchanged are not written (idempotent reads). `version` is NOT bumped —
+ * the optimistic-concurrency token only guards resident selections.
  */
 export async function refreshUnlockedEffective(
   institutionId: string,
@@ -744,6 +749,7 @@ export async function refreshUnlockedEffective(
       calendarDisabled: disableEvents.some(
         (e) => dayCoveredBy(dayStart, e) && scopedRowAffectsMeal(e, instRow.mealDefinitionId)
       ),
+      accountInactive: resident.status !== "ACTIVE",
       onLeave: leaves.some(
         (l) =>
           l.residentId === rm.residentId &&
@@ -766,7 +772,7 @@ export async function refreshUnlockedEffective(
       nextPolicyState === (rm.policyState ?? null) &&
       nextLeaveState === (rm.leaveState ?? null)
     ) {
-      continue; // no change — no write (idempotent reads)
+      continue;
     }
     await client.residentMeal.update({
       where: { id: rm.id },
