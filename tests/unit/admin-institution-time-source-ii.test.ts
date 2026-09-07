@@ -33,6 +33,12 @@ describe("admin institution-time source contracts II", () => {
     }
   });
 
+  test("Audit renders event timestamps in the same institution timezone used for month filtering", () => {
+    const audit = source(paths[0]);
+    expect(audit).toContain("fmtDateTime(row.occurredAt, tz)");
+    expect(audit).not.toContain("fmtDateTime(row.occurredAt)}");
+  });
+
   test("Expense defaults financial date from institution business day", () => {
     const expenses = source(paths[3]);
     expect(expenses).toContain("defaultDate={todayKeyInTz(tz)}");
