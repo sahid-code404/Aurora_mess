@@ -114,8 +114,11 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   }
   const rows = await db.refund.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take });
   const page = finishPage(rows, limit, (row) => row.createdAt);
+  // Preserve the authoritative chronological page order. Transaction-internal
+  // PROCESSING states must never be promoted ahead of completed history.
+  const sortedItems = page.items;
 
-  const residentIds = [...new Set(page.items.map((refund) => refund.residentId))];
+  const residentIds = [...new Set(sortedItems.map((refund) => refund.residentId))];
   const profiles = residentIds.length
     ? await db.userProfile.findMany({ where: { userId: { in: residentIds } }, select: { userId: true, fullName: true } })
     : [];
@@ -148,7 +151,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const carriedForwardThisMonth = carryAgg._sum.amountMinor ?? 0;
 
   return {
-    data: page.items.map((refund) => ({
+    data: sortedItems.map((refund) => ({
       ...serializeRefund(refund),
       residentName: nameMap.get(refund.residentId) ?? "Resident",
     })),
