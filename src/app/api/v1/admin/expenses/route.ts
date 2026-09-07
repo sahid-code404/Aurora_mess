@@ -2,15 +2,21 @@
  * /api/v1/admin/expenses (auth ADMIN)
  *
  * POST — record a mess expense (spec §40-41). multipart/form-data:
- *   date (YYYY-MM-DD), categoryId?, description, comment?, proof? File,
+ *   date (YYYY-MM-DD), categoryId?, costClass?, description, comment?, proof? File,
  *   itemsJson = JSON [{itemName, quantity>0, unit?, unitPrice (decimal string)}].
  *   LINE TOTALS AND THE EXPENSE TOTAL ARE ALWAYS SERVER-COMPUTED (spec §275):
  *   lineTotal = round-half-up(quantity × unitPriceMinor); total = Σ lines.
  *   Created as PENDING with source DIRECT — approval is a separate action.
  *
- * GET — expense list with filters (status, q, month=YYYY-MM), category name,
- *   item count, proof flag. Meta: expenses this month, item entries this month,
- *   remaining funds = CASH balance from the ledger.
+ * costClass is the stable billing classification:
+ *   MEAL_COST  — included in the default resident meal-charge pool.
+ *   EXTRA_COST — real cash expense but excluded from meal charge by default.
+ * New UI clients always submit it explicitly. Legacy clients that omit it are
+ * classified using the same deterministic mapping as the migration.
+ *
+ * GET — expense list with filters (status, costClass, q, month=YYYY-MM), category
+ * name, item count, proof flag. Meta separates total approved expense from Meal
+ * Cost and Extra Cost totals and returns ledger CASH as remaining funds.
  */
 import { z } from "zod";
 import { route } from "@/lib/auth/guard";
@@ -29,6 +35,7 @@ import { getAccountBalances } from "@/lib/domain/ledger";
 import { periodBounds } from "@/lib/domain/formula/period-variables";
 import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
 import { assertExpensePeriodMutable } from "@/lib/domain/expense-period";
+import { inferLegacyExpenseCostClass, isExpenseCostClass } from "@/lib/domain/expense-cost-class";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +55,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const form = await readFormData(ctx.req);
   const dateKeyRaw = formText(form, "date");
   const categoryId = formText(form, "categoryId");
+  const costClassRaw = formText(form, "costClass");
   const description = formText(form, "description");
   const comment = formText(form, "comment");
   const proof = formFile(form, "proof");
@@ -55,6 +63,9 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const fields: Record<string, string> = {};
   const dateKey = dateKeySchema.safeParse(dateKeyRaw ?? "");
   if (!dateKey.success) fields.date = "Dates use the YYYY-MM-DD format.";
+  if (costClassRaw && !isExpenseCostClass(costClassRaw)) {
+    fields.costClass = "Choose either Meal Cost or Extra Cost.";
+  }
   if (!description || description.length < 2 || description.length > 200) {
     fields.description = "Describe the expense in 2–200 characters.";
   }
@@ -111,6 +122,12 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
     category = { id: found.id, name: found.name };
   }
 
+  // New clients choose explicitly. Omitted costClass remains supported only to
+  // avoid breaking older clients; its deterministic fallback mirrors migration.
+  const costClass = isExpenseCostClass(costClassRaw)
+    ? costClassRaw
+    : inferLegacyExpenseCostClass(category?.name, "DIRECT");
+
   const expenseDate = new Date(`${dateKey.data!}T00:00:00.000Z`);
 
   // Best-effort deterministic preflight before staging proof bytes. The exact
@@ -153,6 +170,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
             categoryId: category?.id ?? null,
             status: "PENDING",
             source: "DIRECT",
+            costClass,
             description: description!,
             comment: comment ?? null,
             submittedByUserId: ctx.user.id,
@@ -181,6 +199,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
               displayNumber,
               hasProof: Boolean(proofFile),
               categoryName: category?.name ?? null,
+              costClass,
+              includedInMealCharge: costClass === "MEAL_COST",
             },
             ip: ctx.req.headers.get("x-forwarded-for"),
             userAgent: ctx.req.headers.get("user-agent") ?? undefined,
@@ -227,6 +247,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const url = new URL(ctx.req.url);
   const status = url.searchParams.get("status") ?? undefined;
+  const costClass = url.searchParams.get("costClass") ?? undefined;
   const q = (url.searchParams.get("q") ?? "").trim();
   const month = url.searchParams.get("month") ?? undefined;
   const cursor = url.searchParams.get("cursor") ?? undefined;
@@ -235,6 +256,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const fields: Record<string, string> = {};
   if (status && !["PENDING", "APPROVED", "REJECTED", "VOIDED"].includes(status)) {
     fields.status = "Unknown expense status filter.";
+  }
+  if (costClass && !isExpenseCostClass(costClass)) {
+    fields.costClass = "Unknown expense classification filter.";
   }
   let monthYear: { year: number; month: number } | null = null;
   if (month) {
@@ -254,6 +278,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   const base: Record<string, unknown> = { institutionId: ctx.institutionId };
   if (status) base.status = status;
+  if (costClass) base.costClass = costClass;
   if (monthYear) {
     const bounds = periodBounds(monthYear.year, monthYear.month, tz);
     base.date = { gte: bounds.startAt, lt: bounds.endExclusiveAt };
@@ -279,10 +304,23 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const currentYear = monthYear?.year ?? Number(new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric" }).format(now));
   const currentMonth = monthYear?.month ?? Number(new Intl.DateTimeFormat("en-CA", { timeZone: tz, month: "2-digit" }).format(now));
   const bounds = periodBounds(currentYear, currentMonth, tz);
-  const [expensesAgg, entriesThisMonth, accounts, pendingApprovalCount] = await Promise.all([
+  const monthWhere = {
+    institutionId: ctx.institutionId,
+    status: "APPROVED",
+    date: { gte: bounds.startAt, lt: bounds.endExclusiveAt },
+  };
+  const [expensesAgg, mealExpensesAgg, extraExpensesAgg, entriesThisMonth, accounts, pendingApprovalCount] = await Promise.all([
     db.expense.aggregate({
       _sum: { totalMinor: true },
-      where: { institutionId: ctx.institutionId, status: "APPROVED", date: { gte: bounds.startAt, lt: bounds.endExclusiveAt } },
+      where: monthWhere,
+    }),
+    db.expense.aggregate({
+      _sum: { totalMinor: true },
+      where: { ...monthWhere, costClass: "MEAL_COST" },
+    }),
+    db.expense.aggregate({
+      _sum: { totalMinor: true },
+      where: { ...monthWhere, costClass: "EXTRA_COST" },
     }),
     db.expenseItem.count({
       where: {
@@ -298,6 +336,9 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     }),
   ]);
   const cash = accounts.find((a) => a.code === "CASH");
+  const totalApproved = expensesAgg._sum.totalMinor ?? 0;
+  const mealApproved = mealExpensesAgg._sum.totalMinor ?? 0;
+  const extraApproved = extraExpensesAgg._sum.totalMinor ?? 0;
 
   const sortedItems = [...page.items].sort((a, b) => {
     const pA = a.status === "PENDING" ? 0 : 1;
@@ -311,9 +352,13 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     meta: {
       nextCursor: page.nextCursor,
       month: `${currentYear}-${String(currentMonth).padStart(2, "0")}`,
-      expensesThisMonth: expensesAgg._sum.totalMinor ?? 0,
-      expensesThisMonthFormatted: formatMinor(expensesAgg._sum.totalMinor ?? 0),
-      entriesThisMonth: entriesThisMonth,
+      expensesThisMonth: totalApproved,
+      expensesThisMonthFormatted: formatMinor(totalApproved),
+      mealExpensesThisMonth: mealApproved,
+      mealExpensesThisMonthFormatted: formatMinor(mealApproved),
+      extraExpensesThisMonth: extraApproved,
+      extraExpensesThisMonthFormatted: formatMinor(extraApproved),
+      entriesThisMonth,
       pendingApproval: pendingApprovalCount,
       remainingFunds: cash?.balanceMinor ?? 0,
       remainingFundsFormatted: formatMinor(cash?.balanceMinor ?? 0),
