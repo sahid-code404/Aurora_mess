@@ -2,7 +2,7 @@
  * GET /api/v1/admin/payments — institution payment queue (auth ADMIN).
  * Filters: status, q (display number / reference / resident name or email).
  * Keyset cursor on submittedAt. Meta KPIs: received this month (approved),
- * pending approval, refunds completed this month.
+ * pending approval, completed cash refunds, and carry-forward decisions.
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
@@ -51,7 +51,6 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   let searchConditions: Record<string, unknown>[] | null = null;
   if (q) {
-    // Resident search resolves names/emails first (no relations on Payment).
     const matched = await db.user.findMany({
       where: {
         institutionId: ctx.institutionId,
@@ -81,7 +80,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     : [];
   const nameMap = new Map(profiles.map((p) => [p.userId, p.fullName]));
 
-  const [receivedAgg, pendingCount, refundsAgg, generatedBillCount] = await Promise.all([
+  const [receivedAgg, pendingCount, cashRefundsAgg, carryForwardAgg, generatedBillCount] = await Promise.all([
     db.payment.aggregate({
       _sum: { amountMinor: true },
       where: {
@@ -96,6 +95,16 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       where: {
         institutionId: ctx.institutionId,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
         createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
@@ -111,6 +120,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     return b.submittedAt.getTime() - a.submittedAt.getTime();
   });
 
+  const receivedThisMonth = receivedAgg._sum.amountMinor ?? 0;
+  const refundsThisMonth = cashRefundsAgg._sum.amountMinor ?? 0;
+  const carriedForwardThisMonth = carryForwardAgg._sum.amountMinor ?? 0;
+
   return {
     data: sortedItems.map((p) => ({
       ...serializePayment(p),
@@ -120,11 +133,13 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     meta: {
       nextCursor: page.nextCursor,
       month: bounds.key,
-      receivedThisMonth: receivedAgg._sum.amountMinor ?? 0,
-      receivedThisMonthFormatted: formatMinor(receivedAgg._sum.amountMinor ?? 0),
+      receivedThisMonth,
+      receivedThisMonthFormatted: formatMinor(receivedThisMonth),
       pendingApproval: pendingCount,
-      refundsThisMonth: refundsAgg._sum.amountMinor ?? 0,
-      refundsThisMonthFormatted: formatMinor(refundsAgg._sum.amountMinor ?? 0),
+      refundsThisMonth,
+      refundsThisMonthFormatted: formatMinor(refundsThisMonth),
+      carriedForwardThisMonth,
+      carriedForwardThisMonthFormatted: formatMinor(carriedForwardThisMonth),
       hasGeneratedBills: generatedBillCount > 0,
     },
   };

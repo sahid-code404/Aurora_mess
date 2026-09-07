@@ -2,10 +2,13 @@
  * EXPENSE VARIABLE PROVIDER (spec §11, §12)
  *
  * CRITICAL RULE (spec §12):
- * total_market_expense counts ONLY approved official expenses.
- * Unapproved market task submissions are excluded.
+ * total_market_expense counts ONLY approved official market-related expenses.
+ * Unapproved market task submissions and unrelated approved costs are excluded.
  */
 import { PeriodBounds } from "../period-variables";
+
+const MARKET_CATEGORIES = new Set(["MARKET", "GROCERY", "VEGETABLES", "MESS", "FOOD"]);
+const SPECIFIC_CATEGORIES = new Set([...MARKET_CATEGORIES, "FUEL", "GAS"]);
 
 export async function resolveExpenseVariables(
   institutionId: string,
@@ -14,11 +17,12 @@ export async function resolveExpenseVariables(
 ): Promise<Record<string, number>> {
   const expenseDateRange = { gte: bounds.startAt, lt: bounds.endExclusiveAt };
 
-  const [totalAgg, approvedAgg, marketAgg, expensesList, count] = await Promise.all([
+  const [approvedAgg, marketAgg, expensesList, count] = await Promise.all([
     client.expense.aggregate({
       _sum: { totalMinor: true },
       where: {
         institutionId,
+        status: "APPROVED",
         date: expenseDateRange,
       },
     }),
@@ -28,16 +32,7 @@ export async function resolveExpenseVariables(
         institutionId,
         status: "APPROVED",
         date: expenseDateRange,
-      },
-    }),
-    // Approved market expenses (both direct mess purchases and approved task purchases)
-    client.expense.aggregate({
-      _sum: { totalMinor: true },
-      where: {
-        institutionId,
-        status: "APPROVED",
-        date: expenseDateRange,
-        category: { name: { in: ["MARKET", "GROCERY", "VEGETABLES", "MESS", "FOOD"] } },
+        category: { name: { in: [...MARKET_CATEGORIES] } },
       },
     }),
     client.expense.findMany({
@@ -61,23 +56,25 @@ export async function resolveExpenseVariables(
   ]);
 
   const catMap: Record<string, number> = {};
+  let otherTotal = 0;
   for (const exp of expensesList) {
     const catName = exp.category?.name?.toUpperCase() ?? "OTHER";
     catMap[catName] = (catMap[catName] ?? 0) + exp.totalMinor;
+    if (!SPECIFIC_CATEGORIES.has(catName)) otherTotal += exp.totalMinor;
   }
 
   const approvedTotal = approvedAgg._sum.totalMinor ?? 0;
-  // If market-specific category sum is 0, fall back to approved total so standard mess setups work
-  const marketTotal = (marketAgg._sum.totalMinor ?? 0) > 0 ? (marketAgg._sum.totalMinor ?? 0) : approvedTotal;
+  const marketTotal = marketAgg._sum.totalMinor ?? 0;
 
   return {
-    total_expense: totalAgg._sum.totalMinor ?? 0,
+    // Legacy total_expense is kept aligned with the authoritative approved total.
+    total_expense: approvedTotal,
     total_approved_expense: approvedTotal,
     total_market_expense: marketTotal,
     total_grocery_expense: catMap["GROCERY"] ?? 0,
     total_vegetable_expense: catMap["VEGETABLES"] ?? 0,
     total_fuel_expense: (catMap["FUEL"] ?? 0) + (catMap["GAS"] ?? 0),
-    total_other_expense: catMap["OTHER"] ?? 0,
+    total_other_expense: otherTotal,
     expense_count: count,
     // Legacy aliases
     total_market_cost: marketTotal,

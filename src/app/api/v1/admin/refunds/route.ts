@@ -1,12 +1,12 @@
 /**
  * /api/v1/admin/refunds (auth ADMIN)
  *
- * POST — issue a refund / resolve excess credit.
+ * POST — issue a cash refund / resolve excess credit by carry-forward.
  * The financial mutation lives in the refund domain service. It serializes
  * resident financial mutations with the resident mutex before re-reading
  * eligibility and posts ISSUE_REFUND journals against the refund ID itself.
  *
- * GET — searchable refund list with resident names (keyset cursor).
+ * GET — searchable refund/carry-forward list with resident names (keyset cursor).
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
@@ -62,8 +62,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
 
   sweepOutbox(20).catch(() => {});
 
-  // Fresh post-commit summary: this is a read model for the response, not part
-  // of the financial transaction's correctness boundary.
   const summaryAfter = await residentFundsSummary(refund.residentId);
 
   return {
@@ -79,9 +77,6 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   };
 });
 
-// ---------------------------------------------------------------------------
-// GET — refund list
-// ---------------------------------------------------------------------------
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const url = new URL(ctx.req.url);
   const cursor = url.searchParams.get("cursor") ?? undefined;
@@ -93,8 +88,6 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   let searchConditions: Record<string, unknown>[] | null = null;
   if (q) {
-    // Refund rows intentionally store residentId only. Resolve the visible
-    // resident identity first, then combine it with refund-native text fields.
     const matchedResidents = await db.user.findMany({
       where: {
         institutionId: ctx.institutionId,
@@ -121,8 +114,11 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   }
   const rows = await db.refund.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take });
   const page = finishPage(rows, limit, (row) => row.createdAt);
+  // Preserve the authoritative chronological page order. Transaction-internal
+  // PROCESSING states must never be promoted ahead of completed history.
+  const sortedItems = page.items;
 
-  const residentIds = [...new Set(page.items.map((refund) => refund.residentId))];
+  const residentIds = [...new Set(sortedItems.map((refund) => refund.residentId))];
   const profiles = residentIds.length
     ? await db.userProfile.findMany({ where: { userId: { in: residentIds } }, select: { userId: true, fullName: true } })
     : [];
@@ -130,19 +126,29 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
 
   const inst = await getInstitution(ctx.institutionId);
   const bounds = currentPeriodBounds(inst?.timezone ?? "UTC");
-  const thisMonthAgg = await db.refund.aggregate({
-    _sum: { amountMinor: true },
-    where: {
-      institutionId: ctx.institutionId,
-      status: "COMPLETED",
-      createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
-    },
-  });
+  const [cashAgg, carryAgg] = await Promise.all([
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+  ]);
 
-  // Refund creation is atomic: only committed COMPLETED / VOIDED rows are
-  // externally visible. Preserve the keyset order rather than prioritizing
-  // unreachable PENDING / PROCESSING display states.
-  const sortedItems = page.items;
+  const refundsThisMonth = cashAgg._sum.amountMinor ?? 0;
+  const carriedForwardThisMonth = carryAgg._sum.amountMinor ?? 0;
 
   return {
     data: sortedItems.map((refund) => ({
@@ -151,8 +157,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     })),
     meta: {
       nextCursor: page.nextCursor,
-      refundsThisMonth: thisMonthAgg._sum.amountMinor ?? 0,
-      refundsThisMonthFormatted: formatMinor(thisMonthAgg._sum.amountMinor ?? 0),
+      refundsThisMonth,
+      refundsThisMonthFormatted: formatMinor(refundsThisMonth),
+      carriedForwardThisMonth,
+      carriedForwardThisMonthFormatted: formatMinor(carriedForwardThisMonth),
     },
   };
 });

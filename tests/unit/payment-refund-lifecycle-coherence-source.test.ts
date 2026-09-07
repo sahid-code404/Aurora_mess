@@ -34,12 +34,13 @@ describe("pooled refund / payment lifecycle source contracts", () => {
     );
   });
 
-  test("all approved-payment financial aggregates now use APPROVED as the single credit state", () => {
+  test("all approved-payment financial aggregates use APPROVED as the single credit state", () => {
     for (const path of [
       "src/app/api/v1/admin/payments/route.ts",
       "src/app/api/v1/payments/route.ts",
       "src/app/api/v1/admin/funds/route.ts",
       "src/lib/domain/funds.ts",
+      "src/lib/domain/institution-financial-totals.ts",
       "src/lib/domain/formula/providers/funds.ts",
       "src/lib/domain/billing.ts",
     ]) {
@@ -48,8 +49,11 @@ describe("pooled refund / payment lifecycle source contracts", () => {
     }
 
     expect(source("src/lib/domain/funds.ts")).toContain('where: { residentId, status: "APPROVED" }');
-    expect(source("src/lib/domain/formula/providers/funds.ts")).toContain(
+    expect(source("src/lib/domain/institution-financial-totals.ts")).toContain(
       'where: { institutionId, status: "APPROVED" }'
+    );
+    expect(source("src/lib/domain/formula/providers/funds.ts")).toContain(
+      "institutionResidentFinancialTotals(institutionId, client)"
     );
   });
 
@@ -103,6 +107,8 @@ describe("pooled refund / payment lifecycle source contracts", () => {
     expect(ui).not.toContain("refundPendingCount");
     expect(ui).toContain('value={meta?.refundsThisMonthFormatted ?? "₹0.00"}');
     expect(ui).toContain('"Processed this month"');
+    expect(api).toContain('mode: "ISSUE_REFUND"');
+    expect(api).toContain('mode: "CARRY_FORWARD"');
   });
 
   test("migration normalizes any legacy refund-labelled Payment rows to APPROVED", () => {

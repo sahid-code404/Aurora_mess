@@ -11,7 +11,8 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/v1/refunds (auth RESIDENT)
  *
- * List refunds and credit adjustments issued for the authenticated resident.
+ * List cash refunds and carry-forward decisions for the authenticated resident.
+ * Money KPIs keep cash payouts separate from non-cash carry-forward decisions.
  */
 export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const url = new URL(ctx.req.url);
@@ -33,13 +34,14 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
 
   const inst = await getInstitution(ctx.institutionId);
   const bounds = currentPeriodBounds(inst?.timezone ?? "UTC");
-  const [thisMonthAgg, totalAgg] = await Promise.all([
+  const [thisMonthCashAgg, totalCashAgg, thisMonthCarryAgg, totalCarryAgg] = await Promise.all([
     db.refund.aggregate({
       _sum: { amountMinor: true },
       where: {
         institutionId: ctx.institutionId,
         residentId: ctx.user.id,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
         createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
@@ -49,18 +51,47 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
         institutionId: ctx.institutionId,
         residentId: ctx.user.id,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        residentId: ctx.user.id,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId: ctx.institutionId,
+        residentId: ctx.user.id,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
       },
     }),
   ]);
+
+  const refundsThisMonth = thisMonthCashAgg._sum.amountMinor ?? 0;
+  const totalRefunded = totalCashAgg._sum.amountMinor ?? 0;
+  const carriedForwardThisMonth = thisMonthCarryAgg._sum.amountMinor ?? 0;
+  const totalCarriedForward = totalCarryAgg._sum.amountMinor ?? 0;
 
   return {
     data: page.items.map((r) => serializeRefund(r)),
     meta: {
       nextCursor: page.nextCursor,
-      refundsThisMonth: thisMonthAgg._sum.amountMinor ?? 0,
-      refundsThisMonthFormatted: formatMinor(thisMonthAgg._sum.amountMinor ?? 0),
-      totalRefunded: totalAgg._sum.amountMinor ?? 0,
-      totalRefundedFormatted: formatMinor(totalAgg._sum.amountMinor ?? 0),
+      refundsThisMonth,
+      refundsThisMonthFormatted: formatMinor(refundsThisMonth),
+      totalRefunded,
+      totalRefundedFormatted: formatMinor(totalRefunded),
+      carriedForwardThisMonth,
+      carriedForwardThisMonthFormatted: formatMinor(carriedForwardThisMonth),
+      totalCarriedForward,
+      totalCarriedForwardFormatted: formatMinor(totalCarriedForward),
     },
   };
 });

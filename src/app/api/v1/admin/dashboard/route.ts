@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/admin/dashboard — the admin home view (auth ADMIN, spec §205-210):
  * institution-local greeting; KPIs (active residents, meals confirmed today,
- * available funds total, current per-meal charge estimate — null-safe);
+ * available institution cash, current per-meal charge estimate — null-safe);
  * "needs attention" queue (ONLY actionable counts, each linking to its view);
  * recent activity = the last 12 audit events with human copy.
  */
@@ -11,7 +11,8 @@ import { getInstitution } from "@/lib/institution";
 import { formatMinor } from "@/lib/money";
 import { dateKeyInTz, greetingFor, localDateMidnightUtc, partsInTz } from "@/lib/time";
 import { describeAuditEvent } from "@/lib/domain/activity";
-import { residentFundsSummary } from "@/lib/domain/funds";
+import { getAccountBalances } from "@/lib/domain/ledger";
+import { institutionResidentFinancialTotals } from "@/lib/domain/institution-financial-totals";
 import { currentPeriodBounds, gatherPeriodVariables } from "@/lib/domain/formula/period-variables";
 import { resolveFormulaVersionForPeriod } from "@/lib/domain/formula/versions";
 import { FormulaAst } from "@/lib/domain/formula/ast";
@@ -32,7 +33,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   sweepOutbox(30).catch(() => {});
 
   const [
-    residents,
+    activeResidentCount,
     mealsToday,
     guestsTodayAgg,
     pendingResidentApprovals,
@@ -42,11 +43,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     pendingExpenses,
     recentAudit,
   ] = await Promise.all([
-    db.user.findMany({
-      where: { institutionId: ctx.institutionId, role: "RESIDENT", status: "ACTIVE" },
-      select: { id: true },
-      take: 200,
-    }),
+    db.user.count({ where: { institutionId: ctx.institutionId, role: "RESIDENT", status: "ACTIVE" } }),
     db.residentMeal.count({
       where: {
         institutionId: ctx.institutionId,
@@ -78,13 +75,15 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     }),
   ]);
 
-  // Funds + meal charge (parallel, bounded by the resident cap).
-  const [summaries, variables, formulaVersion] = await Promise.all([
-    Promise.all(residents.map((r) => residentFundsSummary(r.id))),
+  const [variables, formulaVersion, accounts, residentTotals] = await Promise.all([
     gatherPeriodVariables(ctx.institutionId, bounds.year, bounds.month),
     resolveFormulaVersionForPeriod(ctx.institutionId, bounds.startAt),
+    getAccountBalances(ctx.institutionId),
+    institutionResidentFinancialTotals(ctx.institutionId),
   ]);
-  const availableFunds = summaries.reduce((s, x) => s + Math.max(0, x.availableMinor), 0);
+  const cashBalance = accounts.find((account) => account.code === "CASH")?.balanceMinor ?? 0;
+  const availableFunds = Math.max(0, cashBalance);
+  const cashDeficit = Math.max(0, -cashBalance);
 
   let mealCharge: number | null = null;
   if (formulaVersion) {
@@ -112,7 +111,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       href: "#/admin/tasks",
     },
     { key: "pendingExpenses", label: "Expenses to review", count: pendingExpenses, href: "#/admin/expenses" },
-  ].filter((item) => item.count > 0) // actionable only (§210)
+  ].filter((item) => item.count > 0)
    .sort((a, b) => b.count - a.count);
 
   return {
@@ -120,19 +119,24 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       greeting: {
         text: `${greeting.text}`,
         icon: greeting.icon,
-        // The client greeting contract is intentionally non-null. A missing
-        // institution row is abnormal but must never leak the literal `null`
-        // into dashboard copy while the rest of the read model remains usable.
         institutionName: inst?.name ?? "Institution",
         localTime: `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`,
       },
       kpis: {
-        residents: residents.length,
+        residents: activeResidentCount,
         mealsToday,
         /** Today's guests — per-time/day totals INCLUDE guests. */
         guestsToday: guestsTodayAgg._sum.quantity ?? 0,
         availableFunds,
         availableFundsFormatted: formatMinor(availableFunds),
+        cashBalance,
+        cashBalanceFormatted: formatMinor(cashBalance),
+        cashDeficit,
+        cashDeficitFormatted: formatMinor(cashDeficit),
+        residentCreditLiability: residentTotals.residentCreditLiabilityMinor,
+        residentCreditLiabilityFormatted: formatMinor(residentTotals.residentCreditLiabilityMinor),
+        residentOutstanding: residentTotals.outstandingBillsMinor,
+        residentOutstandingFormatted: formatMinor(residentTotals.outstandingBillsMinor),
         mealCharge,
         mealChargeFormatted: mealCharge === null ? null : formatMinor(mealCharge),
         period: { year: bounds.year, month: bounds.month },

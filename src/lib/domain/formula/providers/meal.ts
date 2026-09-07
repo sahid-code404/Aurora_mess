@@ -16,13 +16,11 @@ export async function resolveMealVariables(
   const serviceDateRange = { gte: bounds.startAt, lt: bounds.endExclusiveAt };
   const now = new Date();
 
-  // Spec §8 & Cutoff Rule:
-  // Count only confirmed regular Resident meals:
-  // 1. Locked (lockedAt is not null)
-  // 2. OR Admin Override (adminOverrideState is ON)
-  // 3. OR Cutoff has already passed (cutoffAt <= now)
-  // 4. OR Meal instance is LOCKED, SERVICE_ACTIVE, or COMPLETED
-  // Unconfirmed future/open meals before cutoff are completely excluded.
+  // Match billing's authoritative confirmation kernel exactly:
+  // 1. Persisted locked row
+  // 2. OR explicit Admin override
+  // 3. OR authoritative lockAt has passed
+  // 4. OR instance lifecycle is already locked/service-active/completed
   const confirmedOnFilter = {
     institutionId,
     effectiveState: "ON",
@@ -30,7 +28,7 @@ export async function resolveMealVariables(
     OR: [
       { lockedAt: { not: null } },
       { adminOverrideState: "ON" },
-      { mealInstance: { cutoffAt: { lte: now } } },
+      { mealInstance: { lockAt: { lte: now } } },
       { mealInstance: { status: { in: ["LOCKED", "SERVICE_ACTIVE", "COMPLETED"] } } },
     ],
   };
@@ -42,7 +40,7 @@ export async function resolveMealVariables(
     OR: [
       { lockedAt: { not: null } },
       { adminOverrideState: "OFF" },
-      { mealInstance: { cutoffAt: { lte: now } } },
+      { mealInstance: { lockAt: { lte: now } } },
       { mealInstance: { status: { in: ["LOCKED", "SERVICE_ACTIVE", "COMPLETED"] } } },
     ],
   };
