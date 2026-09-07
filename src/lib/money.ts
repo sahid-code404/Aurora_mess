@@ -6,6 +6,11 @@
 export const MINOR_DIGITS = 2;
 export const MINOR_FACTOR = 10 ** MINOR_DIGITS; // 100
 
+const BIG_ZERO = BigInt(0);
+const BIG_ONE = BigInt(1);
+const BIG_TWO = BigInt(2);
+const BIG_TEN = BigInt(10);
+
 /** Parse a user-entered decimal string ("1234.56", "1,234.56", "₹1234") → minor units. */
 export function parseDecimalToMinor(input: string): number | null {
   const cleaned = String(input ?? "")
@@ -63,7 +68,7 @@ export function divideMinorRoundHalfUp(numerator: number, denominator: number): 
 /** Convert a finite JS number's canonical decimal representation to an exact rational. */
 function decimalNumberRatio(value: number): { numerator: bigint; denominator: bigint } {
   if (!Number.isFinite(value)) throw new Error("NON_FINITE_MULTIPLIER");
-  if (value === 0) return { numerator: 0n, denominator: 1n };
+  if (value === 0) return { numerator: BIG_ZERO, denominator: BIG_ONE };
 
   const negative = value < 0;
   const raw = Math.abs(value).toString().toLowerCase();
@@ -75,13 +80,13 @@ function decimalNumberRatio(value: number): { numerator: bigint; denominator: bi
   let scale = fraction.length - exponent;
 
   if (scale < 0) {
-    numerator *= 10n ** BigInt(-scale);
+    numerator *= BIG_TEN ** BigInt(-scale);
     scale = 0;
   }
 
   return {
     numerator: negative ? -numerator : numerator,
-    denominator: 10n ** BigInt(scale),
+    denominator: BIG_TEN ** BigInt(scale),
   };
 }
 
@@ -98,11 +103,11 @@ export function multiplyRoundHalfUp(quantity: number, unitPriceMinor: number): n
 
   const ratio = decimalNumberRatio(quantity);
   const signedProduct = ratio.numerator * BigInt(unitPriceMinor);
-  const negative = signedProduct < 0n;
+  const negative = signedProduct < BIG_ZERO;
   const absProduct = negative ? -signedProduct : signedProduct;
   const quotient = absProduct / ratio.denominator;
   const remainder = absProduct % ratio.denominator;
-  const roundedAbs = remainder * 2n >= ratio.denominator ? quotient + 1n : quotient;
+  const roundedAbs = remainder * BIG_TWO >= ratio.denominator ? quotient + BIG_ONE : quotient;
   const rounded = negative ? -roundedAbs : roundedAbs;
 
   const result = Number(rounded);
