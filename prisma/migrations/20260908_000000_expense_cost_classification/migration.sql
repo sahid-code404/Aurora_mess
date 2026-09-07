@@ -6,15 +6,21 @@
 ALTER TABLE "Expense"
 ADD COLUMN "costClass" TEXT NOT NULL DEFAULT 'EXTRA_COST';
 
--- Preserve historical billing semantics deterministically. Existing official
--- market/food/fuel categories were the old meal-expense heuristic, and approved
--- MARKET_PURCHASE task expenses were always meal purchases.
+-- Preserve historical billing semantics deterministically. Existing common
+-- food/market/cooking categories are migrated to Meal Cost; everything else
+-- remains Extra Cost and can be audited/reclassified while its period is open.
 UPDATE "Expense" AS e
 SET "costClass" = 'MEAL_COST'
 FROM "ExpenseCategory" AS c
 WHERE e."categoryId" = c."id"
-  AND UPPER(TRIM(c."name")) IN ('MARKET', 'GROCERY', 'VEGETABLES', 'MESS', 'FOOD', 'FUEL', 'GAS');
+  AND UPPER(TRIM(c."name")) IN (
+    'MARKET', 'GROCERY', 'VEGETABLES', 'MESS', 'FOOD',
+    'FUEL', 'GAS', 'GAS & FUEL', 'COOKING GAS',
+    'DAIRY', 'MILK', 'RICE', 'STAPLES', 'MEAT', 'FISH',
+    'EGGS', 'SPICES', 'COOKING OIL', 'OIL'
+  );
 
+-- MARKET_PURCHASE task approval has always represented official meal shopping.
 UPDATE "Expense"
 SET "costClass" = 'MEAL_COST'
 WHERE "source" = 'TASK';
