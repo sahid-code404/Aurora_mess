@@ -266,7 +266,7 @@ export default function AdminAudit() {
                         </span>
                       </span>
                       <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span className="kpi-num text-[11px] text-muted-foreground">{fmtDateTime(row.occurredAt)}</span>
+                        <span className="kpi-num text-[11px] text-muted-foreground">{fmtDateTime(row.occurredAt, tz)}</span>
                         <Chip tone={row.actorRole === "ADMIN" ? "frost" : "neutral"}>{row.actorRole ?? "—"}</Chip>
                         {row.reason && (
                           <span className="min-w-0 flex-1 basis-24 truncate text-[11px] italic text-muted-foreground/80">

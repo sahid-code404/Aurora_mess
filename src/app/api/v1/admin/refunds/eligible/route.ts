@@ -13,43 +13,74 @@ import { refundEligibilityForResident } from "@/lib/domain/refunds";
 
 export const dynamic = "force-dynamic";
 
+const RESIDENT_BATCH_SIZE = 100;
+
+type RefundQueueResident = {
+  id: string;
+  email: string;
+  profile: { fullName: string; roomNumber: string | null } | null;
+};
+
+type RefundQueueRow = {
+  resident: RefundQueueResident;
+  eligibility: Awaited<ReturnType<typeof refundEligibilityForResident>>;
+};
+
 export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const url = new URL(ctx.req.url);
   const q = (url.searchParams.get("q") ?? "").trim();
 
-  const residents = await db.user.findMany({
-    where: {
-      institutionId: ctx.institutionId,
-      role: "RESIDENT",
-      // ACTIVE is the normal case. INACTIVE/PENDING_DELETION remain here
-      // because historical bills and excess credit survive account lifecycle
-      // changes. Pre-approval/rejected accounts cannot have legitimate bills.
-      status: { in: ["ACTIVE", "INACTIVE", "PENDING_DELETION"] },
-      ...(q
-        ? {
-            OR: [
-              { email: { contains: q } },
-              { profile: { fullName: { contains: q } } },
-              { profile: { roomNumber: { contains: q } } },
-            ],
-          }
-        : {}),
-    },
-    select: {
-      id: true,
-      email: true,
-      profile: { select: { fullName: true, roomNumber: true } },
-    },
-    orderBy: { createdAt: "asc" },
-    take: 200,
-  });
+  const residentWhere = {
+    institutionId: ctx.institutionId,
+    role: "RESIDENT",
+    // ACTIVE is the normal case. INACTIVE/PENDING_DELETION remain here
+    // because historical bills and excess credit survive account lifecycle
+    // changes. Pre-approval/rejected accounts cannot have legitimate bills.
+    status: { in: ["ACTIVE", "INACTIVE", "PENDING_DELETION"] },
+    ...(q
+      ? {
+          OR: [
+            { email: { contains: q } },
+            { profile: { fullName: { contains: q } } },
+            { profile: { roomNumber: { contains: q } } },
+          ],
+        }
+      : {}),
+  };
 
-  const eligibility = await Promise.all(
-    residents.map(async (resident) => ({
-      resident,
-      eligibility: await refundEligibilityForResident(resident.id),
-    }))
-  );
+  // Never cap money owed to residents because of a UI safety limit. Walk the
+  // entire population in stable keyset batches while keeping eligibility fan-out
+  // bounded to RESIDENT_BATCH_SIZE at any one time.
+  const eligibility: RefundQueueRow[] = [];
+  let cursorId: string | undefined;
+
+  while (true) {
+    const residents = await db.user.findMany({
+      where: residentWhere,
+      select: {
+        id: true,
+        email: true,
+        profile: { select: { fullName: true, roomNumber: true } },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: RESIDENT_BATCH_SIZE,
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+    });
+
+    if (residents.length === 0) break;
+
+    const batch = await Promise.all(
+      residents.map(async (resident) => ({
+        resident,
+        eligibility: await refundEligibilityForResident(resident.id),
+      }))
+    );
+    eligibility.push(...batch);
+
+    if (residents.length < RESIDENT_BATCH_SIZE) break;
+    cursorId = residents[residents.length - 1]?.id;
+    if (!cursorId) break;
+  }
 
   const generatedBillRows = eligibility.filter((row) => row.eligibility.latestBill);
   const candidates = eligibility
@@ -95,6 +126,7 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       hasGeneratedBills: generatedBillRows.length > 0,
       latestBillGeneratedAt: latestBillGeneratedAt?.toISOString() ?? null,
       carriedForwardCount: eligibility.filter((row) => row.eligibility.reason === "CARRIED_FORWARD").length,
+      scannedResidentCount: eligibility.length,
     },
   };
 });
