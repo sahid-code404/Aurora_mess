@@ -440,14 +440,14 @@ model PaymentStatusHistory {
 // ---------------------------------------------------------------------
 
 model Refund {
-  id              String    @id @default(cuid())
-  institutionId   String
-  residentId      String
-  paymentId       String? // legacy provenance only; new refunds use resident-level pooled credit
-  amountMinor     Int
-  mode            String // CARRY_FORWARD | ISSUE_REFUND
-  reason          String
-  destination     String?
+  id                String    @id @default(cuid())
+  institutionId     String
+  residentId        String
+  paymentId         String? // legacy provenance only; new refunds use resident-level pooled credit
+  amountMinor       Int
+  mode              String // CARRY_FORWARD | ISSUE_REFUND
+  reason            String
+  destination       String?
   status            String // COMPLETED | VOIDED; PROCESSING is transaction-internal, legacy PENDING/FAILED are invalid
   journalId         String?
   reversalJournalId String?
@@ -487,6 +487,7 @@ model Expense {
   categoryId             String?
   status                 String    @default("PENDING") // PENDING | APPROVED | REJECTED | VOIDED
   source                 String    @default("DIRECT") // DIRECT | TASK
+  costClass              String    @default("EXTRA_COST") // MEAL_COST | EXTRA_COST
   description            String
   comment                String?
   submittedByUserId      String
@@ -505,6 +506,7 @@ model Expense {
   items    ExpenseItem[]
 
   @@index([institutionId, status, date])
+  @@index([institutionId, status, date, costClass])
 }
 
 model ExpenseItem {
@@ -643,7 +645,7 @@ model RuleVersion {
   status           String    @default("DRAFT") // DRAFT | ACTIVE | HISTORICAL
   createdByUserId  String?
   reason           String?
-  createdAt        DateTime  @default(now())
+  createdAt         DateTime  @default(now())
 
   definition RuleDefinition @relation(fields: [ruleDefinitionId], references: [id], onDelete: Cascade)
 
@@ -938,7 +940,7 @@ model OutboxEvent {
   id            String    @id @default(cuid())
   institutionId String
   type          String // NOTIFICATION | EMAIL | EXPORT
-  payloadJson   String
+  payloadJson  String
   status        String    @default("PENDING") // PENDING | PROCESSED | FAILED
   attempts      Int       @default(0)
   lastError     String?

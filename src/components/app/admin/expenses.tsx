@@ -1,13 +1,9 @@
 "use client";
 
 /**
- * Admin Expenses — record mess expenses (server-computed totals), review
- * (approve / reject) and void approved ones with reversals.
- * BoardOps composition, meals-page anatomy: month capsule → KPIs → action
- * bar → ONE Expenses section card (Receipt icon header, filter pills
- * INSIDE) holding compact status-orb rows.
- * GET /api/v1/admin/expenses?status=&q=&month= · POST (multipart) ·
- * POST /:id/approve|reject|void
+ * Admin Expenses — record mess expenses (server-computed totals), classify them
+ * as Meal Cost or Extra Cost, review (approve / reject), reclassify while the
+ * period is mutable, and void approved ones with reversals.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -23,7 +19,10 @@ import {
   Paperclip,
   Plus,
   ReceiptText,
+  Tags,
   Trash2,
+  Utensils,
+  Wrench,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -55,6 +54,22 @@ import type { ExpenseCategory, ExpenseRow } from "./_shared/types";
 const EXPENSES_PATH = "/api/v1/admin/expenses";
 const CATEGORIES_PATH = "/api/v1/admin/expense-categories";
 
+type ExpenseCostClass = "MEAL_COST" | "EXTRA_COST";
+type ClassifiedExpenseRow = ExpenseRow & {
+  costClass: ExpenseCostClass;
+  costClassLabel: string;
+  includedInMealCharge: boolean;
+};
+
+const COST_CLASS_OPTIONS = [
+  { value: "MEAL_COST", label: "Meal Cost — included in meal charge" },
+  { value: "EXTRA_COST", label: "Extra Cost — excluded from meal charge" },
+];
+
+function costClassLabel(value: string): string {
+  return value === "MEAL_COST" ? "Meal Cost" : "Extra Cost";
+}
+
 /* ------------------------------------------------------------------ form */
 
 interface DraftItem {
@@ -74,7 +89,6 @@ function itemEstimateMinor(item: DraftItem): number | null {
   if (price == null) return null;
   const qty = Number(item.quantity);
   if (!Number.isFinite(qty) || qty <= 0) return null;
-  // Same rounding as the server: round-half-up on each line.
   return Math.round(qty * price);
 }
 
@@ -92,6 +106,7 @@ function ExpenseFormDialog({
   onSaved: () => void;
 }) {
   const [date, setDate] = useState(defaultDate);
+  const [costClass, setCostClass] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [description, setDescription] = useState("");
   const [comment, setComment] = useState("");
@@ -121,6 +136,7 @@ function ExpenseFormDialog({
   }, [items]);
 
   const valid =
+    (costClass === "MEAL_COST" || costClass === "EXTRA_COST") &&
     description.trim().length >= 2 &&
     items.length > 0 &&
     items.every(
@@ -140,6 +156,7 @@ function ExpenseFormDialog({
     try {
       const form = new FormData();
       form.set("date", date);
+      form.set("costClass", costClass);
       if (categoryId) form.set("categoryId", categoryId);
       form.set("description", description.trim());
       if (comment.trim()) form.set("comment", comment.trim());
@@ -156,13 +173,14 @@ function ExpenseFormDialog({
       );
       if (proof) form.set("proof", proof);
 
-      const created = await api<ExpenseRow>(EXPENSES_PATH, { method: "POST", body: form });
+      const created = await api<ClassifiedExpenseRow>(EXPENSES_PATH, { method: "POST", body: form });
       toast.success("Expense recorded", {
-        description: `${created.displayNumber} · ${created.totalFormatted} — waiting for your approval (server-computed total).`,
+        description: `${created.displayNumber} · ${created.totalFormatted} · ${created.costClassLabel} — waiting for approval.`,
       });
       onSaved();
       onOpenChange(false);
-      // reset for next open
+      setCostClass("");
+      setCategoryId("");
       setDescription("");
       setComment("");
       setItems([draftItem()]);
@@ -181,7 +199,7 @@ function ExpenseFormDialog({
       open={open}
       onOpenChange={onOpenChange}
       title="Add expense"
-      description="Totals are always recomputed by the server from the items — the number below is an estimate."
+      description="Choose what the expense is for. Meal Cost goes into the resident meal-rate formula; Extra Cost stays separate but still reduces cash."
       footer={
         <>
           <GlassButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
@@ -196,11 +214,27 @@ function ExpenseFormDialog({
       <div className="space-y-4">
         <TextField label="Date" type="date" value={date} onChange={setDate} error={fields.date} />
         <SelectField
+          label="Expense type"
+          value={costClass}
+          onChange={setCostClass}
+          placeholder="Choose Meal Cost or Extra Cost"
+          options={COST_CLASS_OPTIONS}
+          error={fields.costClass}
+          hint={
+            costClass === "MEAL_COST"
+              ? "Included in the meal-charge expense pool."
+              : costClass === "EXTRA_COST"
+                ? "Excluded from meal charge; still recorded as a real expense and cash outflow."
+                : "Required — this controls billing, independently from Category."
+          }
+        />
+        <SelectField
           label="Category"
           value={categoryId}
           onChange={setCategoryId}
           placeholder="No category"
           options={categories.map((c) => ({ value: c.id, label: c.name }))}
+          hint="Category is for reporting (Grocery, Electricity, Salary, etc.); Expense type controls billing."
         />
         <TextField
           label="Description"
@@ -211,7 +245,6 @@ function ExpenseFormDialog({
           error={fields.description ?? (description.trim().length > 0 && description.trim().length < 2 ? "Describe the expense in 2–200 characters." : undefined)}
         />
 
-        {/* items repeater */}
         <div>
           <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Items</p>
           <div className="space-y-2.5">
@@ -262,7 +295,6 @@ function ExpenseFormDialog({
           {fields.itemsJson && <p className="mt-1.5 text-[11px] font-medium text-danger">{fields.itemsJson}</p>}
         </div>
 
-        {/* live total — estimate */}
         <div className="glass-inset flex items-center justify-between rounded-md px-3.5 py-3">
           <span className="text-[13px] font-semibold text-muted-foreground">
             Total <span className="font-normal">(estimate)</span>
@@ -270,7 +302,6 @@ function ExpenseFormDialog({
           <span className="kpi-num text-base font-semibold">{estimate != null ? fmtMinor(estimate) : "—"}</span>
         </div>
 
-        {/* proof */}
         <div>
           <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Proof (optional)</p>
           <input
@@ -291,17 +322,20 @@ function ExpenseFormDialog({
 
 /* ---------------------------------------------------------------- detail */
 
+type ExpenseAction = "approve" | "reject" | "void" | "reclassify";
+
 function ExpenseDetailDialog({
   expense,
   tz,
   onClose,
   onAction,
 }: {
-  expense: ExpenseRow | null;
+  expense: ClassifiedExpenseRow | null;
   tz: string;
   onClose: () => void;
-  onAction: (kind: "approve" | "reject" | "void") => void;
+  onAction: (kind: ExpenseAction) => void;
 }) {
+  const canReclassify = expense && expense.source !== "TASK" && ["PENDING", "APPROVED"].includes(expense.status);
   return (
     <DialogShell
       open={expense != null}
@@ -312,6 +346,11 @@ function ExpenseDetailDialog({
       footer={
         expense ? (
           <>
+            {canReclassify && (
+              <GlassButton variant="secondary" icon={<Tags />} onClick={() => onAction("reclassify")}>
+                {expense.costClass === "MEAL_COST" ? "Mark Extra Cost" : "Mark Meal Cost"}
+              </GlassButton>
+            )}
             {expense.status === "PENDING" && (
               <>
                 <GlassButton variant="destructive" icon={<XCircle />} onClick={() => onAction("reject")}>
@@ -341,6 +380,14 @@ function ExpenseDetailDialog({
             <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Details</p>
             <KeyValue label="Amount" value={<span className="kpi-num text-base font-semibold">{expense.totalFormatted}</span>} />
             <KeyValue label="Status" value={<StatusBadge status={expense.status} />} />
+            <KeyValue
+              label="Expense type"
+              value={<Chip tone={expense.costClass === "MEAL_COST" ? "frost" : "neutral"}>{expense.costClassLabel}</Chip>}
+            />
+            <KeyValue
+              label="Meal-charge effect"
+              value={expense.includedInMealCharge ? "Included in meal cost pool" : "Excluded from meal charge"}
+            />
             <KeyValue label="Source" value={expense.source === "TASK" ? "Task submission" : "Direct entry"} />
             <KeyValue label="Category" value={expense.categoryName ?? "—"} />
             <KeyValue label="Date" value={expense.dateKey ? fmtDate(expense.dateKey) : "—"} />
@@ -389,7 +436,6 @@ function ExpenseDetailDialog({
 
 /* ------------------------------------------------------------------ view */
 
-/** Status-tinted gradient orb for expense rows (BoardOps row anatomy). */
 const EXPENSE_STATUS_ORB: Record<string, { icon: LucideIcon; orb: string }> = {
   PENDING: { icon: Clock, orb: "amber" },
   APPROVED: { icon: CheckCircle2, orb: "emerald" },
@@ -401,35 +447,30 @@ function expenseOrb(status: string): { icon: LucideIcon; orb: string } {
   return EXPENSE_STATUS_ORB[status] ?? { icon: ReceiptText, orb: "sky" };
 }
 
-/** "2025-09" ± 1 → "2025-08" / "2025-10". */
 function shiftMonthKey(key: string, delta: number): string {
   const [y, m] = key.split("-").map(Number);
   const d = new Date(y ?? 2025, (m ?? 1) - 1 + delta, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-/** Long month name for the picker pill ("September"). */
 function monthLongName(key: string): string {
   const [y, m] = key.split("-").map(Number);
   return new Intl.DateTimeFormat("en-US", { month: "long" }).format(new Date(y ?? 2025, (m ?? 1) - 1, 1));
 }
 
-/** "Sep 2025" for the month-scoped KPI label. */
 function monthShortLabel(key: string): string {
   return monthLabel(Number(key.slice(0, 4)), Number(key.slice(5, 7)));
 }
 
 export default function AdminExpenses() {
   const [status, setStatus] = useState("PENDING");
+  const [costClassFilter, setCostClassFilter] = useState("ALL");
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  // Month scope — undefined = the server's current month (institution tz).
-  // Navigating sets an explicit YYYY-MM; the list AND the month KPIs follow it
-  // (the route scopes both to the requested month and echoes it in meta.month).
   const [monthParam, setMonthParam] = useState<string | undefined>(undefined);
   const [formOpen, setFormOpen] = useState(false);
-  const [detail, setDetail] = useState<ExpenseRow | null>(null);
-  const [action, setAction] = useState<"approve" | "reject" | "void" | null>(null);
+  const [detail, setDetail] = useState<ClassifiedExpenseRow | null>(null);
+  const [action, setAction] = useState<ExpenseAction | null>(null);
   const [acting, setActing] = useState(false);
   const invalidate = useInvalidate();
   const { institution } = useSession();
@@ -440,8 +481,9 @@ export default function AdminExpenses() {
     return () => window.clearTimeout(t);
   }, [search]);
 
-  const { data: envelope, isLoading, error, refetch } = useApiMetaQuery<ExpenseRow[]>(EXPENSES_PATH, {
+  const { data: envelope, isLoading, error, refetch } = useApiMetaQuery<ClassifiedExpenseRow[]>(EXPENSES_PATH, {
     status: status === "ALL" ? undefined : status,
+    costClass: costClassFilter === "ALL" ? undefined : costClassFilter,
     q: appliedSearch || undefined,
     month: monthParam,
   });
@@ -450,7 +492,6 @@ export default function AdminExpenses() {
 
   const categoriesQuery = useApiQuery<ExpenseCategory[]>(formOpen ? CATEGORIES_PATH : null);
   const categories = categoriesQuery.data ?? [];
-
   const pendingCount = metaNum(meta, "pendingApproval") ?? expenses.filter((e) => e.status === "PENDING").length;
 
   const sortedExpenses = useMemo(() => {
@@ -462,21 +503,33 @@ export default function AdminExpenses() {
     });
   }, [expenses]);
 
-  // Effective month — the server echoes the resolved month in meta (it owns
-  // the institution timezone); fall back to the client month before load.
   const thisMonthKey = currentMonthKeyInTz(tz);
   const activeMonthKey = metaStr(meta, "month") ?? monthParam ?? thisMonthKey;
   const isThisMonth = activeMonthKey === thisMonthKey;
 
-  async function runAction(kind: "approve" | "reject" | "void", reason?: string) {
+  async function runAction(kind: ExpenseAction, reason?: string) {
     if (!detail) return;
     setActing(true);
     try {
-      await postJson(`${EXPENSES_PATH}/${detail.id}/${kind}`, kind === "approve" ? {} : { reason });
-      invalidate([EXPENSES_PATH, "/api/v1/admin/funds", "/api/v1/admin/dashboard", "/api/v1/admin/billing"]);
-      toast.success(kind === "approve" ? "Expense approved" : kind === "reject" ? "Expense rejected" : "Expense voided", {
-        description: `${detail.displayNumber} · ${detail.totalFormatted}`,
-      });
+      if (kind === "reclassify") {
+        const target: ExpenseCostClass = detail.costClass === "MEAL_COST" ? "EXTRA_COST" : "MEAL_COST";
+        await postJson(`${EXPENSES_PATH}/${detail.id}/classification`, { costClass: target, reason });
+        toast.success("Expense type changed", {
+          description: `${detail.displayNumber} · ${costClassLabel(target)}${target === "MEAL_COST" ? " · now included in meal charge" : " · excluded from meal charge"}`,
+        });
+      } else {
+        await postJson(`${EXPENSES_PATH}/${detail.id}/${kind}`, kind === "approve" ? {} : { reason });
+        toast.success(kind === "approve" ? "Expense approved" : kind === "reject" ? "Expense rejected" : "Expense voided", {
+          description: `${detail.displayNumber} · ${detail.totalFormatted}`,
+        });
+      }
+      invalidate([
+        EXPENSES_PATH,
+        "/api/v1/admin/funds",
+        "/api/v1/admin/dashboard",
+        "/api/v1/admin/billing",
+        "/api/v1/admin/formulas",
+      ]);
       setAction(null);
       setDetail(null);
     } catch (err) {
@@ -500,203 +553,219 @@ export default function AdminExpenses() {
 
   return (
     <StaggerGroup className="space-y-4">
-      {/* Month capsule — circular arrows + reset pill (BoardOps picker) */}
       <StaggerItem>
-      <PickerCapsule
-        onPrev={() => setMonthParam(shiftMonthKey(activeMonthKey, -1))}
-        onNext={() => setMonthParam(shiftMonthKey(activeMonthKey, 1))}
-        prevLabel="Previous month"
-        nextLabel="Next month"
-        onPillClick={() => setMonthParam(undefined)}
-        pillAriaLabel="Reset to the current month"
-        resettable={!isThisMonth}
-      >
-        <Calendar className="size-4 shrink-0 text-primary" aria-hidden />
-        <span className="min-w-0 text-center leading-tight">
-          <span className="block truncate text-sm font-bold text-primary">{monthLongName(activeMonthKey)}</span>
-          <span className="block truncate text-[11px] text-muted-foreground">{activeMonthKey.slice(0, 4)}</span>
-        </span>
-      </PickerCapsule>
-      </StaggerItem>
-
-      <StaggerItem>
-      <KpiGrid
-        loading={isLoading && !envelope}
-        kpis={[
-          {
-            label: "Expenses",
-            value: metaStr(meta, "expensesThisMonthFormatted") ?? "—",
-            icon: <ReceiptText />,
-            tone: "primary",
-            glow: "primary",
-            sub: `${metaNum(meta, "entriesThisMonth") ?? 0} items`,
-          },
-          {
-            label: "Remaining",
-            value: metaStr(meta, "remainingFundsFormatted") ?? "—",
-            icon: <Package />,
-            tone: "success",
-            glow: "success",
-            sub: "Available",
-          },
-          {
-            label: "Pending",
-            value: String(pendingCount),
-            icon: <FileText />,
-            tone: "warning",
-            glow: "warning",
-            sub: pendingCount > 0 ? "Needs review" : "All clear",
-          },
-        ]}
-      />
-      </StaggerItem>
-
-      <StaggerItem>
-      {/* Primary action — Add Expense centered */}
-      <div className="flex items-center justify-center">
-        <GlassButton variant="primary" icon={<Plus />} onClick={() => setFormOpen(true)}>
-          Add Expense
-        </GlassButton>
-      </div>
-      </StaggerItem>
-
-      {/* ONE section card — meals-page anatomy: icon + title, filter pills INSIDE, compact symmetrical pills below. */}
-      <StaggerItem>
-      <GlassCard className="p-4">
-        <div className="mb-3 flex items-center gap-2">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
-            <ReceiptText className="size-5" aria-hidden />
+        <PickerCapsule
+          onPrev={() => setMonthParam(shiftMonthKey(activeMonthKey, -1))}
+          onNext={() => setMonthParam(shiftMonthKey(activeMonthKey, 1))}
+          prevLabel="Previous month"
+          nextLabel="Next month"
+          onPillClick={() => setMonthParam(undefined)}
+          pillAriaLabel="Reset to the current month"
+          resettable={!isThisMonth}
+        >
+          <Calendar className="size-4 shrink-0 text-primary" aria-hidden />
+          <span className="min-w-0 text-center leading-tight">
+            <span className="block truncate text-sm font-bold text-primary">{monthLongName(activeMonthKey)}</span>
+            <span className="block truncate text-[11px] text-muted-foreground">{activeMonthKey.slice(0, 4)}</span>
           </span>
-          <h3 className="font-semibold text-base">Expenses</h3>
-        </div>
+        </PickerCapsule>
+      </StaggerItem>
 
-        <div className="mb-3 space-y-3">
-          <SearchField value={search} onChange={setSearch} placeholder="Search by number, description or category…" />
-          <FilterChips
-            chips={[
-              { value: "PENDING", label: "Pending", count: pendingCount || undefined },
-              { value: "ALL", label: "All" },
-              { value: "APPROVED", label: "Approved" },
-              { value: "REJECTED", label: "Rejected" },
-              { value: "VOIDED", label: "Voided" },
-            ]}
-            value={status}
-            onChange={setStatus}
-          />
-        </div>
+      <StaggerItem>
+        <KpiGrid
+          loading={isLoading && !envelope}
+          kpis={[
+            {
+              label: "Meal Cost",
+              value: metaStr(meta, "mealExpensesThisMonthFormatted") ?? "—",
+              icon: <Utensils />,
+              tone: "primary",
+              glow: "primary",
+              sub: "Used by formula",
+            },
+            {
+              label: "Extra Cost",
+              value: metaStr(meta, "extraExpensesThisMonthFormatted") ?? "—",
+              icon: <Wrench />,
+              tone: "warning",
+              glow: "warning",
+              sub: "Excluded from meal rate",
+            },
+            {
+              label: "Total Expenses",
+              value: metaStr(meta, "expensesThisMonthFormatted") ?? "—",
+              icon: <ReceiptText />,
+              tone: "neutral",
+              glow: "neutral",
+              sub: `${metaNum(meta, "entriesThisMonth") ?? 0} items`,
+            },
+            {
+              label: "Remaining",
+              value: metaStr(meta, "remainingFundsFormatted") ?? "—",
+              icon: <Package />,
+              tone: "success",
+              glow: "success",
+              sub: "Cash available",
+            },
+            {
+              label: "Pending",
+              value: String(pendingCount),
+              icon: <FileText />,
+              tone: "warning",
+              glow: "warning",
+              sub: pendingCount > 0 ? "Needs review" : "All clear",
+            },
+          ]}
+        />
+      </StaggerItem>
 
-        {isLoading && !envelope ? (
-          <ListSkeleton rows={5} />
-        ) : expenses.length === 0 ? (
-          <EmptyState
-            icon={ReceiptText}
-            title={appliedSearch ? "No expenses match" : status === "PENDING" ? "No pending expenses" : "No expenses recorded yet"}
-            description={
-              appliedSearch
-                ? "Try searching by a different description, number or category."
-                : status === "PENDING"
-                  ? "Recorded expenses waiting for your approval will appear here."
-                  : "Use Add Expense to record the first mess purchase."
-            }
-            action={
-              !appliedSearch && status !== "PENDING" ? (
-                <GlassButton variant="secondary" icon={<Plus />} onClick={() => setFormOpen(true)}>
-                  Add Expense
-                </GlassButton>
-              ) : undefined
-            }
-          />
-        ) : (
-          <div className="no-scrollbar max-h-[28rem] space-y-2 overflow-y-auto pr-1">
-            <AnimatePresence mode="popLayout">
-              {sortedExpenses.map((e, i) => {
-                const orb = expenseOrb(e.status);
-                const OrbIcon = orb.icon;
-                return (
-                  <motion.div
-                    key={e.id}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.15 } }}
-                    transition={{ ...SPRING_SNAPPY, delay: Math.min(i * 0.04, 0.2) }}
-                  >
-                    <GlassCard className="overflow-hidden rounded-2xl">
-                      <div
-                        className="p-3 sm:p-3.5 cursor-pointer transition-colors hover:bg-foreground/4 dark:hover:bg-white/5"
-                        onClick={() => setDetail(e)}
-                      >
-                        {/* Top row: Identity & Time (Left), Amount & Type (Right) — symmetrical balance matching payments */}
-                        <div className="flex h-10 items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <MealOrb icon={<OrbIcon />} colorToken={orb.orb} size="sm" />
-                            <div className="min-w-0">
-                              <h4 className="truncate text-sm font-semibold text-foreground tracking-tight" title={e.description}>
-                                {e.description}
-                              </h4>
-                              <p className="kpi-num mt-0.5 text-xs text-muted-foreground flex items-center gap-1 truncate">
-                                <Clock className="size-3 shrink-0" aria-hidden />
-                                {fmtDateTime(e.createdAt, tz)}
-                              </p>
+      <StaggerItem>
+        <div className="flex items-center justify-center">
+          <GlassButton variant="primary" icon={<Plus />} onClick={() => setFormOpen(true)}>
+            Add Expense
+          </GlassButton>
+        </div>
+      </StaggerItem>
+
+      <StaggerItem>
+        <GlassCard className="p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
+              <ReceiptText className="size-5" aria-hidden />
+            </span>
+            <h3 className="font-semibold text-base">Expenses</h3>
+          </div>
+
+          <div className="mb-3 space-y-3">
+            <SearchField value={search} onChange={setSearch} placeholder="Search by number, description or category…" />
+            <FilterChips
+              chips={[
+                { value: "PENDING", label: "Pending", count: pendingCount || undefined },
+                { value: "ALL", label: "All" },
+                { value: "APPROVED", label: "Approved" },
+                { value: "REJECTED", label: "Rejected" },
+                { value: "VOIDED", label: "Voided" },
+              ]}
+              value={status}
+              onChange={setStatus}
+            />
+            <FilterChips
+              chips={[
+                { value: "ALL", label: "All costs" },
+                { value: "MEAL_COST", label: "Meal Cost" },
+                { value: "EXTRA_COST", label: "Extra Cost" },
+              ]}
+              value={costClassFilter}
+              onChange={setCostClassFilter}
+            />
+          </div>
+
+          {isLoading && !envelope ? (
+            <ListSkeleton rows={5} />
+          ) : expenses.length === 0 ? (
+            <EmptyState
+              icon={ReceiptText}
+              title={appliedSearch ? "No expenses match" : status === "PENDING" ? "No pending expenses" : "No expenses recorded yet"}
+              description={
+                appliedSearch
+                  ? "Try searching by a different description, number or category."
+                  : status === "PENDING"
+                    ? "Recorded expenses waiting for your approval will appear here."
+                    : "Use Add Expense to record the first mess purchase."
+              }
+              action={
+                !appliedSearch && status !== "PENDING" ? (
+                  <GlassButton variant="secondary" icon={<Plus />} onClick={() => setFormOpen(true)}>
+                    Add Expense
+                  </GlassButton>
+                ) : undefined
+              }
+            />
+          ) : (
+            <div className="no-scrollbar max-h-[28rem] space-y-2 overflow-y-auto pr-1">
+              <AnimatePresence mode="popLayout">
+                {sortedExpenses.map((e, i) => {
+                  const orb = expenseOrb(e.status);
+                  const OrbIcon = orb.icon;
+                  return (
+                    <motion.div
+                      key={e.id}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.15 } }}
+                      transition={{ ...SPRING_SNAPPY, delay: Math.min(i * 0.04, 0.2) }}
+                    >
+                      <GlassCard className="overflow-hidden rounded-2xl">
+                        <div
+                          className="p-3 sm:p-3.5 cursor-pointer transition-colors hover:bg-foreground/4 dark:hover:bg-white/5"
+                          onClick={() => setDetail(e)}
+                        >
+                          <div className="flex h-10 items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <MealOrb icon={<OrbIcon />} colorToken={orb.orb} size="sm" />
+                              <div className="min-w-0">
+                                <h4 className="truncate text-sm font-semibold text-foreground tracking-tight" title={e.description}>
+                                  {e.description}
+                                </h4>
+                                <p className="kpi-num mt-0.5 text-xs text-muted-foreground flex items-center gap-1 truncate">
+                                  <Clock className="size-3 shrink-0" aria-hidden />
+                                  {fmtDateTime(e.createdAt, tz)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="text-right shrink-0">
+                              <Money minor={e.totalMinor} className="text-base sm:text-lg font-bold text-foreground block leading-tight" />
+                              <span className="kpi-num text-[11px] font-medium text-muted-foreground block mt-0.5">total</span>
                             </div>
                           </div>
 
-                          <div className="text-right shrink-0">
-                            <Money minor={e.totalMinor} className="text-base sm:text-lg font-bold text-foreground block leading-tight" />
-                            <span className="kpi-num text-[11px] font-medium text-muted-foreground block mt-0.5">
-                              total
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Bottom row: Badges on left, Details in a pill on right — strictly 1 row for symmetrical heights */}
-                        <div className="mt-2.5 flex h-7 items-center justify-between gap-2 border-t border-border/15 pt-2">
-                          <div className="no-scrollbar flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
-                            <StatusBadge status={e.status} />
-                            <Chip tone="frost" className="text-[10px] px-2 py-0.5 shrink-0">
-                              {e.categoryName ?? "General"}
-                            </Chip>
-                            <span className="kpi-num text-[11px] text-muted-foreground shrink-0">
-                              {e.displayNumber}
-                            </span>
-                            <span className="kpi-num text-[11px] text-muted-foreground shrink-0">
-                              · {e.itemCount ?? 0} item{(e.itemCount ?? 0) === 1 ? "" : "s"}
-                            </span>
-                            {e.source === "TASK" && (
-                              <Chip tone="frost" className="text-[10px] px-2 py-0.5 shrink-0">
-                                via task
+                          <div className="mt-2.5 flex h-7 items-center justify-between gap-2 border-t border-border/15 pt-2">
+                            <div className="no-scrollbar flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+                              <StatusBadge status={e.status} />
+                              <Chip tone={e.costClass === "MEAL_COST" ? "frost" : "neutral"} className="text-[10px] px-2 py-0.5 shrink-0">
+                                {e.costClassLabel}
                               </Chip>
-                            )}
-                            {e.hasProof && (
-                              <span className="inline-flex items-center gap-0.5 text-[11px] text-primary font-medium shrink-0">
-                                <Paperclip className="size-3" aria-hidden /> Proof
+                              <Chip tone="frost" className="text-[10px] px-2 py-0.5 shrink-0">
+                                {e.categoryName ?? "General"}
+                              </Chip>
+                              <span className="kpi-num text-[11px] text-muted-foreground shrink-0">{e.displayNumber}</span>
+                              <span className="kpi-num text-[11px] text-muted-foreground shrink-0">
+                                · {e.itemCount ?? 0} item{(e.itemCount ?? 0) === 1 ? "" : "s"}
                               </span>
-                            )}
-                          </div>
+                              {e.source === "TASK" && (
+                                <Chip tone="frost" className="text-[10px] px-2 py-0.5 shrink-0">via task</Chip>
+                              )}
+                              {e.hasProof && (
+                                <span className="inline-flex items-center gap-0.5 text-[11px] text-primary font-medium shrink-0">
+                                  <Paperclip className="size-3" aria-hidden /> Proof
+                                </span>
+                              )}
+                            </div>
 
-                          {/* Details button in a tactile glass pill matching payments */}
-                          <motion.button
-                            type="button"
-                            whileTap={{ scale: 0.94 }}
-                            onClick={(eEvt) => {
-                              eEvt.stopPropagation();
-                              setDetail(e);
-                            }}
-                            aria-label={`Open details for expense ${e.displayNumber}`}
-                            className="glass-inset hover:glass-soft flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full px-3 text-xs font-semibold text-foreground transition-all hover:text-primary hover:ring-1 hover:ring-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                          >
-                            <span>{e.status === "PENDING" ? "Review" : "Details"}</span>
-                            <ChevronRight className="size-3" aria-hidden />
-                          </motion.button>
+                            <motion.button
+                              type="button"
+                              whileTap={{ scale: 0.94 }}
+                              onClick={(eEvt) => {
+                                eEvt.stopPropagation();
+                                setDetail(e);
+                              }}
+                              aria-label={`Open details for expense ${e.displayNumber}`}
+                              className="glass-inset hover:glass-soft flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full px-3 text-xs font-semibold text-foreground transition-all hover:text-primary hover:ring-1 hover:ring-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                            >
+                              <span>{e.status === "PENDING" ? "Review" : "Details"}</span>
+                              <ChevronRight className="size-3" aria-hidden />
+                            </motion.button>
+                          </div>
                         </div>
-                      </div>
-                    </GlassCard>
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
-          </div>
-        )}
-      </GlassCard>
+                      </GlassCard>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
+          )}
+        </GlassCard>
       </StaggerItem>
 
       <ExpenseFormDialog
@@ -704,7 +773,7 @@ export default function AdminExpenses() {
         onOpenChange={setFormOpen}
         categories={categories}
         defaultDate={todayKeyInTz(tz)}
-        onSaved={() => invalidate([EXPENSES_PATH, "/api/v1/admin/dashboard"])}
+        onSaved={() => invalidate([EXPENSES_PATH, "/api/v1/admin/dashboard", "/api/v1/admin/billing", "/api/v1/admin/formulas"])}
       />
 
       <ExpenseDetailDialog
@@ -723,35 +792,52 @@ export default function AdminExpenses() {
               ? "Approve expense"
               : action === "reject"
                 ? "Reject expense"
-                : "Void expense"
+                : action === "reclassify"
+                  ? `Change to ${detail.costClass === "MEAL_COST" ? "Extra Cost" : "Meal Cost"}`
+                  : "Void expense"
           }
           description={
             action === "approve" ? (
               <>
-                The money is posted to the mess ledger (Dr Expenses / Cr Cash) and counts toward this month's formula.
+                The money is posted to the mess ledger (Dr Expenses / Cr Cash).
                 <span className="mt-2 block font-medium">
-                  {detail.displayNumber} · {detail.totalFormatted}
+                  {detail.displayNumber} · {detail.totalFormatted} · {detail.costClassLabel}
+                </span>
+                <span className="mt-1 block text-muted-foreground">
+                  {detail.costClass === "MEAL_COST"
+                    ? "This amount is included in the meal-charge expense pool."
+                    : "This amount is excluded from meal charge, but still reduces mess cash."}
                 </span>
               </>
             ) : action === "reject" ? (
               <>
                 The record stays for the audit trail but no money moves. The submitter is notified with your reason.
+                <span className="mt-2 block font-medium">{detail.displayNumber} · {detail.totalFormatted}</span>
+              </>
+            ) : action === "reclassify" ? (
+              <>
+                This does not move money or change the expense amount. It only changes whether this expense participates in the live meal-charge formula. A reason is required and the change is blocked after billing freezes the month.
                 <span className="mt-2 block font-medium">
-                  {detail.displayNumber} · {detail.totalFormatted}
+                  {detail.costClassLabel} → {detail.costClass === "MEAL_COST" ? "Extra Cost" : "Meal Cost"}
                 </span>
               </>
             ) : (
               <>
-                A reversal journal is posted — the money returns to cash and the expense stays visible as voided. Approved
-                expenses are never deleted.
-                <span className="mt-2 block font-medium">
-                  {detail.displayNumber} · {detail.totalFormatted}
-                </span>
+                A reversal journal is posted — the money returns to cash and the expense stays visible as voided. Approved expenses are never deleted.
+                <span className="mt-2 block font-medium">{detail.displayNumber} · {detail.totalFormatted}</span>
               </>
             )
           }
-          confirmLabel={action === "approve" ? "Approve" : action === "reject" ? "Reject" : "Void"}
-          tone={action === "approve" ? "primary" : "destructive"}
+          confirmLabel={
+            action === "approve"
+              ? "Approve"
+              : action === "reject"
+                ? "Reject"
+                : action === "reclassify"
+                  ? `Mark ${detail.costClass === "MEAL_COST" ? "Extra Cost" : "Meal Cost"}`
+                  : "Void"
+          }
+          tone={action === "approve" ? "primary" : action === "reclassify" ? "primary" : "destructive"}
           requireReason={action !== "approve"}
           loading={acting}
           onConfirm={(reason) => void runAction(action, reason)}

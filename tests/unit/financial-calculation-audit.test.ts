@@ -70,10 +70,17 @@ describe("financial calculation audit contracts", () => {
     expect(variables).toContain("Carry-forward credit is excluded.");
   });
 
-  test("market expense never falls back to unrelated approved expenses", () => {
+  test("meal expense classification never falls back to unrelated approved expenses", () => {
     const text = source("src/lib/domain/formula/providers/expense.ts");
-    expect(text).toContain("const marketTotal = marketAgg._sum.totalMinor ?? 0");
+    expect(text).toContain('where: { ...approvedWhere, costClass: "MEAL_COST" }');
+    expect(text).toContain('where: { ...approvedWhere, costClass: "EXTRA_COST" }');
+    expect(text).toContain("const mealTotal = mealAgg._sum.totalMinor ?? 0");
+    expect(text).toContain("const extraTotal = extraAgg._sum.totalMinor ?? 0");
+    expect(text).toContain("total_market_expense: mealTotal");
+    expect(text).toContain("total_meal_expense: mealTotal");
+    expect(text).toContain("total_extra_expense: extraTotal");
     expect(text).toContain("total_expense: approvedTotal");
+    expect(text).not.toContain("marketSpecific > 0 ? marketSpecific : approvedTotal");
     expect(text).not.toContain("fall back to approved total");
   });
 

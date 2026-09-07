@@ -4,6 +4,7 @@
  * totals are always accompanied by the quantities/prices/counts they derive from.
  */
 import { formatMinor } from "@/lib/money";
+import { expenseCostClassLabel } from "@/lib/domain/expense-cost-class";
 
 export function serializePayment(p: any): Record<string, unknown> {
   return {
@@ -46,6 +47,7 @@ export function serializeRefund(r: any): Record<string, unknown> {
 }
 
 export function serializeExpense(e: any): Record<string, unknown> {
+  const costClass = e.costClass === "MEAL_COST" ? "MEAL_COST" : "EXTRA_COST";
   return {
     id: e.id,
     displayNumber: e.displayNumber,
@@ -53,6 +55,9 @@ export function serializeExpense(e: any): Record<string, unknown> {
     date: e.date ? e.date.toISOString() : null,
     status: e.status,
     source: e.source,
+    costClass,
+    costClassLabel: expenseCostClassLabel(costClass),
+    includedInMealCharge: costClass === "MEAL_COST",
     description: e.description,
     comment: e.comment ?? null,
     totalMinor: e.totalMinor,

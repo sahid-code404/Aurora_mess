@@ -45,11 +45,17 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   if (snapshot) {
     let formula: Record<string, unknown> | null = null;
     let guestIncomeMinor = 0;
+    let mealExpensesMinor = snapshot.eligibleExpensesMinor;
+    let extraExpensesMinor = 0;
+    let totalApprovedExpensesMinor = snapshot.eligibleExpensesMinor;
     try {
       const payload = JSON.parse(snapshot.payloadJson);
       formula = payload?.formula ?? null;
-      if (typeof payload?.variables?.guest_income === "number") {
-        guestIncomeMinor = payload.variables.guest_income;
+      const variables = payload?.variables ?? {};
+      if (typeof variables?.guest_income === "number") {
+        guestIncomeMinor = variables.guest_income;
+      } else if (typeof variables?.total_guest_income === "number") {
+        guestIncomeMinor = variables.total_guest_income;
       } else if (typeof payload?.guestIncomeMinor === "number") {
         guestIncomeMinor = payload.guestIncomeMinor;
       } else if (Array.isArray(payload?.residents)) {
@@ -57,6 +63,28 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
           (sum: number, resident: any) => sum + (Number(resident.guestAmountMinor) || 0),
           0
         );
+      }
+
+      // New snapshots carry first-class classified expense variables. Historical
+      // snapshots fall back to their frozen eligible-expense amount and legacy
+      // market variable without rewriting old financial history.
+      if (typeof variables?.total_meal_expense === "number") {
+        mealExpensesMinor = variables.total_meal_expense;
+      } else if (typeof variables?.total_market_expense === "number") {
+        mealExpensesMinor = variables.total_market_expense;
+      } else if (typeof variables?.total_market_cost === "number") {
+        mealExpensesMinor = variables.total_market_cost;
+      }
+      if (typeof variables?.total_extra_expense === "number") {
+        extraExpensesMinor = variables.total_extra_expense;
+      }
+      if (typeof variables?.total_approved_expense === "number") {
+        totalApprovedExpensesMinor = variables.total_approved_expense;
+      } else {
+        totalApprovedExpensesMinor = Math.max(snapshot.eligibleExpensesMinor, mealExpensesMinor + extraExpensesMinor);
+      }
+      if (typeof variables?.total_extra_expense !== "number") {
+        extraExpensesMinor = Math.max(0, totalApprovedExpensesMinor - mealExpensesMinor);
       }
     } catch {
       formula = null;
@@ -70,8 +98,15 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       guestMealCount: snapshot.guestMealCount,
       guestIncomeMinor,
       guestIncomeFormatted: formatMinor(guestIncomeMinor),
+      // Kept for backwards compatibility with existing clients/snapshots.
       eligibleExpensesMinor: snapshot.eligibleExpensesMinor,
       eligibleExpensesFormatted: formatMinor(snapshot.eligibleExpensesMinor),
+      mealExpensesMinor,
+      mealExpensesFormatted: formatMinor(mealExpensesMinor),
+      extraExpensesMinor,
+      extraExpensesFormatted: formatMinor(extraExpensesMinor),
+      totalApprovedExpensesMinor,
+      totalApprovedExpensesFormatted: formatMinor(totalApprovedExpensesMinor),
       approvedPaymentsMinor: snapshot.approvedPaymentsMinor,
       approvedPaymentsFormatted: formatMinor(snapshot.approvedPaymentsMinor),
       mealChargeMinor: snapshot.mealChargeMinor,
