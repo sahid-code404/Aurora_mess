@@ -15,7 +15,7 @@ export async function resolvePaymentVariables(
     select: { id: true },
   });
 
-  const [submittedAgg, approvedAgg, pendingAgg, refundsAgg, creditsAgg] = await Promise.all([
+  const [submittedAgg, approvedAgg, pendingAgg, refundsAgg, carryForwardAgg, creditsAgg] = await Promise.all([
     client.payment.aggregate({
       _sum: { amountMinor: true },
       where: { institutionId, submittedAt: timeRange },
@@ -34,6 +34,15 @@ export async function resolvePaymentVariables(
         institutionId,
         status: "COMPLETED",
         mode: "ISSUE_REFUND",
+        createdAt: timeRange,
+      },
+    }),
+    client.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        institutionId,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
         createdAt: timeRange,
       },
     }),
@@ -57,8 +66,9 @@ export async function resolvePaymentVariables(
     // BoardOps currently has no separate payment-purpose field: every approved
     // resident receipt is a resident deposit, regardless of UPI/CASH/BANK/OTHER method.
     total_deposits: approved,
-    // Carry-forward is a credit decision, not a cash payout.
+    // Cash refunds and carry-forward are separate financial facts.
     total_refunds: refundsAgg._sum.amountMinor ?? 0,
+    total_carry_forward: carryForwardAgg._sum.amountMinor ?? 0,
     // Resident-account credits only; do not sum credit entries from income/cash accounts.
     total_credits: creditsAgg._sum.creditMinor ?? 0,
     total_collected: approved,
