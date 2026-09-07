@@ -57,12 +57,17 @@ describe("financial calculation audit contracts", () => {
     expect(text).not.toContain("cashBalance > 0 ? cashBalance : netResidentFunds");
   });
 
-  test("payment variables treat approved receipts as deposits and cash refunds only as refunds", () => {
-    const text = source("src/lib/domain/formula/providers/payment.ts");
-    expect(text).not.toContain('method: "DEPOSIT"');
-    expect(text).toContain("total_deposits: approved");
-    expect(text).toContain('mode: "ISSUE_REFUND"');
-    expect(text).toContain('code: "RESIDENT_FUNDS"');
+  test("payment variables treat approved receipts as deposits and keep cash refund/carry-forward separate", () => {
+    const provider = source("src/lib/domain/formula/providers/payment.ts");
+    const variables = source("src/lib/domain/formula/variables.ts");
+    expect(provider).not.toContain('method: "DEPOSIT"');
+    expect(provider).toContain("total_deposits: approved");
+    expect(provider).toContain('mode: "ISSUE_REFUND"');
+    expect(provider).toContain('mode: "CARRY_FORWARD"');
+    expect(provider).toContain("total_carry_forward: carryForwardAgg._sum.amountMinor ?? 0");
+    expect(provider).toContain('code: "RESIDENT_FUNDS"');
+    expect(variables).toContain('key: "total_carry_forward"');
+    expect(variables).toContain("Carry-forward credit is excluded.");
   });
 
   test("market expense never falls back to unrelated approved expenses", () => {
@@ -89,6 +94,16 @@ describe("financial calculation audit contracts", () => {
     expect(funds).toContain("institutionResidentFinancialTotals(ctx.institutionId)");
     expect(funds).toContain("const availableFundsTotal = Math.max(0, cashBalance)");
     expect(funds).toContain("residentCount: activeResidentCount");
+  });
+
+  test("refund eligibility scans every resident in bounded batches instead of truncating money owed", () => {
+    const eligible = source("src/app/api/v1/admin/refunds/eligible/route.ts");
+    expect(eligible).toContain("const RESIDENT_BATCH_SIZE = 100;");
+    expect(eligible).toContain("while (true)");
+    expect(eligible).toContain("take: RESIDENT_BATCH_SIZE");
+    expect(eligible).toContain("cursor: { id: cursorId }");
+    expect(eligible).toContain("scannedResidentCount: eligibility.length");
+    expect(eligible).not.toContain("take: 200");
   });
 
   test("cash-refund APIs explicitly exclude carry-forward from refund money totals", () => {
