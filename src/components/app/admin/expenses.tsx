@@ -595,8 +595,8 @@ export default function AdminExpenses() {
               label: "Total Expenses",
               value: metaStr(meta, "expensesThisMonthFormatted") ?? "—",
               icon: <ReceiptText />,
-              tone: "frost",
-              glow: "frost",
+              tone: "neutral",
+              glow: "neutral",
               sub: `${metaNum(meta, "entriesThisMonth") ?? 0} items`,
             },
             {
