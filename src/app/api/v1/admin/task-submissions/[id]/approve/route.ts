@@ -2,8 +2,8 @@
  * POST /api/v1/admin/task-submissions/[id]/approve — verify submitted task work.
  *
  * MARKET_PURCHASE: recompute item totals server-side, create exactly one official
- * Expense dated to the submission's institution-local business date, post
- * Dr MESS_EXPENSE / Cr CASH, then approve the submission/task.
+ * MEAL_COST Expense dated to the submission's institution-local business date,
+ * post Dr MESS_EXPENSE / Cr CASH, then approve the submission/task.
  *
  * GENERAL: approve the completion with NO Expense and NO journal. Any purchase
  * lines or non-zero claimed total on a Normal Task fail closed as inconsistent
@@ -112,6 +112,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
             date: expenseDate,
             status: "APPROVED",
             source: "TASK",
+            costClass: "MEAL_COST",
             description,
             comment: submission.comment ?? null,
             submittedByUserId: submission.task.assignedResidentId,
@@ -192,6 +193,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           totalMinor,
           expenseId,
           journalId,
+          costClass: isGeneralTask ? null : "MEAL_COST",
         }),
         metadata: {
           taskId: submission.taskId,
@@ -201,6 +203,8 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
           claimedTotalMinor: submission.claimedTotalMinor,
           approvedTotalMinor: totalMinor,
           expenseDate: isGeneralTask ? null : expenseDateKey,
+          costClass: isGeneralTask ? null : "MEAL_COST",
+          includedInMealCharge: !isGeneralTask,
         },
       },
       tx
@@ -221,12 +225,19 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
             displayNumber,
             status: "APPROVED",
             source: "TASK",
+            costClass: "MEAL_COST",
             totalMinor,
             journalId,
             sourceTaskSubmissionId: submission.id,
             date: expenseDateKey,
           }),
-          metadata: { source: "TASK", taskId: submission.taskId, submissionId: submission.id },
+          metadata: {
+            source: "TASK",
+            taskId: submission.taskId,
+            submissionId: submission.id,
+            costClass: "MEAL_COST",
+            includedInMealCharge: true,
+          },
         },
         tx
       );
@@ -240,7 +251,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
         title: isGeneralTask ? "Normal task completed" : "Market purchase approved",
         message: isGeneralTask
           ? `Your completion for "${submission.task.description}" was approved.`
-          : `Your market purchase was approved — ${formatMinor(totalMinor)} added to expenses.`,
+          : `Your market purchase was approved — ${formatMinor(totalMinor)} added to meal costs.`,
         entityRef: submission.taskId,
       },
       tx
@@ -268,6 +279,7 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       journalId,
       itemCount: lines.length,
       expenseDate: isGeneralTask ? null : expenseDateKey,
+      costClass: isGeneralTask ? null : "MEAL_COST",
     };
   });
 
