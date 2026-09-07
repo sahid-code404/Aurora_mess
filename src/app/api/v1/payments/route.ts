@@ -9,8 +9,8 @@
  *   - residentId is ALWAYS derived from the session — never client-supplied.
  *   - No journal yet: approval (admin) posts Dr CASH / Cr RESIDENT_FUNDS.
  *
- * GET — own payments with status filter + cursor. Meta carries this month's
- *   approved deposits, pending payment count and pending refund count.
+ * GET — own payments with status filter + cursor. Meta keeps approved deposits,
+ * pending payments, cash refunds and carry-forward decisions distinct.
  */
 import { createHash } from "node:crypto";
 import { route } from "@/lib/auth/guard";
@@ -357,7 +357,7 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
   const rows = await db.payment.findMany({ where, orderBy: [{ submittedAt: "desc" }, { id: "desc" }], take });
   const page = finishPage(rows, limit, (row) => row.submittedAt);
 
-  const [depositsAgg, pendingCount, refundsThisMonthAgg, funds] = await Promise.all([
+  const [depositsAgg, pendingCount, cashRefundsAgg, carryForwardAgg, funds] = await Promise.all([
     db.payment.aggregate({
       _sum: { amountMinor: true },
       where: {
@@ -374,27 +374,44 @@ export const GET = route({ auth: "RESIDENT" }, async (ctx) => {
         residentId: ctx.user.id,
         institutionId: ctx.institutionId,
         status: "COMPLETED",
+        mode: "ISSUE_REFUND",
+        createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
+      },
+    }),
+    db.refund.aggregate({
+      _sum: { amountMinor: true },
+      where: {
+        residentId: ctx.user.id,
+        institutionId: ctx.institutionId,
+        status: "COMPLETED",
+        mode: "CARRY_FORWARD",
         createdAt: { gte: bounds.startInstant, lt: bounds.endInstant },
       },
     }),
     residentFundsSummary(ctx.user.id),
   ]);
 
+  const depositsThisMonth = depositsAgg._sum.amountMinor ?? 0;
+  const refundsThisMonth = cashRefundsAgg._sum.amountMinor ?? 0;
+  const carriedForwardThisMonth = carryForwardAgg._sum.amountMinor ?? 0;
+
   return {
     data: page.items.map((p) => serializePayment(p)),
     meta: {
       nextCursor: page.nextCursor,
       month: month ?? bounds.periodKey,
-      depositsThisMonth: depositsAgg._sum.amountMinor ?? 0,
-      depositsThisMonthFormatted: formatMinor(depositsAgg._sum.amountMinor ?? 0),
+      depositsThisMonth,
+      depositsThisMonthFormatted: formatMinor(depositsThisMonth),
       totalDepositsAllTime: funds.creditsMinor,
       totalDepositsAllTimeFormatted: formatMinor(funds.creditsMinor),
       totalAvailableMinor: funds.availableMinor,
       totalAvailableFormatted: formatMinor(funds.availableMinor),
       policyState: funds.policyState,
       pendingCount,
-      refundsThisMonth: refundsThisMonthAgg._sum.amountMinor ?? 0,
-      refundsThisMonthFormatted: formatMinor(refundsThisMonthAgg._sum.amountMinor ?? 0),
+      refundsThisMonth,
+      refundsThisMonthFormatted: formatMinor(refundsThisMonth),
+      carriedForwardThisMonth,
+      carriedForwardThisMonthFormatted: formatMinor(carriedForwardThisMonth),
     },
   };
 });
