@@ -10,6 +10,18 @@ const LEGACY_MEAL_CATEGORIES = new Set([
   "FOOD",
   "FUEL",
   "GAS",
+  "GAS & FUEL",
+  "COOKING GAS",
+  "DAIRY",
+  "MILK",
+  "RICE",
+  "STAPLES",
+  "MEAT",
+  "FISH",
+  "EGGS",
+  "SPICES",
+  "COOKING OIL",
+  "OIL",
 ]);
 
 export function isExpenseCostClass(value: unknown): value is ExpenseCostClass {
