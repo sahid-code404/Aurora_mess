@@ -47,9 +47,11 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       summary: {
         ...readiness.summary,
         mealChargeMinor: readiness.summary.mealChargeMinor ?? null,
-        // Backward-compatible field remains the old all-approved read-model
-        // amount. New UI uses the explicit classified amounts below.
-        eligibleExpensesFormatted: formatMinor(readiness.summary.eligibleExpensesMinor),
+        // Existing Billing UI reads eligibleExpensesFormatted. Make that visual
+        // value match the expense pool actually consumed by the meal formula.
+        // The raw legacy eligibleExpensesMinor field remains untouched for API
+        // compatibility and historical snapshot integrity.
+        eligibleExpensesFormatted: formatMinor(mealExpensesMinor),
         mealExpensesMinor,
         mealExpensesFormatted: formatMinor(mealExpensesMinor),
         extraExpensesMinor,
