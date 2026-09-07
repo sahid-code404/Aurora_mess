@@ -13,6 +13,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Calendar,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -266,6 +267,15 @@ export default function AdminMeals() {
     };
   }, [data]);
 
+  /** Total confirmed/cutoff-passed/overridden resident meals consumed this month (excluding guest meals). */
+  const totalConsumedThisMonth = useMemo(() => {
+    return (
+      metaNum(meta, "totalMealsThisMonth") ??
+      data?.residents.reduce((s, r) => s + (r.monthlyMealCount ?? 0), 0) ??
+      0
+    );
+  }, [meta, data]);
+
   async function runOverride(reason: string | undefined) {
     if (!override) return;
     setActing(true);
@@ -393,10 +403,10 @@ export default function AdminMeals() {
           index={1}
         />
         <KpiCard
-          label="Off"
-          value={String(totals.off)}
-          sub="Skipped"
-          icon={<X />}
+          label="Total consumed"
+          value={String(totalConsumedThisMonth)}
+          sub="This month"
+          icon={<CheckCircle2 />}
           glow="warning"
           tone="warning"
           index={2}
