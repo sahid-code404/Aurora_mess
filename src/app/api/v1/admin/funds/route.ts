@@ -1,10 +1,8 @@
 /**
  * GET /api/v1/admin/funds — per-resident funds summaries + institution money
- * view (auth ADMIN, spec §42-44): every ACTIVE resident's derived funds
- * (credits/pending/charges/refunds/carry-forward/available/amountToPay/deficit
- * + policy state), KPIs (deposits this month, available total, deficit total),
- * the double-entry account balances, and active deficit-policy exemptions.
- * Provenance is inherent: each available figure ships with its components.
+ * view (auth ADMIN, spec §42-44): displayed ACTIVE resident funds, authoritative
+ * institution cash, complete resident credit/deficit aggregates, ledger accounts,
+ * and active deficit-policy exemptions.
  */
 import { route } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
@@ -13,6 +11,7 @@ import { formatMinor } from "@/lib/money";
 import { getInstitution } from "@/lib/institution";
 import { residentFundsSummary } from "@/lib/domain/funds";
 import { getAccountBalances } from "@/lib/domain/ledger";
+import { institutionResidentFinancialTotals } from "@/lib/domain/institution-financial-totals";
 import { currentPeriodBounds, periodBounds } from "@/lib/domain/formula/period-variables";
 
 export const dynamic = "force-dynamic";
@@ -34,22 +33,22 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
   const tz = inst?.timezone ?? "UTC";
   const bounds = monthYear ? periodBounds(monthYear.year, monthYear.month, tz) : currentPeriodBounds(tz);
 
+  // The resident table remains bounded for UI performance. Accounting KPIs below
+  // are computed independently across the complete institution and are never capped.
   const residents = await db.user.findMany({
     where: { institutionId: ctx.institutionId, role: "RESIDENT", status: "ACTIVE" },
     select: { id: true, email: true },
     orderBy: { createdAt: "asc" },
-    take: 200, // v1 safety cap — documented (promise fan-out stays bounded)
+    take: 200,
   });
   const profiles = await db.userProfile.findMany({
     where: { userId: { in: residents.map((r) => r.id) } },
     select: { userId: true, fullName: true, roomNumber: true },
   });
   const profileMap = new Map(profiles.map((p) => [p.userId, p]));
-
-  // Parallel summaries (bounded by the resident cap).
   const summaries = await Promise.all(residents.map((r) => residentFundsSummary(r.id)));
 
-  const [depositsAgg, accounts, exemptions] = await Promise.all([
+  const [depositsAgg, accounts, exemptions, residentTotals, activeResidentCount] = await Promise.all([
     db.payment.aggregate({
       _sum: { amountMinor: true },
       where: {
@@ -68,6 +67,8 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
       },
       orderBy: { createdAt: "desc" },
     }),
+    institutionResidentFinancialTotals(ctx.institutionId),
+    db.user.count({ where: { institutionId: ctx.institutionId, role: "RESIDENT", status: "ACTIVE" } }),
   ]);
 
   const exemptionResidentIds = [...new Set(exemptions.map((e) => e.residentId))];
@@ -79,8 +80,10 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     : [];
   const exemptionNameMap = new Map(exemptionProfiles.map((p) => [p.userId, p.fullName]));
 
-  const availableFundsTotal = summaries.reduce((s, x) => s + Math.max(0, x.availableMinor), 0);
-  const totalDeficit = summaries.reduce((s, x) => s + x.deficitMinor, 0);
+  const cashBalance = accounts.find((account) => account.code === "CASH")?.balanceMinor ?? 0;
+  const availableFundsTotal = Math.max(0, cashBalance);
+  const cashDeficit = Math.max(0, -cashBalance);
+  const totalDeficit = residentTotals.residentDeficitMinor;
   const depositsThisMonth = depositsAgg._sum.amountMinor ?? 0;
 
   return {
@@ -118,8 +121,8 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
           const rA = a.deficitMinor > 0 ? 0 : 1;
           const rB = b.deficitMinor > 0 ? 0 : 1;
           if (rA !== rB) return rA - rB;
-          if (rA === 0) return b.deficitMinor - a.deficitMinor; // Largest deficit first
-          return a.availableMinor - b.availableMinor; // Lowest balance first
+          if (rA === 0) return b.deficitMinor - a.deficitMinor;
+          return a.availableMinor - b.availableMinor;
         }),
       kpis: {
         month: bounds.key,
@@ -127,9 +130,17 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
         depositsThisMonthFormatted: formatMinor(depositsThisMonth),
         availableFundsTotal,
         availableFundsTotalFormatted: formatMinor(availableFundsTotal),
+        cashBalance,
+        cashBalanceFormatted: formatMinor(cashBalance),
+        cashDeficit,
+        cashDeficitFormatted: formatMinor(cashDeficit),
+        residentCreditLiability: residentTotals.residentCreditLiabilityMinor,
+        residentCreditLiabilityFormatted: formatMinor(residentTotals.residentCreditLiabilityMinor),
+        totalOutstanding: residentTotals.outstandingBillsMinor,
+        totalOutstandingFormatted: formatMinor(residentTotals.outstandingBillsMinor),
         totalDeficit,
         totalDeficitFormatted: formatMinor(totalDeficit),
-        residentCount: residents.length,
+        residentCount: activeResidentCount,
       },
       accounts: accounts.map((a) => ({
         code: a.code,
@@ -153,6 +164,8 @@ export const GET = route({ auth: "ADMIN" }, async (ctx) => {
     },
     meta: {
       month: bounds.key,
+      residentRowsLimited: activeResidentCount > residents.length,
+      residentRowsReturned: residents.length,
     },
   };
 });
