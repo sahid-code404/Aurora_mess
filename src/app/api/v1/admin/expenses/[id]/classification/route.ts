@@ -15,8 +15,6 @@ import { route, parseBody } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
 import { ApiError, CODES } from "@/lib/errors";
 import { appendAudit } from "@/lib/audit";
-import { getInstitution } from "@/lib/institution";
-import { dateKeyInTz } from "@/lib/time";
 import { lockInstitutionFinancialMutation } from "@/lib/domain/financial-lock";
 import { assertExpensePeriodMutable } from "@/lib/domain/expense-period";
 import { expenseCostClassLabel } from "@/lib/domain/expense-cost-class";
@@ -29,8 +27,6 @@ const bodySchema = z.object({
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const body = await parseBody(ctx.req, bodySchema);
-  const institution = await getInstitution(ctx.institutionId);
-  const tz = institution?.timezone ?? "UTC";
 
   const changed = await db.$transaction(async (tx) => {
     await lockInstitutionFinancialMutation(tx, ctx.institutionId);
@@ -62,7 +58,10 @@ export const POST = route({ auth: "ADMIN" }, async (ctx) => {
       return expense;
     }
 
-    const expenseDateKey = dateKeyInTz(expense.date, tz);
+    // Expense.date is a business-date marker stored at UTC midnight. Use that
+    // stored key directly; converting the marker through a timezone can move a
+    // date backward for negative-offset institutions.
+    const expenseDateKey = expense.date.toISOString().slice(0, 10);
     await assertExpensePeriodMutable(tx, ctx.institutionId, expenseDateKey);
 
     const updated = await tx.expense.update({
