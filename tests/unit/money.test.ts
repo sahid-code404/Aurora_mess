@@ -24,8 +24,12 @@ describe("money invariants", () => {
     expect(divideMinorRoundHalfUp(-5, 2)).toBe(-3);
   });
 
-  test("multiplies quantities without introducing floating financial storage", () => {
+  test("multiplies decimal quantities with exact half-up minor-unit rounding", () => {
     expect(multiplyRoundHalfUp(1.5, 5500)).toBe(8250);
+    // Native binary multiplication makes 1.005 * 100 slightly below 100.5;
+    // the money kernel must still honor decimal HALF-UP and return 101 paise.
+    expect(multiplyRoundHalfUp(1.005, 100)).toBe(101);
+    expect(multiplyRoundHalfUp(-1.005, 100)).toBe(-101);
   });
 
   test("formats integer minor units consistently", () => {
