@@ -20,6 +20,7 @@ import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { GlassCard } from "./GlassCard";
 import { cn } from "@/lib/utils";
 import { SPRING_POP, SPRING_SOFT } from "@/lib/motion";
+import { useKpiPresentation } from "@/hooks/use-kpi-presentation";
 
 export interface KpiDelta {
   /** Human string, e.g. "+12.4%". */
@@ -180,12 +181,19 @@ export function KpiCard({
   index = 0,
   className,
 }: KpiCardProps) {
-  const displayValue = useMemo(() => safeKpiValue(value), [value]);
+  // Primary Admin KPI cards can be renamed, hidden, or connected to an existing
+  // Variable/Formula from the Formula & Variables page. Historical period views
+  // deliberately keep their native frozen/read-model value.
+  const presentation = useKpiPresentation(label, value);
+  const displayValue = useMemo(() => safeKpiValue(presentation.value), [presentation.value]);
   const fontSizeClass = useMemo(() => getKpiFontSize(displayValue), [displayValue]);
 
   if (loading) {
     return <KpiSkeleton className={className} />;
   }
+  if (!presentation.enabled) return null;
+
+  const effectiveLabel = presentation.label;
 
   const content = (
     <>
@@ -208,7 +216,7 @@ export function KpiCard({
         {onClick && <ArrowUpRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
       </div>
       <p className="mt-2.5 truncate text-xs font-medium text-muted-foreground">
-        {label}
+        {effectiveLabel}
       </p>
       <AnimatedNumber
         value={displayValue}
@@ -237,7 +245,7 @@ export function KpiCard({
       <motion.button
         type="button"
         onClick={onClick}
-        aria-label={navLabel ? `${label} — open ${navLabel}` : label}
+        aria-label={navLabel ? `${effectiveLabel} — open ${navLabel}` : effectiveLabel}
         initial={{ opacity: 0, y: 18, scale: 0.985 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ ...SPRING_SOFT, delay: Math.min(0.06 + index * 0.08, 0.4) }}
