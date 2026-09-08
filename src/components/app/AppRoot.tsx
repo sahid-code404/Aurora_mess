@@ -61,7 +61,7 @@ const AdminTasks = dynamic(() => import("./admin/tasks"), { loading: RouteChunkF
 const AdminCalendar = dynamic(() => import("./admin/calendar"), { loading: RouteChunkFallback });
 const AdminAnnouncements = dynamic(() => import("./admin/announcements"), { loading: RouteChunkFallback });
 const AdminNotifications = dynamic(() => import("./admin/notifications"), { loading: RouteChunkFallback });
-const AdminFormulas = dynamic(() => import("./admin/formulas"), { loading: RouteChunkFallback });
+const AdminFormulas = dynamic(() => import("./admin/formulas-unified"), { loading: RouteChunkFallback });
 const AdminSettings = dynamic(() => import("./admin/settings"), { loading: RouteChunkFallback });
 const AdminAudit = dynamic(() => import("./admin/audit"), { loading: RouteChunkFallback });
 
