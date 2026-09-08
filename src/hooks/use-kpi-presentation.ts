@@ -23,6 +23,18 @@ type KpiSurfaceData = {
   kpis: KpiPresentationRow[];
 };
 
+type LiveVariable = {
+  key: string;
+  valueRaw: number;
+  valueFormatted: string;
+  valueType: string;
+  unit: string;
+};
+
+type LiveVariableData = {
+  variables: LiveVariable[];
+};
+
 const SUPPORTED_SURFACES = new Set([
   "dashboard",
   "formulas",
@@ -40,6 +52,14 @@ function surfaceFromHash(hash: string): string | null {
   if (!match) return null;
   const surface = match[1] || "dashboard";
   return SUPPORTED_SURFACES.has(surface) ? surface : null;
+}
+
+function compactVariableValue(variable: LiveVariable | undefined): string | null {
+  if (!variable) return null;
+  if (variable.valueType === "BOOLEAN") return variable.valueRaw ? "Yes" : "No";
+  if (variable.valueType === "PERCENTAGE" || variable.unit === "PERCENT") return `${variable.valueRaw}%`;
+  if (variable.valueType === "MONEY" || variable.unit === "INR") return variable.valueFormatted;
+  return Number(variable.valueRaw).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 }
 
 /**
@@ -78,15 +98,24 @@ export function useKpiPresentation(nativeLabel: string, nativeValue: string | nu
     return () => observer.disconnect();
   }, [surface]);
 
-  const query = useApiQuery<KpiSurfaceData>(surface ? "/api/v1/admin/formulas/kpis" : null, {
+  const configQuery = useApiQuery<KpiSurfaceData>(surface ? "/api/v1/admin/formulas/kpis" : null, {
     surface: surface ?? undefined,
   }, {
     staleTime: 5_000,
     refetchOnWindowFocus: true,
   });
 
+  // Formula/Variable edits already invalidate this canonical registry. Keeping
+  // live KPI values sourced from it means Save & Apply is reflected immediately
+  // without polling or a page reload.
+  const variablesQuery = useApiQuery<LiveVariableData>(
+    surface ? "/api/v1/admin/formulas/variables" : null,
+    undefined,
+    { staleTime: 5_000, refetchOnWindowFocus: true }
+  );
+
   return useMemo(() => {
-    const row = query.data?.kpis.find((item) => item.nativeLabel === nativeLabel) ?? null;
+    const row = configQuery.data?.kpis.find((item) => item.nativeLabel === nativeLabel) ?? null;
     if (!row) {
       return {
         label: nativeLabel,
@@ -97,18 +126,22 @@ export function useKpiPresentation(nativeLabel: string, nativeValue: string | nu
       };
     }
 
+    const liveVariable = row.sourceVariableKey
+      ? variablesQuery.data?.variables.find((item) => item.key === row.sourceVariableKey)
+      : undefined;
+    const liveValue = compactVariableValue(liveVariable) ?? row.valueFormatted;
     const canUseLiveSource =
       !historicalView &&
       row.sourceMode === "VARIABLE" &&
       row.sourceAvailable &&
-      row.valueFormatted != null;
+      liveValue != null;
 
     return {
       label: row.label || nativeLabel,
-      value: canUseLiveSource ? row.valueFormatted : nativeValue,
+      value: canUseLiveSource ? liveValue : nativeValue,
       enabled: row.enabled,
       managed: true,
       sourceMode: row.sourceMode,
     };
-  }, [historicalView, nativeLabel, nativeValue, query.data]);
+  }, [configQuery.data, historicalView, nativeLabel, nativeValue, variablesQuery.data]);
 }
