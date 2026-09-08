@@ -10,7 +10,7 @@ const paths = [
   "src/components/app/admin/announcements.tsx",
   "src/components/app/admin/billing.tsx",
   "src/components/app/admin/expenses.tsx",
-  "src/components/app/admin/formulas.tsx",
+  "src/components/app/admin/formula-workbench.tsx",
   "src/components/app/admin/calendar.tsx",
 ];
 
