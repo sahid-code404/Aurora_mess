@@ -29,7 +29,7 @@ describe("persisted state contract hygiene", () => {
 
   test("Formula UI and persistence describe the effective-window lifecycle actually implemented", () => {
     const schema = source("prisma/schema.prisma");
-    const ui = source("src/components/app/admin/formulas.tsx");
+    const ui = source("src/components/app/admin/formula-workbench.tsx");
     const versions = source("src/lib/domain/formula/versions.ts");
 
     expect(schema).toContain("// ACTIVE | ARCHIVED");
