@@ -96,7 +96,10 @@ export function PickerCapsule({
   );
 
   return (
-    <div className={cn("flex items-center justify-center gap-4", className)}>
+    <div
+      data-boardops-period-view={resettable ? "historical" : "current"}
+      className={cn("flex items-center justify-center gap-4", className)}
+    >
       <CircleArrow direction="prev" label={prevLabel} onClick={onPrev} disabled={prevDisabled} />
       {onPillClick ? (
         <button type="button" onClick={onPillClick} aria-label={pillAriaLabel} className={pillClasses}>
