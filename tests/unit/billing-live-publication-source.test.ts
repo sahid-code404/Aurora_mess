@@ -58,7 +58,7 @@ describe("live billing preview and publication source contracts", () => {
 
   test("billing publish day is a simple editable audited variable", () => {
     const variables = source("src/app/api/v1/admin/formulas/variables/route.ts");
-    expect(variables).toContain('BILLING_PUBLISH_DAY_KEY =');
+    expect(variables).toContain("normalizedKey === BILLING_PUBLISH_DAY_KEY");
     expect(variables).toContain('displayName: "Billing Publish Day"');
     expect(variables).toContain("isEditable: true");
     expect(variables).toContain('action: "BILLING_PUBLISH_DAY_UPDATED"');
@@ -70,7 +70,7 @@ describe("live billing preview and publication source contracts", () => {
     const billing = source("src/lib/domain/billing.ts");
     expect(billing).toContain("billingSnapshot.create");
     expect(billing).toContain('status: "BILLED"');
-    expect(billing).toContain("Generated bills, snapshots, and posted journals are immutable");
-    expect(billing).toContain("use reopen plus audited bill adjustments or reversal journals for corrections");
+    expect(billing).toContain("The generated bills remain authoritative — correct them with bill adjustments only");
+    expect(billing).toContain("Reopen is only available within 48 hours of billing. Use bill adjustments to correct this period.");
   });
 });
