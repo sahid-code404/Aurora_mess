@@ -29,6 +29,13 @@ export class ApiClientError extends Error {
   }
 }
 
+/**
+ * Fired after every successful same-app mutation. The provider uses this event
+ * to invalidate API read models, so live calculations, formulas, KPIs, funds
+ * and OPEN billing previews refresh from one authoritative source-data change.
+ */
+export const BOARDOPS_DATA_CHANGED_EVENT = "boardops:data-changed";
+
 let previewSessionToken: string | null = null;
 
 /**
@@ -49,6 +56,16 @@ function storedSessionToken(): string | null {
   return previewSessionToken;
 }
 
+function broadcastSuccessfulMutation(path: string, method: string): void {
+  if (typeof window === "undefined") return;
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return;
+  window.dispatchEvent(
+    new CustomEvent(BOARDOPS_DATA_CHANGED_EVENT, {
+      detail: { path, method, at: Date.now() },
+    })
+  );
+}
+
 export async function api<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
   const headers: Record<string, string> = {};
@@ -62,6 +79,7 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   if (sessionToken) {
     headers["authorization"] = `Bearer ${sessionToken}`;
   }
+  const method = (rest.method ?? "GET").toUpperCase();
   const res = await fetch(path, {
     ...rest,
     headers: { ...(rest.headers as Record<string, string> | undefined), ...headers },
@@ -82,6 +100,8 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
     const err = body && !body.ok ? body.error : { code: "NETWORK", message: "Could not reach the server. Check your connection and try again.", requestId: "" };
     throw new ApiClientError(err.code, err.message, res.status, err.fields, err.requestId);
   }
+
+  broadcastSuccessfulMutation(path, method);
   return body.data;
 }
 

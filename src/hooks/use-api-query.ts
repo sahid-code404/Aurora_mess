@@ -6,6 +6,11 @@
  *   - queries:   useApiQuery<T>(path, params?, options?)
  *   - mutations: useApiMutation<TData, TBody>(fn) with helpers postJson/patchJson
  *   - retry: false by default (backend may be mid-build; errors render states)
+ *
+ * Active read models have a conservative 15-second safety refresh. Successful
+ * mutations refresh immediately through BOARDOPS_DATA_CHANGED_EVENT; this timer
+ * covers changes made by another Resident/Admin device without requiring every
+ * page to implement its own polling policy.
  */
 
 import {
@@ -21,11 +26,11 @@ import { api, apiGet, ApiClientError } from "@/lib/api";
 export interface UseApiQueryOptions {
   /** Disable the query (e.g. not authenticated yet). Default: enabled. */
   enabled?: boolean;
-  /** Poll interval in ms. */
+  /** Poll interval in ms. Default: 15s for cross-device freshness. */
   refetchInterval?: number;
   /** Stale time in ms. Default 15s. */
   staleTime?: number;
-  /** Refetch when the window regains focus. Default false. */
+  /** Refetch when the window regains focus. Default true. */
   refetchOnWindowFocus?: boolean;
   /** Custom placeholder data; defaults to keepPreviousData to prevent page/skeleton flickering. */
   placeholderData?: PlaceholderDataFunction<any>;
@@ -44,8 +49,8 @@ export function useApiQuery<T>(
     retry: false,
     staleTime: options?.staleTime ?? 15_000,
     placeholderData: (options?.placeholderData ?? keepPreviousData) as any,
-    refetchInterval: options?.refetchInterval,
-    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? false,
+    refetchInterval: options?.refetchInterval ?? 15_000,
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? true,
   }) as UseQueryResult<T, ApiClientError>;
 }
 
