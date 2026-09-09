@@ -1,13 +1,17 @@
 /**
- * POST /api/v1/admin/billing/periods/[id]/generate — run billing (auth ADMIN).
- * Body: {a, b, answer} — the human confirmation echo of the readiness
- * challenge (answer must equal a + b). The domain transaction re-runs
- * readiness inside the generationState claim; failures roll back cleanly.
+ * POST /api/v1/admin/billing/periods/[id]/generate — explicitly publish billing
+ * (auth ADMIN). Body: {a, b, answer} — the human confirmation echo of the
+ * readiness challenge (answer must equal a + b).
+ *
+ * Publication is blocked until the institution's configured publication date.
+ * The domain transaction then re-runs readiness before freezing the immutable
+ * snapshot and bills.
  */
 import { z } from "zod";
 import { route, parseBody } from "@/lib/auth/guard";
 import { formatMinor } from "@/lib/money";
 import { generateBilling } from "@/lib/domain/billing";
+import { assertBillingPublicationWindowOpen } from "@/lib/domain/billing-publication";
 import { sweepOutbox } from "@/lib/outbox";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +24,11 @@ const bodySchema = z.object({
 
 export const POST = route({ auth: "ADMIN" }, async (ctx) => {
   const body = await parseBody(ctx.req, bodySchema);
+
+  // Publication timing is a separate gate from data readiness. This check is
+  // repeated by the server on every publish request; the UI cannot bypass it.
+  await assertBillingPublicationWindowOpen(ctx.params.id);
+
   const result = await generateBilling(ctx.params.id, ctx.user.id, ctx.requestId, {
     a: body.a,
     b: body.b,
